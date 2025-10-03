@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
@@ -12,8 +12,10 @@ import Credits from './pages/Credits';
 import Calls from './pages/Calls';
 import Layout from './components/Layout';
 
+// PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
+  const location = useLocation();
   
   if (loading) {
     return (
@@ -23,38 +25,36 @@ const PrivateRoute = ({ children }) => {
     );
   }
   
-  return user ? children : <Navigate to="/login" />;
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+  
+  return children;
 };
-
-function AppRoutes() {
-  return (
-    <Router>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        
-        <Route path="/" element={
-          <PrivateRoute>
-            <Layout />
-          </PrivateRoute>
-        }>
-          <Route index element={<Dashboard />} />
-          <Route path="agents" element={<Agents />} />
-          <Route path="agents/new" element={<AgentEditor />} />
-          <Route path="agents/:id" element={<AgentEditor />} />
-          <Route path="credits" element={<Credits />} />
-          <Route path="calls" element={<Calls />} />
-        </Route>
-      </Routes>
-      
-      <Toaster position="top-right" />
-    </Router>
-  );
-}
 
 function App() {
   return (
     <AuthProvider>
-      <AppRoutes />
+      <Router basename="/aiva">
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          
+          <Route path="/" element={
+            <PrivateRoute>
+              <Layout />
+            </PrivateRoute>
+          }>
+            <Route index element={<Dashboard />} />
+            <Route path="agents" element={<Agents />} />
+            <Route path="agents/new" element={<AgentEditor />} />
+            <Route path="agents/:id" element={<AgentEditor />} />
+            <Route path="credits" element={<Credits />} />
+            <Route path="calls" element={<Calls />} />
+          </Route>
+        </Routes>
+        
+        <Toaster position="top-right" />
+      </Router>
     </AuthProvider>
   );
 }

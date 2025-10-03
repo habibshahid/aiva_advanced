@@ -1,6 +1,6 @@
 /**
- * Main Application Entry Point
- * Asterisk to OpenAI Realtime API Bridge with Official SDK
+ * Asterisk-OpenAI Bridge - Dynamic Multi-Tenant Version
+ * Loads agents and functions dynamically from management API
  */
 
 require('dotenv').config();
@@ -8,14 +8,13 @@ require('dotenv').config();
 const RtpUdpServer = require('./audio/rtp-server');
 const SessionManager = require('./openai/session-manager');
 const FunctionExecutor = require('./functions/function-executor');
-const FunctionRegistry = require('./functions/function-registry');
 const ConnectionManager = require('./bridge/connection-manager');
 const MonitorServer = require('./monitoring/monitor-server');
 const RedisClient = require('./utils/redis-client');
-const AgentLoader = require('./config/agent-loader');
 const openaiConfig = require('./config/openai-config');
 const logger = require('./utils/logger');
 
+// Dynamic loading components
 const DynamicAgentLoader = require('./integration/dynamic-loader');
 const CreditManager = require('./integration/credit-manager');
 const CallLogger = require('./integration/call-logger');
@@ -27,24 +26,22 @@ class AsteriskOpenAIBridge {
             monitorPort: parseInt(process.env.MONITOR_PORT || '3001'),
             debug: process.env.DEBUG === 'true',
             ...openaiConfig,
-			managementApiUrl: process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api',
+            // Management API config
+            managementApiUrl: process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api',
             managementApiKey: process.env.MANAGEMENT_API_KEY,
-            dynamicMode: process.env.DYNAMIC_MODE === 'true'
+            // Dynamic mode (set to false to disable dynamic loading)
+            dynamicMode: process.env.DYNAMIC_MODE !== 'false'
         };
         
-        // Validate API key
         if (!this.config.apiKey) {
             throw new Error('OPENAI_API_KEY is required');
         }
         
-        logger.info('Initializing Asterisk-OpenAI Bridge...');
-        logger.info(`Mode: ${this.config.dynamicMode ? 'DYNAMIC' : 'STATIC'}`);
-        logger.info(`Configuration:`, {
-            rtpHost: this.config.rtpHost,
-            model: this.config.model,
-            voice: this.config.voice,
-            agentType: this.config.agentType
-        });
+        if (this.config.dynamicMode && !this.config.managementApiKey) {
+            throw new Error('MANAGEMENT_API_KEY is required when DYNAMIC_MODE is enabled');
+        }
+        
+        logger.info('Initializing Asterisk-OpenAI Bridge (Dynamic Mode)...');
     }
     
     async initialize() {
@@ -54,36 +51,29 @@ class AsteriskOpenAIBridge {
             this.redisClient = new RedisClient({});
             await this.redisClient.connect();
             
-			if (this.config.dynamicMode) {
+            // Initialize dynamic components
+            if (this.config.dynamicMode) {
                 logger.info('Initializing dynamic management integration...');
+                
                 this.agentLoader = new DynamicAgentLoader(
                     this.config.managementApiUrl,
                     this.config.managementApiKey
                 );
+                
                 this.creditManager = new CreditManager(
                     this.config.managementApiUrl,
                     this.config.managementApiKey
                 );
+                
                 this.callLogger = new CallLogger(
                     this.config.managementApiUrl,
                     this.config.managementApiKey
                 );
-            } else {
-                // Fallback to static loading
-                logger.info('Using static agent configuration...');
-                const AgentLoader = require('./config/agent-loader');
-                this.agentLoader = new AgentLoader();
-                this.agentConfig = this.agentLoader.loadAgent(this.config.agentType);
             }
-			 
-            // Initialize function executor and registry
-            logger.info('Initializing function system...');
+            
+            // Initialize function executor
+            logger.info('Initializing function executor...');
             this.functionExecutor = new FunctionExecutor();
-            this.functionRegistry = new FunctionRegistry();
-            this.functionRegistry.registerAll(
-                this.functionExecutor, 
-                this.redisClient.getClient()
-            );
             
             // Initialize session manager
             logger.info('Initializing session manager...');
@@ -118,17 +108,14 @@ class AsteriskOpenAIBridge {
             // Start cleanup intervals
             this.startCleanupIntervals();
             
+			this.startHangupMonitor();
+			
             logger.info('='.repeat(60));
             logger.info('Asterisk-OpenAI Bridge initialized successfully!');
-            logger.info(`Mode: ${this.config.dynamicMode ? 'DYNAMIC' : 'STATIC'}`);
+            logger.info(`Mode: DYNAMIC (Multi-Tenant)`);
             logger.info(`RTP Server: ${this.config.rtpHost}`);
             logger.info(`Monitor: http://localhost:${this.config.monitorPort}/`);
-            if (this.config.dynamicMode) {
-                logger.info(`Management API: ${this.config.managementApiUrl}`);
-            } else {
-                logger.info(`Agent: ${this.agentConfig.name}`);
-            }
-            logger.info(`Model: ${this.config.model}`);
+            logger.info(`Management API: ${this.config.managementApiUrl}`);
             logger.info('='.repeat(60));
             
         } catch (error) {
@@ -137,64 +124,126 @@ class AsteriskOpenAIBridge {
         }
     }
     
+	startHangupMonitor() {
+		setInterval(async () => {
+			for (const [clientKey, connection] of this.connectionManager.connections.entries()) {
+				const port = connection.asteriskPort;
+				if (port) {
+					const redisKey = `transcriptionPort:${port}`;
+					const interactionData = await this.redisClient.hGetAll(redisKey);
+					
+					if (interactionData.hangup === 'true') {
+						logger.info(`Asterisk hangup detected for ${clientKey}`);
+						await this.connectionManager.closeConnection(clientKey);
+						await this.redisClient.del(redisKey);
+					}
+				}
+			}
+		}, 500); // Check every 500ms
+	}
+
     setupEventHandlers() {
-        // RTP Server Events
-        this.rtpServer.on('client', async (client) => {
+        // RTP Server Events - New client connection
+		this.rtpServer.on('client', async (client) => {
             const clientKey = `${client.address}:${client.port}`;
             logger.info(`New RTP client: ${clientKey}`);
             
-			try {
-                // Get session info from Redis
+            try {
+                // Get session info from Redis (stored by Asterisk)
                 const redisKey = `transcriptionPort:${client.port}`;
                 const callInfo = await this.redisClient.hGetAll(redisKey);
                 
-                const sessionId = callInfo?.sessionId || this.generateFallbackSessionId();
-                const callerNumber = callInfo?.callerId || 'unknown';
+                if (!callInfo || !callInfo.sessionId) {
+                    logger.error(`No session info found in Redis for port ${client.port}`);
+                    return;
+                }
                 
-                logger.info(`Session ID: ${sessionId}, Caller: ${callerNumber}`);
+                const sessionId = callInfo.sessionId;
+                const callerNumber = callInfo.callerId || 'unknown';
+                const agentId = callInfo.agentId; // This is set by Asterisk
                 
-                // NEW: Determine tenant ID (you need to implement this based on your routing)
-                const tenantId = await this.resolveTenantId(callerNumber, callInfo);
+                logger.info(`Session: ${sessionId}, Caller: ${callerNumber}, Agent ID: ${agentId}`);
                 
-                // NEW: Check credits in dynamic mode
-                if (this.config.dynamicMode && this.creditManager) {
+                if (!agentId) {
+                    logger.error(`No agent_id provided in Redis for session ${sessionId}`);
+                    return;
+                }
+                
+                // Load agent configuration from database
+                logger.info(`Loading agent: ${agentId}`);
+                const agentConfig = await this.agentLoader.getAgentById(agentId);
+                
+                if (!agentConfig) {
+                    logger.error(`Failed to load agent ${agentId}`);
+                    return;
+                }
+                
+                logger.info(`Loaded agent: ${agentConfig.name} (${agentConfig.id})`);
+                
+                // Get tenant ID from agent
+                const tenantId = callInfo.tenantId || agentConfig.tenant_id;
+                
+                // Check credits
+                if (this.creditManager) {
                     const creditCheck = await this.creditManager.checkCredits(tenantId);
                     
                     if (!creditCheck.allowed) {
                         logger.warn(`Call rejected: Insufficient credits for tenant ${tenantId}`);
-                        // TODO: Play "insufficient credits" message to caller
+                        // TODO: Play "insufficient credits" message
                         return;
                     }
                 }
                 
-                // NEW: Load agent dynamically
-                let agentConfig;
-                if (this.config.dynamicMode) {
-                    agentConfig = await this.agentLoader.getAgent(tenantId, 'sales');
-                } else {
-                    agentConfig = this.agentConfig;
-                }
+                // Register functions for this agent
+                await this.registerAgentFunctions(agentConfig.functions);
+
+				// Use the pre-formatted OpenAI tools from agent config
+				const tools = agentConfig.tools;
                 
+                logger.info(`Registered ${tools.length} functions for agent ${agentConfig.name}`);
+                
+				const customData = callInfo.customData ? JSON.parse(callInfo.customData) : {};
+				// Build context string
+				const contextString = `
+
+				===== CALLER INFORMATION =====
+				Caller ID: ${callerNumber}
+				Caller Name: ${callInfo.callerName || 'Unknown'}
+				Session ID: ${sessionId}
+				Call Start Time: ${new Date().toISOString()}
+
+				===== CUSTOM CONTEXT =====
+				${Object.entries(customData).map(([key, value]) => `${key}: ${value}`).join('\n')}
+
+				===== END OF CONTEXT =====
+
+				`;
+
+				// Prepend context to instructions
+				const fullInstructions = contextString + agentConfig.instructions;
+
                 // Create connection
                 const connection = await this.connectionManager.createConnection(
                     clientKey,
                     client,
-                    {
-                        sessionId: sessionId,
-                        model: agentConfig.config?.model || this.config.model,
-                        voice: agentConfig.config?.voice || this.config.voice,
-                        temperature: agentConfig.config?.temperature || this.config.temperature,
-                        maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
-                        instructions: agentConfig.instructions,
-                        callerId: callerNumber,
-                        asteriskPort: client.port,
-                        tenantId: tenantId,
-                        agentId: agentConfig.id
-                    }
+					{
+						sessionId: sessionId,
+						model: agentConfig.config?.model || this.config.model,
+						voice: agentConfig.config?.voice || this.config.voice,
+						temperature: agentConfig.config?.temperature || this.config.temperature,
+						maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
+						instructions: fullInstructions,
+						callerId: callerNumber
+					}
                 );
+				
+				connection.tenantId = tenantId;
+				connection.agentId = agentConfig.id;
+				connection.baseInstructions = agentConfig.instructions;
+				connection.asteriskPort = client.port;  // Add this
                 
-                // NEW: Create call log
-                if (this.config.dynamicMode && this.callLogger) {
+                // Create call log
+                if (this.callLogger) {
                     connection.callLogId = await this.callLogger.createCallLog(
                         sessionId,
                         tenantId,
@@ -204,11 +253,10 @@ class AsteriskOpenAIBridge {
                     );
                 }
                 
-                // Configure session
-                const tools = agentConfig.tools || [];
+                // Configure session with tools
                 await this.sessionManager.configureSession(
                     connection.sessionId,
-                    agentConfig.instructions,
+                    fullInstructions,
                     tools
                 );
                 
@@ -229,260 +277,186 @@ class AsteriskOpenAIBridge {
             } catch (error) {
                 logger.error(`Error creating connection for ${clientKey}:`, error);
             }
-			
-            /*try {
-                // Get caller info from Redis if available
-                const callerInfo = await this.redisClient.hGetAll(`transcriptionPort:${client.port}`);
-                
-                // Create connection
-                const connection = await this.connectionManager.createConnection(
-                    clientKey,
-                    client,
-                    {
-                        model: this.config.model,
-                        voice: this.config.voice,
-                        temperature: this.config.temperature,
-                        maxResponseTokens: this.config.maxResponseTokens,
-                        instructions: this.agentConfig.instructions,
-                        callerId: callerInfo?.callerId || 'unknown'
-                    }
-                );
-                
-                // Configure session
-                const tools = this.functionRegistry.getOpenAIFunctions();
-				console.log('[TOOLS-REGISTERED]', JSON.stringify(tools, null, 2));
+        });
+        
+		this.rtpServer.on('audio', async (data) => {
+			const clientKey = `${data.rinfo.address}:${data.rinfo.port}`;
+			await this.connectionManager.handleRTPAudio(clientKey, data.buffer);
+		});
 
-                await this.sessionManager.configureSession(
-                    connection.sessionId,
-                    this.agentConfig.instructions,
-                    tools
-                );
-                
-                // Add to monitor
-                this.monitorServer.addConnection(clientKey, {
-                    rtpInfo: connection.session.rtpInfo,
-                    callerId: connection.session.callerId,
-                    agentName: this.agentConfig.name
-                });
-                
-                // Trigger initial greeting after configuration
-                setTimeout(() => {
-                    connection.session.client.createResponse();
-                }, 500);
-                
-            } catch (error) {
-                logger.error(`Error creating connection for ${clientKey}:`, error);
-            }*/
-        });
-        
-        this.rtpServer.on('audio', async (data) => {
-            await this.connectionManager.handleRTPAudio(data.client, data.buffer);
-        });
-        
-        this.rtpServer.on('clientDisconnected', (client) => {
-            const clientKey = `${client.address}:${client.port}`;
-            logger.info(`RTP client disconnected: ${clientKey}`);
-            //this.connectionManager.closeConnection(clientKey);
+		this.rtpServer.on('clientDisconnected', async (clientKey) => {
+			logger.info(`RTP client disconnected (Asterisk ended call): ${clientKey}`);
 			
-			// Force immediate cleanup
-			this.connectionManager.forceEndSession(clientKey).catch(err => {
-				logger.error(`Error force ending session: ${err}`);
-			});
-        });
-        
+			try {
+				const connection = this.connectionManager.getConnection(clientKey);
+				
+				if (connection) {
+					logger.info(`Processing disconnect for session: ${connection.sessionId}`);
+					
+					// Close the connection - this will trigger 'connectionClosed' event
+					await this.connectionManager.closeConnection(clientKey);
+				} else {
+					logger.warn(`No connection found for disconnected client: ${clientKey}`);
+				}
+			} catch (error) {
+				logger.error(`Error handling client disconnect for ${clientKey}:`, error);
+			}
+		});
+		
         // Connection Manager Events
-        this.connectionManager.on('userSpeechStarted', (connection) => {
-            this.monitorServer.updateConnection(connection.clientKey, {
-                userSpeaking: true
-            });
-        });
-        
-        this.connectionManager.on('userSpeechStopped', (connection) => {
-            this.monitorServer.updateConnection(connection.clientKey, {
-                userSpeaking: false
-            });
-        });
-        
-        this.connectionManager.on('agentSpeechStarted', (connection) => {
-            this.monitorServer.updateConnection(connection.clientKey, {
-                agentSpeaking: true
-            });
-        });
-        
-        this.connectionManager.on('agentSpeechStopped', (connection) => {
-            this.monitorServer.updateConnection(connection.clientKey, {
-                agentSpeaking: false
-            });
-        });
-        
-        this.connectionManager.on('transcript', ({ connection, speaker, text }) => {
-            logger.info(`[${speaker.toUpperCase()}] ${text}`);
-            this.monitorServer.broadcastTranscript(connection.clientKey, speaker, text);
-        });
-        
-        this.connectionManager.on('costUpdate', ({ connection, cost }) => {
-            logger.debug(`Cost update for ${connection.clientKey}: ${cost.formatted.finalCost}`);
-            this.monitorServer.broadcastCostUpdate(connection.clientKey, cost);
-        });
-        
-        this.connectionManager.on('functionCall', ({ connection, functionName, callId, args }) => {
-            logger.info(`Function call: ${functionName}`, { args });
-            this.monitorServer.broadcastFunctionCall(connection.clientKey, functionName, args);
-        });
-        
-        this.connectionManager.on('functionResponse', ({ connection, functionName, result }) => {
-            logger.info(`Function response: ${functionName}`, { success: result.success });
-            this.monitorServer.broadcastFunctionResponse(connection.clientKey, functionName, result);
-        });
-        
-        this.connectionManager.on('connectionClosed', async ({ clientKey, finalCost }) => {
+        this.connectionManager.on('connectionClosed', async ({ clientKey, finalCost, connectionData }) => {
 			logger.info(`Connection closed: ${clientKey}`);
 			
 			if (finalCost && finalCost.cost) {
 				const cost = finalCost.cost;
 				
-				// Log summary
-				logger.info(`Final Cost: ${cost.formatted.finalCost} (Base: ${cost.formatted.baseCost} + Profit: ${cost.formatted.profitAmount})`);
+				logger.info(`Final Cost: ${cost.formatted.finalCost} (Session: ${finalCost.sessionId})`);
 				
 				// Log detailed breakdown
 				console.log('\n' + '='.repeat(60));
-				console.log('CALL COST BREAKDOWN');
+				console.log(`CALL COST BREAKDOWN - Session: ${finalCost.sessionId}`);
 				console.log('='.repeat(60));
 				console.log(`Duration: ${cost.duration.formatted}`);
-				console.log(`Session ID: ${finalCost.sessionId}`);
-				console.log('');
-				console.log('AUDIO COSTS:');
-				console.log(`  Input:  ${cost.audio.input.formatted} @ $${(cost.audio.input.costPerSecond * 60).toFixed(3)}/min → ${cost.formatted.audioCost.split('$')[0]}$${cost.audio.input.cost.toFixed(4)}`);
-				console.log(`  Output: ${cost.audio.output.formatted} @ $${(cost.audio.output.costPerSecond * 60).toFixed(3)}/min → $${cost.audio.output.cost.toFixed(4)}`);
-				console.log(`  Total Audio: ${cost.breakdown.audioCost} (${cost.breakdown.audioPercentage})`);
-				console.log('');
-				console.log('TEXT COSTS:');
-				console.log(`  Input:  ${cost.text.input.tokens} tokens → $${cost.text.input.cost.toFixed(6)}`);
-				console.log(`  Output: ${cost.text.output.tokens} tokens → $${cost.text.output.cost.toFixed(6)}`);
-				console.log(`  Cached: ${cost.text.cached.tokens} tokens → $${cost.text.cached.cost.toFixed(6)}`);
-				console.log(`  Total Text: ${cost.breakdown.textCost} (${cost.breakdown.textPercentage})`);
-				console.log('');
-				console.log('FINAL COST:');
-				console.log(`  Base Cost:     ${cost.formatted.baseCost}`);
-				console.log(`  Profit (${cost.costs.profitMargin}):  ${cost.formatted.profitAmount}`);
-				console.log(`  Total Cost:    ${cost.formatted.finalCost}`);
-				console.log(`  Cost per min:  ${cost.formatted.costPerMinute}`);
-				console.log(`  Cost per hour: ${cost.formatted.costPerHour}`);
+				console.log(`Audio Input: ${cost.audio.input.seconds}s ($${cost.audio.input.cost})`);
+				console.log(`Audio Output: ${cost.audio.output.seconds}s ($${cost.audio.output.cost})`);
+				console.log(`Text Input: ${cost.text.input.tokens} tokens ($${cost.text.input.cost})`);
+				console.log(`Text Output: ${cost.text.output.tokens} tokens ($${cost.text.output.cost})`);
+				console.log(`Cached Tokens: ${cost.text.cached.tokens} tokens ($${cost.text.cached.cost})`);
+				console.log(`Base Cost: $${cost.costs.baseCost}`);
+				console.log(`Profit (${(this.config.profitMargin * 100).toFixed(0)}%): $${cost.costs.profitAmount}`);
+				console.log(`Final Cost: $${cost.costs.finalCost}`);
 				console.log('='.repeat(60) + '\n');
 				
-				const connection = this.connectionManager.getConnection(clientKey);
-                if (connection && this.config.dynamicMode) {
-                    // Update call log
-                    if (this.callLogger) {
-                        await this.callLogger.updateCallLog(finalCost.sessionId, {
-                            end_time: new Date(),
-                            duration_seconds: Math.floor(parseFloat(cost.duration.seconds)),
-                            audio_input_seconds: cost.audio.input.seconds,
-                            audio_output_seconds: cost.audio.output.seconds,
-                            text_input_tokens: cost.text.input.tokens,
-                            text_output_tokens: cost.text.output.tokens,
-                            cached_tokens: cost.text.cached.tokens,
-                            base_cost: cost.costs.baseCost,
-                            profit_amount: cost.costs.profitAmount,
-                            final_cost: parseFloat(cost.costs.finalCost),
-                            status: 'completed'
-                        });
-                    }
-                    
-                    // Deduct credits
-                    if (this.creditManager && connection.session.config.tenantId) {
-                        await this.creditManager.deductCredits(
-                            connection.session.config.tenantId,
-                            parseFloat(cost.costs.finalCost),
-                            connection.callLogId
-                        );
-                    }
-                }
-                
-                // Clean up Redis
-                if (connection && connection.session.config.asteriskPort) {
-                    const redisKey = `transcriptionPort:${connection.session.config.asteriskPort}`;
-                    await this.redisClient.del(redisKey);
-                }
-				
+				if (connectionData) {
+					const tenantId = connectionData.tenantId;
+					const callLogId = connectionData.callLogId;
+					
+					console.log('[DB-UPDATE] Updating call log:', {
+						sessionId: finalCost.sessionId,
+						callLogId: callLogId,
+						tenantId: tenantId,
+						hasCallLogger: !!this.callLogger
+					});
+					
+					// Update call log
+					if (this.callLogger) {
+						await this.callLogger.updateCallLog(finalCost.sessionId, {
+							end_time: new Date(),
+							duration_seconds: Math.floor(parseFloat(cost.duration.seconds)),
+							audio_input_seconds: cost.audio.input.seconds,
+							audio_output_seconds: cost.audio.output.seconds,
+							text_input_tokens: cost.text.input.tokens,
+							text_output_tokens: cost.text.output.tokens,
+							cached_tokens: cost.text.cached.tokens,
+							base_cost: parseFloat(cost.costs.baseCost),
+							profit_amount: parseFloat(cost.costs.profitAmount),
+							final_cost: parseFloat(cost.costs.finalCost),
+							status: 'completed'
+						});
+					}
+					
+					// Deduct credits
+					if (this.creditManager && tenantId) {
+						await this.creditManager.deductCredits(
+							tenantId,
+							parseFloat(cost.costs.finalCost),
+							callLogId
+						);
+					}
+					
+					// Clean up Redis
+					if (connectionData.asteriskPort) {
+						const redisKey = `transcriptionPort:${connectionData.asteriskPort}`;
+						await this.redisClient.del(redisKey);
+						logger.info(`Cleaned up Redis key: ${redisKey}`);
+					}
+				}
+			} else {
+				// Call ended but no cost data - log as failed
+				if (connectionData && this.callLogger) {
+					logger.warn(`Call ended without cost data for session: ${connectionData.sessionId}`);
+					
+					await this.callLogger.updateCallLog(connectionData.sessionId, {
+						end_time: new Date(),
+						status: 'failed'
+					});
+				}
 			}
 			
 			this.monitorServer.removeConnection(clientKey);
 		});
         
-        this.connectionManager.on('error', ({ connection, error }) => {
-            logger.error(`Connection error for ${connection.clientKey}:`, error);
+        this.connectionManager.on('error', ({ clientKey, error }) => {
+            logger.error(`Connection error for ${clientKey}:`, error);
         });
+        
+        //this.sessionManager.on('conversationUpdated', ({ sessionId, item }) => {
+            //this.monitorServer.updateConversation(sessionId, item);
+        //});
     }
     
-	/**
-     * Resolve tenant ID from caller information
-     * Override this method to implement your tenant routing logic
+    /**
+     * Register functions dynamically for a specific agent
      */
-    async resolveTenantId(callerNumber, callInfo) {
-        // Option 1: DID mapping (query API)
-        // Option 2: Caller number mapping
-        // Option 3: Redis lookup
-        // Option 4: Default tenant
-        
-        // For now, return a default tenant ID
-        // You'll need to implement proper routing
-        return process.env.DEFAULT_TENANT_ID || 'default-tenant';
-    }
-	
+    async registerAgentFunctions(functions) {
+		const tools = [];
+		
+		if (!functions || functions.length === 0) {
+			logger.info('No functions to register');
+			return tools;
+		}
+		
+		for (const func of functions) {
+			if (!func.is_active) {
+				logger.debug(`Skipping inactive function: ${func.name}`);
+				continue;
+			}
+			
+			logger.info(`Registering function: ${func.name} (${func.handler_type})`);
+			
+			// Register handler in executor (for when OpenAI calls it)
+			if (func.handler_type === 'api') {
+				this.functionExecutor.registerApiFunction(func);
+			} else if (func.handler_type === 'inline') {
+				// Placeholder for inline functions
+				this.functionExecutor.registerFunction(func.name, async (args) => {
+					logger.warn(`Inline function ${func.name} called but no handler implemented`);
+					return {
+						success: false,
+						message: `Function ${func.name} is configured as inline but has no implementation`
+					};
+				});
+			}
+		}
+		
+		// Return tools from agent config (already formatted by dynamic loader)
+		return tools;
+	}
+    
     startCleanupIntervals() {
-        // Cleanup stale connections every 30 seconds
+        // Clean up stale connections every 5 minutes
         setInterval(() => {
-            const cleaned = this.connectionManager.cleanupStaleConnections(
-                this.config.sessionTimeout
-            );
-            if (cleaned > 0) {
-                logger.info(`Cleaned up ${cleaned} stale connections`);
-            }
-        }, 30000);
+            logger.debug('Running connection cleanup...');
+            this.connectionManager.cleanupStaleConnections();
+        }, 5 * 60 * 1000);
         
-        // Cleanup stale sessions every 30 seconds
-        setInterval(() => {
-            const cleaned = this.sessionManager.cleanupStaleSessions(
-                this.config.sessionTimeout
-            );
-            if (cleaned > 0) {
-                logger.info(`Cleaned up ${cleaned} stale sessions`);
-            }
-        }, 30000);
+        // Clear agent cache every 10 minutes
+        if (this.agentLoader) {
+            setInterval(() => {
+                logger.debug('Clearing agent cache...');
+                this.agentLoader.clearCache();
+            }, 10 * 60 * 1000);
+        }
     }
     
-	generateFallbackSessionId() {
-        const timestamp = Date.now();
-        const random = Math.random().toString(36).substring(2, 8);
-        return `fallback_${timestamp}_${random}`;
-    }
-	
     async shutdown() {
         logger.info('Shutting down bridge...');
         
-        try {
-            // Close all connections
-            const connections = this.connectionManager.getActiveConnections();
-            for (const connection of connections) {
-                await this.connectionManager.closeConnection(connection.clientKey);
-            }
-            
-            // Close RTP server
-            if (this.rtpServer) {
-                this.rtpServer.close();
-            }
-            
-            // Disconnect Redis
-            if (this.redisClient) {
-                await this.redisClient.disconnect();
-            }
-            
-            logger.info('Shutdown complete');
-            
-        } catch (error) {
-            logger.error('Error during shutdown:', error);
-        }
+        await this.connectionManager.closeAll();
+        await this.monitorServer.stop();
+        await this.redisClient.disconnect();
+        
+        logger.info('Bridge shutdown complete');
     }
 }
 
@@ -493,7 +467,6 @@ async function main() {
     try {
         await bridge.initialize();
         
-        // Handle graceful shutdown
         process.on('SIGINT', async () => {
             logger.info('Received SIGINT, shutting down...');
             await bridge.shutdown();
@@ -512,5 +485,4 @@ async function main() {
     }
 }
 
-// Start the application
 main();

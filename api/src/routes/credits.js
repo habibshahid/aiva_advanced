@@ -1,12 +1,23 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const CreditService = require('../services/CreditService');
 
 const router = express.Router();
 
+// Middleware that accepts either JWT token OR API key
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        return verifyApiKey(req, res, next);
+    } else {
+        return verifyToken(req, res, next);
+    }
+};
+
 // Get balance
-router.get('/balance', verifyToken, async (req, res) => {
+router.get('/balance', authenticate, async (req, res) => {
     try {
         const balance = await CreditService.getBalance(req.user.id);
         res.json({ balance });
@@ -17,7 +28,7 @@ router.get('/balance', verifyToken, async (req, res) => {
 });
 
 // Add credits (admin only)
-router.post('/add', verifyToken, checkPermission('credits.add'), async (req, res) => {
+router.post('/add', authenticate, checkPermission('credits.add'), async (req, res) => {
     try {
         const { tenant_id, amount, note } = req.body;
         
@@ -41,8 +52,30 @@ router.post('/add', verifyToken, checkPermission('credits.add'), async (req, res
     }
 });
 
+// Deduct credits (internal use by bridge) - API Key only
+router.post('/deduct', verifyApiKey, async (req, res) => {
+    try {
+        const { tenant_id, amount, call_log_id } = req.body;
+        
+        if (!tenant_id || !amount) {
+            return res.status(400).json({ error: 'tenant_id and amount required' });
+        }
+        
+        const result = await CreditService.deductCredits(
+            tenant_id,
+            parseFloat(amount),
+            call_log_id
+        );
+        
+        res.json(result);
+    } catch (error) {
+        console.error('Deduct credits error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Get transaction history
-router.get('/transactions', verifyToken, async (req, res) => {
+router.get('/transactions', authenticate, async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 50;
         const offset = parseInt(req.query.offset) || 0;
@@ -61,7 +94,7 @@ router.get('/transactions', verifyToken, async (req, res) => {
 });
 
 // Get usage statistics
-router.get('/usage', verifyToken, async (req, res) => {
+router.get('/usage', authenticate, async (req, res) => {
     try {
         const days = parseInt(req.query.days) || 30;
         const stats = await CreditService.getUsageStats(req.user.id, days);
@@ -69,40 +102,6 @@ router.get('/usage', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Get usage stats error:', error);
         res.status(500).json({ error: 'Failed to get usage stats' });
-    }
-});
-
-// Deduct credits (internal use by bridge)
-router.post('/deduct', async (req, res) => {
-    try {
-        const { tenant_id, amount, call_log_id } = req.body;
-        
-        // Verify API key (bridge authentication)
-        const apiKey = req.headers['x-api-key'];
-        if (!apiKey) {
-            return res.status(401).json({ error: 'API key required' });
-        }
-        
-        // Verify it's a valid API key
-        const [tenants] = await db.query(
-            'SELECT id FROM tenants WHERE api_key = ?',
-            [apiKey]
-        );
-        
-        if (tenants.length === 0) {
-            return res.status(401).json({ error: 'Invalid API key' });
-        }
-        
-        const result = await CreditService.deductCredits(
-            tenant_id,
-            parseFloat(amount),
-            call_log_id
-        );
-        
-        res.json(result);
-    } catch (error) {
-        console.error('Deduct credits error:', error);
-        res.status(500).json({ error: error.message });
     }
 });
 

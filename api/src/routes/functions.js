@@ -1,13 +1,24 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const FunctionService = require('../services/FunctionService');
 const AgentService = require('../services/AgentService');
 
 const router = express.Router();
 
+// Middleware that accepts either JWT token OR API key
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        return verifyApiKey(req, res, next);
+    } else {
+        return verifyToken(req, res, next);
+    }
+};
+
 // List functions for agent
-router.get('/agent/:agentId', verifyToken, checkPermission('functions.view'), async (req, res) => {
+router.get('/agent/:agentId', authenticate, checkPermission('functions.view'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.agentId);
         
@@ -28,7 +39,7 @@ router.get('/agent/:agentId', verifyToken, checkPermission('functions.view'), as
 });
 
 // Create function
-router.post('/agent/:agentId', verifyToken, checkPermission('functions.create'), async (req, res) => {
+router.post('/agent/:agentId', authenticate, checkPermission('functions.create'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.agentId);
         
@@ -49,7 +60,7 @@ router.post('/agent/:agentId', verifyToken, checkPermission('functions.create'),
 });
 
 // Update function
-router.put('/:id', verifyToken, checkPermission('functions.update'), async (req, res) => {
+router.put('/:id', authenticate, checkPermission('functions.update'), async (req, res) => {
     try {
         const func = await FunctionService.getFunction(req.params.id);
         
@@ -72,7 +83,7 @@ router.put('/:id', verifyToken, checkPermission('functions.update'), async (req,
 });
 
 // Delete function
-router.delete('/:id', verifyToken, checkPermission('functions.delete'), async (req, res) => {
+router.delete('/:id', authenticate, checkPermission('functions.delete'), async (req, res) => {
     try {
         const func = await FunctionService.getFunction(req.params.id);
         

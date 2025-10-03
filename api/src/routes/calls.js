@@ -1,12 +1,76 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const CallService = require('../services/CallService');
 
 const router = express.Router();
 
+// Middleware that accepts either JWT token OR API key
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        return verifyApiKey(req, res, next);
+    } else {
+        return verifyToken(req, res, next);
+    }
+};
+
+// Create call log (internal use by bridge) - API Key only
+router.post('/create', verifyApiKey, async (req, res) => {
+    try {
+        const { session_id, tenant_id, agent_id, caller_id, asterisk_port } = req.body;
+        
+        const callLogId = await CallService.createCallLog(
+            session_id,
+            tenant_id,
+            agent_id,
+            caller_id,
+            asterisk_port
+        );
+        
+        res.json({ id: callLogId });
+    } catch (error) {
+        console.error('Create call log error:', error);
+        res.status(500).json({ error: 'Failed to create call log' });
+    }
+});
+
+// Update call log (internal use by bridge) - API Key only
+router.put('/:sessionId', verifyApiKey, async (req, res) => {
+    try {
+        await CallService.updateCallLog(req.params.sessionId, req.body);
+        res.json({ message: 'Call log updated' });
+    } catch (error) {
+        console.error('Update call log error:', error);
+        res.status(500).json({ error: 'Failed to update call log' });
+    }
+});
+
+// Log function call (internal use by bridge) - API Key only
+router.post('/:callLogId/functions', verifyApiKey, async (req, res) => {
+    try {
+        const { function_name, arguments: args, result, execution_time_ms, status, error_message } = req.body;
+        
+        await CallService.logFunctionCall(
+            req.params.callLogId,
+            function_name,
+            args,
+            result,
+            execution_time_ms,
+            status,
+            error_message
+        );
+        
+        res.json({ message: 'Function call logged' });
+    } catch (error) {
+        console.error('Log function call error:', error);
+        res.status(500).json({ error: 'Failed to log function call' });
+    }
+});
+
 // List calls
-router.get('/', verifyToken, checkPermission('calls.view'), async (req, res) => {
+router.get('/', authenticate, checkPermission('calls.view'), async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 50;
         const offset = parseInt(req.query.offset) || 0;
@@ -26,7 +90,7 @@ router.get('/', verifyToken, checkPermission('calls.view'), async (req, res) => 
 });
 
 // Get call details
-router.get('/:sessionId', verifyToken, checkPermission('calls.view'), async (req, res) => {
+router.get('/:sessionId', authenticate, checkPermission('calls.view'), async (req, res) => {
     try {
         const call = await CallService.getCallLog(req.params.sessionId);
         
@@ -46,7 +110,7 @@ router.get('/:sessionId', verifyToken, checkPermission('calls.view'), async (req
 });
 
 // Get call statistics
-router.get('/stats/summary', verifyToken, async (req, res) => {
+router.get('/stats/summary', authenticate, async (req, res) => {
     try {
         const days = parseInt(req.query.days) || 30;
         const stats = await CallService.getCallStats(req.user.id, days);
@@ -54,59 +118,6 @@ router.get('/stats/summary', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Get call stats error:', error);
         res.status(500).json({ error: 'Failed to get call stats' });
-    }
-});
-
-// Create call log (internal use by bridge)
-router.post('/create', async (req, res) => {
-    try {
-        const { session_id, tenant_id, agent_id, caller_id, asterisk_port } = req.body;
-        
-        const callLogId = await CallService.createCallLog(
-            session_id,
-            tenant_id,
-            agent_id,
-            caller_id,
-            asterisk_port
-        );
-        
-        res.json({ id: callLogId });
-    } catch (error) {
-        console.error('Create call log error:', error);
-        res.status(500).json({ error: 'Failed to create call log' });
-    }
-});
-
-// Update call log (internal use by bridge)
-router.put('/:sessionId', async (req, res) => {
-    try {
-        await CallService.updateCallLog(req.params.sessionId, req.body);
-        res.json({ message: 'Call log updated' });
-    } catch (error) {
-        console.error('Update call log error:', error);
-        res.status(500).json({ error: 'Failed to update call log' });
-    }
-});
-
-// Log function call (internal use by bridge)
-router.post('/:callLogId/functions', async (req, res) => {
-    try {
-        const { function_name, arguments: args, result, execution_time_ms, status, error_message } = req.body;
-        
-        await CallService.logFunctionCall(
-            req.params.callLogId,
-            function_name,
-            args,
-            result,
-            execution_time_ms,
-            status,
-            error_message
-        );
-        
-        res.json({ message: 'Function call logged' });
-    } catch (error) {
-        console.error('Log function call error:', error);
-        res.status(500).json({ error: 'Failed to log function call' });
     }
 });
 

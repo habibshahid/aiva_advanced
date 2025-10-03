@@ -1,5 +1,5 @@
 /**
- * Credit Manager - Checks and deducts credits
+ * Credit Manager - Checks and manages credits via API
  */
 
 const axios = require('axios');
@@ -16,6 +16,8 @@ class CreditManager {
      */
     async checkCredits(tenantId, minimumRequired = 0.10) {
         try {
+            logger.info(`Checking credits for tenant: ${tenantId}`);
+            
             const response = await axios.get(
                 `${this.apiUrl}/credits/balance`,
                 {
@@ -28,7 +30,7 @@ class CreditManager {
             
             const balance = response.data.balance;
             
-            logger.info(`Credit check: Tenant ${tenantId} has $${balance.toFixed(4)}`);
+            logger.info(`Credit balance: $${balance.toFixed(4)} (minimum: $${minimumRequired.toFixed(4)})`);
             
             if (balance < minimumRequired) {
                 logger.warn(`Insufficient credits: $${balance.toFixed(4)} < $${minimumRequired.toFixed(4)}`);
@@ -47,7 +49,7 @@ class CreditManager {
         } catch (error) {
             logger.error(`Credit check failed: ${error.message}`);
             
-            // Fail open - allow call if API is down
+            // Fail open - allow call if API is down (you can change this to fail closed)
             logger.warn('Credit check failed, allowing call (fail-open mode)');
             return {
                 allowed: true,
@@ -58,10 +60,12 @@ class CreditManager {
     }
     
     /**
-     * Deduct credits after call
+     * Deduct credits after call (called from API via webhook/direct call)
      */
     async deductCredits(tenantId, amount, callLogId) {
         try {
+            logger.info(`Deducting credits: $${amount.toFixed(4)} for tenant ${tenantId}`);
+            
             const response = await axios.post(
                 `${this.apiUrl}/credits/deduct`,
                 {
@@ -77,13 +81,12 @@ class CreditManager {
                 }
             );
             
-            logger.info(`Credits deducted: $${amount.toFixed(4)}, New balance: $${response.data.balance_after.toFixed(4)}`);
+            logger.info(`Credits deducted. New balance: $${response.data.balance_after.toFixed(4)}`);
             
             return true;
             
         } catch (error) {
             logger.error(`Credit deduction failed: ${error.message}`);
-            // Log to database for manual reconciliation
             return false;
         }
     }

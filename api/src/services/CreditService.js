@@ -12,7 +12,7 @@ class CreditService {
         }
         
         const [tenants] = await db.query(
-            'SELECT credit_balance FROM tenants WHERE id = ?',
+            'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?',
             [tenantId]
         );
         
@@ -43,7 +43,7 @@ class CreditService {
             
             // Get current balance
             const [tenants] = await connection.query(
-                'SELECT credit_balance FROM tenants WHERE id = ? FOR UPDATE',
+                'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ? FOR UPDATE',
                 [tenantId]
             );
             
@@ -56,14 +56,14 @@ class CreditService {
             
             // Update balance
             await connection.query(
-                'UPDATE tenants SET credit_balance = ? WHERE id = ?',
+                'UPDATE yovo_tbl_aiva_tenants SET credit_balance = ? WHERE id = ?',
                 [balanceAfter, tenantId]
             );
             
             // Record transaction
             const transactionId = uuidv4();
             await connection.query(
-                `INSERT INTO credit_transactions (
+                `INSERT INTO yovo_tbl_aiva_credit_transactions (
                     id, tenant_id, type, amount, balance_before, 
                     balance_after, reference_type, admin_id, note
                 ) VALUES (?, ?, 'add', ?, ?, ?, 'manual_topup', ?, ?)`,
@@ -99,7 +99,7 @@ class CreditService {
             
             // Get current balance
             const [tenants] = await connection.query(
-                'SELECT credit_balance FROM tenants WHERE id = ? FOR UPDATE',
+                'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ? FOR UPDATE',
                 [tenantId]
             );
             
@@ -116,14 +116,14 @@ class CreditService {
             
             // Update balance
             await connection.query(
-                'UPDATE tenants SET credit_balance = ? WHERE id = ?',
+                'UPDATE yovo_tbl_aiva_tenants SET credit_balance = ? WHERE id = ?',
                 [balanceAfter, tenantId]
             );
             
             // Record transaction
             const transactionId = uuidv4();
             await connection.query(
-                `INSERT INTO credit_transactions (
+                `INSERT INTO yovo_tbl_aiva_credit_transactions (
                     id, tenant_id, type, amount, balance_before, 
                     balance_after, reference_type, reference_id
                 ) VALUES (?, ?, 'deduct', ?, ?, ?, 'call', ?)`,
@@ -154,8 +154,8 @@ class CreditService {
             `SELECT 
                 ct.*,
                 t.name as admin_name
-            FROM credit_transactions ct
-            LEFT JOIN tenants t ON ct.admin_id = t.id
+            FROM yovo_tbl_aiva_credit_transactions ct
+            LEFT JOIN yovo_tbl_aiva_tenants t ON ct.admin_id = t.id
             WHERE ct.tenant_id = ?
             ORDER BY ct.created_at DESC
             LIMIT ? OFFSET ?`,
@@ -178,7 +178,7 @@ class CreditService {
                 SUM(final_cost) as total_cost,
                 AVG(final_cost) as avg_cost_per_call,
                 SUM(duration_seconds) as total_duration_seconds
-            FROM call_logs
+            FROM yovo_tbl_aiva_call_logs
             WHERE tenant_id = ? 
             AND start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
             AND status = 'completed'`,

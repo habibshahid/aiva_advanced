@@ -19,7 +19,7 @@ router.post('/login', async (req, res) => {
         
         // Get user
         const [users] = await db.query(
-            'SELECT * FROM tenants WHERE email = ? AND is_active = TRUE',
+            'SELECT * FROM yovo_tbl_aiva_tenants WHERE email = ? AND is_active = TRUE',
             [email]
         );
         
@@ -81,7 +81,7 @@ router.post('/api-key/generate', verifyToken, async (req, res) => {
         const apiKey = `ak_${uuidv4().replace(/-/g, '')}`;
         
         await db.query(
-            'UPDATE tenants SET api_key = ? WHERE id = ?',
+            'UPDATE yovo_tbl_aiva_tenants SET api_key = ? WHERE id = ?',
             [apiKey, req.user.id]
         );
         

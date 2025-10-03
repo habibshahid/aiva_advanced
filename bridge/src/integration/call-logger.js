@@ -16,6 +16,8 @@ class CallLogger {
      */
     async createCallLog(sessionId, tenantId, agentId, callerId, asteriskPort) {
         try {
+            logger.info(`Creating call log for session: ${sessionId}`);
+            
             const response = await axios.post(
                 `${this.apiUrl}/calls/create`,
                 {
@@ -46,24 +48,36 @@ class CallLogger {
      * Update call log
      */
     async updateCallLog(sessionId, updates) {
-        try {
-            await axios.put(
-                `${this.apiUrl}/calls/${sessionId}`,
-                updates,
-                {
-                    headers: {
-                        'X-API-Key': this.apiKey
-                    },
-                    timeout: 5000
-                }
-            );
-            
-            logger.debug(`Call log updated: ${sessionId}`);
-            
-        } catch (error) {
-            logger.error(`Call log update failed: ${error.message}`);
-        }
-    }
+		try {
+			// Format datetime for MySQL if present
+			if (updates.end_time) {
+				// Convert JS Date to MySQL datetime format: YYYY-MM-DD HH:MM:SS
+				const date = new Date(updates.end_time);
+				updates.end_time = date.toISOString().slice(0, 19).replace('T', ' ');
+			}
+			
+			if (updates.start_time) {
+				const date = new Date(updates.start_time);
+				updates.start_time = date.toISOString().slice(0, 19).replace('T', ' ');
+			}
+			
+			await axios.put(
+				`${this.apiUrl}/calls/${sessionId}`,
+				updates,
+				{
+					headers: {
+						'X-API-Key': this.apiKey
+					},
+					timeout: 5000
+				}
+			);
+			
+			logger.debug(`Call log updated: ${sessionId}`);
+			
+		} catch (error) {
+			logger.error(`Call log update failed: ${error.message}`);
+		}
+	}
     
     /**
      * Log function call

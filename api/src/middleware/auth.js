@@ -34,7 +34,7 @@ exports.verifyToken = async (req, res, next) => {
         
         // Get fresh user data from database
         const [users] = await db.query(
-            'SELECT id, name, email, role, credit_balance, is_active FROM tenants WHERE id = ? AND is_active = TRUE',
+            'SELECT id, name, email, role, credit_balance, is_active FROM yovo_tbl_aiva_tenants WHERE id = ? AND is_active = TRUE',
             [decoded.id]
         );
         
@@ -71,7 +71,7 @@ exports.verifyApiKey = async (req, res, next) => {
         }
         
         const [users] = await db.query(
-            'SELECT id, name, email, role, credit_balance, is_active FROM tenants WHERE api_key = ? AND is_active = TRUE',
+            'SELECT id, name, email, role, credit_balance, is_active FROM yovo_tbl_aiva_tenants WHERE api_key = ? AND is_active = TRUE',
             [apiKey]
         );
         

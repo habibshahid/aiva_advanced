@@ -8,7 +8,7 @@ class AgentService {
         const agentId = uuidv4();
         
         const [result] = await db.query(
-            `INSERT INTO agents (
+            `INSERT INTO yovo_tbl_aiva_agents (
                 id, tenant_id, name, type, instructions, voice, language, 
                 model, temperature, max_tokens, vad_threshold, 
                 silence_duration_ms, greeting
@@ -45,7 +45,7 @@ class AgentService {
         }
         
         const [agents] = await db.query(
-            'SELECT * FROM agents WHERE id = ?',
+            'SELECT * FROM yovo_tbl_aiva_agents WHERE id = ?',
             [agentId]
         );
         
@@ -57,7 +57,7 @@ class AgentService {
         
         // Get functions
         const [functions] = await db.query(
-            'SELECT * FROM functions WHERE agent_id = ? AND is_active = TRUE',
+            'SELECT * FROM yovo_tbl_aiva_functions WHERE agent_id = ? AND is_active = TRUE',
             [agentId]
         );
         
@@ -80,7 +80,7 @@ class AgentService {
     // Get agent by tenant and type (for call routing)
     async getActiveAgentByType(tenantId, type) {
         const [agents] = await db.query(
-            'SELECT * FROM agents WHERE tenant_id = ? AND type = ? AND is_active = TRUE ORDER BY created_at DESC LIMIT 1',
+            'SELECT * FROM yovo_tbl_aiva_agents WHERE tenant_id = ? AND type = ? AND is_active = TRUE ORDER BY created_at DESC LIMIT 1',
             [tenantId, type]
         );
         
@@ -93,7 +93,7 @@ class AgentService {
     
     // List agents
     async listAgents(tenantId, filters = {}) {
-        let query = 'SELECT * FROM agents WHERE tenant_id = ?';
+        let query = 'SELECT * FROM yovo_tbl_aiva_agents WHERE tenant_id = ?';
         const params = [tenantId];
         
         if (filters.type) {
@@ -138,7 +138,7 @@ class AgentService {
         values.push(agentId);
         
         await db.query(
-            `UPDATE agents SET ${fields.join(', ')} WHERE id = ?`,
+            `UPDATE yovo_tbl_aiva_agents SET ${fields.join(', ')} WHERE id = ?`,
             values
         );
         
@@ -150,7 +150,7 @@ class AgentService {
     
     // Delete agent
     async deleteAgent(agentId) {
-        await db.query('DELETE FROM agents WHERE id = ?', [agentId]);
+        await db.query('DELETE FROM yovo_tbl_aiva_agents WHERE id = ?', [agentId]);
         await redisClient.del(`agent:${agentId}`);
     }
     

@@ -159,7 +159,7 @@ class RtpUdpServer extends EventEmitter {
             if (now - client.lastSeen > staleThreshold) {
                 console.log(`Removing stale client: ${clientKey}`);
                 this.clients.delete(clientKey);
-                this.emit('clientDisconnected', client);
+                this.emit('clientDisconnected', clientKey);
             }
         }
     }

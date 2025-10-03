@@ -3,6 +3,7 @@ import { login as loginAPI, getCurrentUser } from '../services/api';
 
 const AuthContext = createContext();
 
+// EXPORT THIS FUNCTION
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -20,35 +21,42 @@ export const AuthProvider = ({ children }) => {
     const savedUser = localStorage.getItem('user');
     
     if (token && savedUser) {
-      setUser(JSON.parse(savedUser));
-      
-      // Verify token is still valid
-      getCurrentUser()
-        .then(response => {
-          setUser(response.data.user);
-          localStorage.setItem('user', JSON.stringify(response.data.user));
-        })
-        .catch(() => {
-          logout();
-        })
-        .finally(() => {
-          setLoading(false);
-        });
+      try {
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+        
+        // Verify token is still valid
+        getCurrentUser()
+          .then(response => {
+            setUser(response.data.user);
+            localStorage.setItem('user', JSON.stringify(response.data.user));
+          })
+          .catch(() => {
+            logout();
+          })
+          .finally(() => {
+            setLoading(false);
+          });
+      } catch (error) {
+        logout();
+        setLoading(false);
+      }
     } else {
       setLoading(false);
     }
   }, []);
 
   const login = async (email, password) => {
-    const response = await loginAPI(email, password);
-    const { token, user } = response.data;
-    
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
-    setUser(user);
-    
-    return user;
-  };
+	  const response = await loginAPI(email, password);
+	  const { token, user } = response.data;
+	  
+	  localStorage.setItem('token', token);
+	  localStorage.setItem('user', JSON.stringify(user));
+	 
+	  setUser(user);
+	  
+	  return user;
+	};
 
   const logout = () => {
     localStorage.removeItem('token');

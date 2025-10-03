@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -9,6 +9,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -17,7 +18,12 @@ const Login = () => {
     try {
       await login(email, password);
       toast.success('Login successful');
-      navigate('/');
+      
+      // Get the path user was trying to access, or default to home
+      const from = location.state?.from?.pathname || '/';
+      
+      // Use replace to avoid adding to history
+      navigate(from, { replace: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Login failed');
     } finally {

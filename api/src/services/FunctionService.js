@@ -8,7 +8,7 @@ class FunctionService {
         const functionId = uuidv4();
         
         await db.query(
-            `INSERT INTO functions (
+            `INSERT INTO yovo_tbl_aiva_functions (
                 id, agent_id, name, description, execution_mode,
                 parameters, handler_type, api_endpoint, api_method,
                 api_headers, timeout_ms, retries
@@ -30,7 +30,7 @@ class FunctionService {
         );
         
         // Invalidate agent cache
-        const [agents] = await db.query('SELECT tenant_id FROM agents WHERE id = ?', [agentId]);
+        const [agents] = await db.query('SELECT tenant_id FROM yovo_tbl_aiva_agents WHERE id = ?', [agentId]);
         if (agents.length > 0) {
             await redisClient.del(`agent:${agentId}`);
         }
@@ -41,7 +41,7 @@ class FunctionService {
     // Get function
     async getFunction(functionId) {
         const [functions] = await db.query(
-            'SELECT * FROM functions WHERE id = ?',
+            'SELECT * FROM yovo_tbl_aiva_functions WHERE id = ?',
             [functionId]
         );
         
@@ -61,7 +61,7 @@ class FunctionService {
     // List functions for agent
     async listFunctions(agentId) {
         const [functions] = await db.query(
-            'SELECT * FROM functions WHERE agent_id = ? ORDER BY created_at DESC',
+            'SELECT * FROM yovo_tbl_aiva_functions WHERE agent_id = ? ORDER BY created_at DESC',
             [agentId]
         );
         
@@ -102,12 +102,12 @@ class FunctionService {
         values.push(functionId);
         
         await db.query(
-            `UPDATE functions SET ${fields.join(', ')} WHERE id = ?`,
+            `UPDATE yovo_tbl_aiva_functions SET ${fields.join(', ')} WHERE id = ?`,
             values
         );
         
         // Invalidate agent cache
-        const [functions] = await db.query('SELECT agent_id FROM functions WHERE id = ?', [functionId]);
+        const [functions] = await db.query('SELECT agent_id FROM yovo_tbl_aiva_functions WHERE id = ?', [functionId]);
         if (functions.length > 0) {
             await redisClient.del(`agent:${functions[0].agent_id}`);
         }
@@ -118,7 +118,7 @@ class FunctionService {
     // Delete function
     async deleteFunction(functionId) {
         // Get agent_id before deletion
-        const [functions] = await db.query('SELECT agent_id FROM functions WHERE id = ?', [functionId]);
+        const [functions] = await db.query('SELECT agent_id FROM yovo_tbl_aiva_functions WHERE id = ?', [functionId]);
         
         await db.query('DELETE FROM functions WHERE id = ?', [functionId]);
         

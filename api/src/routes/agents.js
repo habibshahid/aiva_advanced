@@ -1,12 +1,25 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const AgentService = require('../services/AgentService');
 
 const router = express.Router();
 
+// Middleware that accepts either JWT token OR API key
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        // Use API key authentication
+        return verifyApiKey(req, res, next);
+    } else {
+        // Use JWT token authentication
+        return verifyToken(req, res, next);
+    }
+};
+
 // List agents
-router.get('/', verifyToken, checkPermission('agents.view'), async (req, res) => {
+router.get('/', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
         const agents = await AgentService.listAgents(req.user.id, req.query);
         res.json({ agents });
@@ -17,7 +30,7 @@ router.get('/', verifyToken, checkPermission('agents.view'), async (req, res) =>
 });
 
 // Get agent
-router.get('/:id', verifyToken, checkPermission('agents.view'), async (req, res) => {
+router.get('/:id', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.id);
         
@@ -25,7 +38,7 @@ router.get('/:id', verifyToken, checkPermission('agents.view'), async (req, res)
             return res.status(404).json({ error: 'Agent not found' });
         }
         
-        // Check ownership
+        // Check ownership (super_admin can access any agent)
         if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
@@ -38,7 +51,7 @@ router.get('/:id', verifyToken, checkPermission('agents.view'), async (req, res)
 });
 
 // Create agent
-router.post('/', verifyToken, checkPermission('agents.create'), async (req, res) => {
+router.post('/', authenticate, checkPermission('agents.create'), async (req, res) => {
     try {
         const agent = await AgentService.createAgent(req.user.id, req.body);
         res.status(201).json({ agent });
@@ -49,7 +62,7 @@ router.post('/', verifyToken, checkPermission('agents.create'), async (req, res)
 });
 
 // Update agent
-router.put('/:id', verifyToken, checkPermission('agents.update'), async (req, res) => {
+router.put('/:id', authenticate, checkPermission('agents.update'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.id);
         
@@ -71,7 +84,7 @@ router.put('/:id', verifyToken, checkPermission('agents.update'), async (req, re
 });
 
 // Delete agent
-router.delete('/:id', verifyToken, checkPermission('agents.delete'), async (req, res) => {
+router.delete('/:id', authenticate, checkPermission('agents.delete'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.id);
         

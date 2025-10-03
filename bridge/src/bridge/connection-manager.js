@@ -29,8 +29,10 @@ class ConnectionManager extends EventEmitter {
         try {
             logger.info(`Creating connection for ${clientKey}`);
             
+			const sessionId = config.sessionId || clientKey;
+			
             // Create OpenAI session
-            const session = await this.sessionManager.createSession(clientKey, {
+            const session = await this.sessionManager.createSession(sessionId, {
                 ...config,
                 rtpInfo: {
                     clientKey: clientKey,
@@ -374,6 +376,15 @@ class ConnectionManager extends EventEmitter {
         try {
             logger.info(`Closing connection: ${clientKey}`);
             
+			const connectionData = {
+				sessionId: connection.sessionId,
+				tenantId: connection.tenantId,
+				agentId: connection.agentId,
+				callLogId: connection.callLogId,
+				callerId: connection.session?.callerId,
+				asteriskPort: connection.session?.rtpInfo?.port
+			};
+			
             // Clean up audio queue
             connection.audioQueue.destroy();
             
@@ -385,9 +396,12 @@ class ConnectionManager extends EventEmitter {
             
             this.emit('connectionClosed', {
                 clientKey: clientKey,
-                finalCost: finalCost
+                finalCost: finalCost,
+				connectionData: connectionData
             });
             
+			this.connections.delete(clientKey);
+			
             logger.info(`Connection closed: ${clientKey}`);
             
         } catch (error) {

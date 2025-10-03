@@ -1,5 +1,6 @@
 api/.env
 api/node_modules/
+api/dashboard/node_modules/
 api/package-lock.json
 bridge/.env
 bridge/node_modules/

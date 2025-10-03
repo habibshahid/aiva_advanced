@@ -7,7 +7,7 @@ class CallService {
         const callLogId = uuidv4();
         
         await db.query(
-            `INSERT INTO call_logs (
+            `INSERT INTO yovo_tbl_aiva_call_logs (
                 id, session_id, tenant_id, agent_id, caller_id,
                 asterisk_port, start_time, status
             ) VALUES (?, ?, ?, ?, ?, ?, NOW(), 'in_progress')`,
@@ -22,6 +22,16 @@ class CallService {
         const fields = [];
         const values = [];
         
+		if (updates.end_time) {
+            const date = new Date(updates.end_time);
+            updates.end_time = date.toISOString().slice(0, 19).replace('T', ' ');
+        }
+        
+        if (updates.start_time) {
+            const date = new Date(updates.start_time);
+            updates.start_time = date.toISOString().slice(0, 19).replace('T', ' ');
+        }
+		
         const allowedFields = [
             'end_time', 'duration_seconds', 'audio_input_seconds',
             'audio_output_seconds', 'text_input_tokens', 'text_output_tokens',
@@ -42,7 +52,7 @@ class CallService {
         values.push(sessionId);
         
         await db.query(
-            `UPDATE call_logs SET ${fields.join(', ')} WHERE session_id = ?`,
+            `UPDATE yovo_tbl_aiva_call_logs SET ${fields.join(', ')} WHERE session_id = ?`,
             values
         );
     }
@@ -52,7 +62,7 @@ class CallService {
         const logId = uuidv4();
         
         await db.query(
-            `INSERT INTO function_call_logs (
+            `INSERT INTO yovo_tbl_aiva_function_call_logs (
                 id, call_log_id, function_name, arguments, result,
                 execution_time_ms, status, error_message
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -76,9 +86,9 @@ class CallService {
                 cl.*,
                 a.name as agent_name,
                 t.name as tenant_name
-            FROM call_logs cl
-            LEFT JOIN agents a ON cl.agent_id = a.id
-            LEFT JOIN tenants t ON cl.tenant_id = t.id
+            FROM yovo_tbl_aiva_call_logs cl
+            LEFT JOIN yovo_tbl_aiva_agents a ON cl.agent_id = a.id
+            LEFT JOIN yovo_tbl_aiva_tenants t ON cl.tenant_id = t.id
             WHERE cl.session_id = ?`,
             [sessionId]
         );
@@ -91,7 +101,7 @@ class CallService {
         
         // Get function calls
         const [functions] = await db.query(
-            'SELECT * FROM function_call_logs WHERE call_log_id = ? ORDER BY created_at',
+            'SELECT * FROM yovo_tbl_aiva_function_call_logs WHERE call_log_id = ? ORDER BY created_at',
             [call.id]
         );
         
@@ -110,8 +120,8 @@ class CallService {
             SELECT 
                 cl.*,
                 a.name as agent_name
-            FROM call_logs cl
-            LEFT JOIN agents a ON cl.agent_id = a.id
+            FROM yovo_tbl_aiva_call_logs cl
+            LEFT JOIN yovo_tbl_aiva_agents a ON cl.agent_id = a.id
             WHERE cl.tenant_id = ?
         `;
         const params = [tenantId];
@@ -158,7 +168,7 @@ class CallService {
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_calls,
                 AVG(duration_seconds) as avg_duration,
                 SUM(final_cost) as total_cost
-            FROM call_logs
+            FROM yovo_tbl_aiva_call_logs
             WHERE tenant_id = ?
             AND start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)`,
             [tenantId, days]
