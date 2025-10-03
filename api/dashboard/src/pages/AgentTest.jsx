@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Volume2, Settings } from 'lucide-react';
-import { getAgents, getRealtimeToken } from '../services/api';
+import { getAgents, getRealtimeToken, finalizeTestCall } from '../services/api';
 import toast from 'react-hot-toast';
 
 const AgentTest = () => {
@@ -10,9 +10,15 @@ const AgentTest = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [transcript, setTranscript] = useState([]);
   const [audioLevel, setAudioLevel] = useState(0);
-
-  const wsRef = useRef(null);
+  const [estimatedCost, setEstimatedCost] = useState(0);
+  const [testSessionId, setTestSessionId] = useState(null);
+  const audioQueueRef = useRef([]);
+  const isPlayingRef = useRef(false);
   const audioContextRef = useRef(null);
+  const connectTimeRef = useRef(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  
+  const wsRef = useRef(null);
   const micStreamRef = useRef(null);
   const audioPlayerRef = useRef(null);
 
@@ -32,16 +38,34 @@ const AgentTest = () => {
     }
   };
 
+  useEffect(() => {
+	  if (!isConnected) return;
+	  
+	  const interval = setInterval(() => {
+		if (connectTimeRef.current) {
+		  const durationMinutes = (Date.now() - connectTimeRef.current) / 60000;
+		  const cost = durationMinutes * 0.024; // Adjust based on model
+		  setEstimatedCost(cost);
+		}
+	  }, 1000);
+	  
+	  return () => clearInterval(interval);
+  }, [isConnected]);
+	
   const connect = async () => {
   if (!selectedAgent) {
     toast.error('Please select an agent');
     return;
   }
 
+  setIsConnecting(true);
+  
   try {
     const tokenResponse = await getRealtimeToken(selectedAgent.id);
-    const { ephemeral_key } = tokenResponse.data;
+    const { ephemeral_key, session_id } = tokenResponse.data;
 
+	setTestSessionId(session_id);
+	
     console.log('Connecting with key:', ephemeral_key);
 
     // Correct WebSocket connection with subprotocols
@@ -53,33 +77,15 @@ const AgentTest = () => {
     wsRef.current = ws;
 
     ws.onopen = async () => {
-      console.log('Connected to OpenAI Realtime');
-      setIsConnected(true);
-      toast.success('Connected to agent');
+	  console.log('Connected to OpenAI Realtime');
+	  connectTimeRef.current = Date.now();
+	  setIsConnected(true);
+	  setIsConnecting(false);
+	  toast.success('Connected to agent');
 
-      // Configure session
-      ws.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: selectedAgent.instructions,
-          voice: selectedAgent.voice,
-          input_audio_format: 'pcm16',
-          output_audio_format: 'pcm16',
-          input_audio_transcription: { model: 'whisper-1' },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: selectedAgent.vad_threshold || 0.5,
-            silence_duration_ms: selectedAgent.silence_duration_ms || 500
-          },
-          temperature: selectedAgent.temperature || 0.6,
-          max_response_output_tokens: selectedAgent.max_tokens || 4096
-        }
-      }));
-
-      // Start microphone
-      await startMicrophone();
-    };
+	  // Start microphone immediately (like the bridge does)
+	  await startMicrophone();
+	};
 
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
@@ -88,6 +94,7 @@ const AgentTest = () => {
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
+	  setIsConnecting(false);
       toast.error('Connection error');
     };
 
@@ -96,9 +103,10 @@ const AgentTest = () => {
       console.log('Close code:', event.code);
       console.log('Close reason:', event.reason);
       setIsConnected(false);
+	  setIsConnecting(false);
       stopMicrophone();
       
-      if (event.code !== 1000) {
+      if (event.code !== 1005) {
         toast.error(`Connection closed: ${event.reason || 'Unknown error'}`);
       }
     };
@@ -106,17 +114,43 @@ const AgentTest = () => {
   } catch (error) {
     console.error('Failed to connect:', error);
     toast.error('Failed to connect to agent');
+	setIsConnecting(false);
   }
 };
 
   const disconnect = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    stopMicrophone();
-    setIsConnected(false);
-  };
+	  if (testSessionId && wsRef.current) {
+		finalizeCost();
+	  }
+
+	  if (wsRef.current) {
+		wsRef.current.close();
+		wsRef.current = null;
+	  }
+	  stopMicrophone();
+	  
+	  // Clear audio queue
+	  audioQueueRef.current = [];
+	  isPlayingRef.current = false;
+	  
+	  setIsConnected(false);
+	  setTestSessionId(null);
+	};
+
+	const finalizeCost = async () => {
+	  try {
+		const duration = Date.now() - connectTimeRef.current;
+		
+		const response = await finalizeTestCall(testSessionId, duration);
+		
+		if (response.data.success) {
+		  toast.success(`Test call completed. Cost: $${response.data.cost.toFixed(4)}`);
+		}
+	  } catch (error) {
+		console.error('Failed to finalize cost:', error);
+		toast.error('Failed to log test call cost');
+	  }
+	};
 
   const startMicrophone = async () => {
     try {
@@ -153,24 +187,36 @@ const AgentTest = () => {
       updateLevel();
 
       processor.onaudioprocess = (e) => {
-        if (!wsRef.current || isMuted) return;
+		  if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isMuted) return;
 
-        const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Convert Float32Array to Int16Array (PCM16)
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
+		  const inputData = e.inputBuffer.getChannelData(0);
+		  
+		  // Convert Float32Array to Int16Array (PCM16)
+		  const pcm16 = new Int16Array(inputData.length);
+		  for (let i = 0; i < inputData.length; i++) {
+			const s = Math.max(-1, Math.min(1, inputData[i]));
+			pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+		  }
 
-        // Send to OpenAI
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
-        wsRef.current.send(JSON.stringify({
-          type: 'input_audio_buffer.append',
-          audio: base64
-        }));
-      };
+		  // Convert to base64
+		  const bytes = new Uint8Array(pcm16.buffer);
+		  let binary = '';
+		  for (let i = 0; i < bytes.length; i++) {
+			binary += String.fromCharCode(bytes[i]);
+		  }
+		  const base64 = btoa(binary);
+
+		  // Send to OpenAI
+		  try {
+			wsRef.current.send(JSON.stringify({
+			  type: 'input_audio_buffer.append',
+			  audio: base64
+			}));
+		  } catch (error) {
+			console.error('Error sending audio:', error);
+		  }
+		};
+
 
       source.connect(processor);
       processor.connect(audioContext.destination);
@@ -193,76 +239,175 @@ const AgentTest = () => {
   };
 
   const handleRealtimeMessage = (message) => {
-    switch (message.type) {
-      case 'session.created':
-        console.log('Session created');
-        break;
+	  console.log('Received:', message.type);
+	  
+	  switch (message.type) {
+		case 'session.created':
+		  console.log('Session created, configuring...');
+		  // Now configure the session (like bridge does after connection)
+		  configureSession();
+		  break;
 
-      case 'conversation.item.input_audio_transcription.completed':
-        setTranscript(prev => [...prev, {
-          role: 'user',
-          content: message.transcript,
-          timestamp: new Date()
-        }]);
-        break;
+		case 'session.updated':
+		  console.log('Session updated, triggering greeting...');
+		  // After session is configured, trigger greeting (like bridge does)
+		  setTimeout(() => {
+			if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+			  wsRef.current.send(JSON.stringify({
+				type: 'response.create'
+			  }));
+			}
+		  }, 500);
+		  break;
 
-      case 'response.audio_transcript.done':
-        setTranscript(prev => [...prev, {
-          role: 'assistant',
-          content: message.transcript,
-          timestamp: new Date()
-        }]);
-        break;
+		case 'error':
+		  console.error('OpenAI error:', message);
+		  toast.error(`Error: ${message.error?.message || 'Unknown error'}`);
+		  break;
 
-      case 'response.audio.delta':
-        playAudio(message.delta);
-        break;
+		case 'conversation.item.input_audio_transcription.completed':
+		  setTranscript(prev => [...prev, {
+			role: 'user',
+			content: message.transcript,
+			timestamp: new Date()
+		  }]);
+		  break;
 
-      case 'input_audio_buffer.speech_started':
-        console.log('User speaking...');
-        break;
+		case 'response.audio_transcript.done':
+		  setTranscript(prev => [...prev, {
+			role: 'assistant',
+			content: message.transcript,
+			timestamp: new Date()
+		  }]);
+		  break;
 
-      case 'input_audio_buffer.speech_stopped':
-        console.log('User stopped speaking');
-        break;
+		case 'response.audio.delta':
+		  playAudio(message.delta);
+		  break;
 
-      default:
-        break;
-    }
-  };
+		case 'input_audio_buffer.speech_started':
+		  console.log('🎤 User speaking...');
+		  break;
+
+		case 'input_audio_buffer.speech_stopped':
+		  console.log('🎤 User stopped speaking');
+		  break;
+
+		case 'response.done':
+		  console.log('✅ Response completed');
+		  break;
+
+		default:
+		  break;
+	  }
+	};
+
+  const configureSession = () => {
+	  if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      
+	  const config = {
+		type: 'session.update',
+		session: {
+		  modalities: ['text', 'audio'],
+		  instructions: selectedAgent.instructions,
+		  voice: selectedAgent.voice,
+		  input_audio_format: 'pcm16',
+		  output_audio_format: 'pcm16',
+		  input_audio_transcription: {
+			model: 'whisper-1',
+			language: selectedAgent.language
+		  },
+		  turn_detection: {
+			type: 'server_vad',
+			threshold: parseFloat(selectedAgent.vad_threshold || '0.5'),
+			prefix_padding_ms: 300,
+			silence_duration_ms: parseInt(selectedAgent.silence_duration_ms || '500'),
+			create_response: true
+		  },
+		  tools: [], // Add tools here if agent has functions
+		  max_response_output_tokens: parseInt(selectedAgent.max_tokens || '4096'),
+		  temperature: parseFloat(selectedAgent.temperature || '0.6')
+		}
+	  };
+
+	  console.log('Configuring session:', config);
+	  wsRef.current.send(JSON.stringify(config));
+	};
 
   const playAudio = (base64Audio) => {
-    try {
-      const binaryString = atob(base64Audio);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+	  try {
+		const binaryString = atob(base64Audio);
+		const bytes = new Uint8Array(binaryString.length);
+		for (let i = 0; i < binaryString.length; i++) {
+		  bytes[i] = binaryString.charCodeAt(i);
+		}
 
-      const pcm16 = new Int16Array(bytes.buffer);
-      const float32 = new Float32Array(pcm16.length);
-      
-      for (let i = 0; i < pcm16.length; i++) {
-        float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
-      }
+		// Queue the audio chunk
+		audioQueueRef.current.push(bytes);
+		
+		// Start playing if not already playing
+		if (!isPlayingRef.current) {
+		  playNextChunk();
+		}
 
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      }
+	  } catch (error) {
+		console.error('Audio processing error:', error);
+	  }
+	};
 
-      const audioBuffer = audioContextRef.current.createBuffer(1, float32.length, 24000);
-      audioBuffer.getChannelData(0).set(float32);
+  const playNextChunk = async () => {
+	  if (audioQueueRef.current.length === 0) {
+		isPlayingRef.current = false;
+		return;
+	  }
 
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContextRef.current.destination);
-      source.start();
+	  isPlayingRef.current = true;
+	  const chunk = audioQueueRef.current.shift();
 
-    } catch (error) {
-      console.error('Audio playback error:', error);
-    }
-  };
+	  try {
+		// Create audio context if needed (24kHz for OpenAI output)
+		if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+		  audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+			sampleRate: 24000
+		  });
+		}
 
+		// Convert bytes to Int16Array
+		const pcm16 = new Int16Array(chunk.buffer);
+		
+		// Convert to Float32Array
+		const float32 = new Float32Array(pcm16.length);
+		for (let i = 0; i < pcm16.length; i++) {
+		  float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
+		}
+
+		// Create audio buffer
+		const audioBuffer = audioContextRef.current.createBuffer(
+		  1, 
+		  float32.length, 
+		  24000
+		);
+		audioBuffer.getChannelData(0).set(float32);
+
+		// Play the buffer
+		const source = audioContextRef.current.createBufferSource();
+		source.buffer = audioBuffer;
+		source.connect(audioContextRef.current.destination);
+		
+		// When this chunk ends, play the next one
+		source.onended = () => {
+		  playNextChunk();
+		};
+		
+		source.start(0);
+
+	  } catch (error) {
+		console.error('Audio playback error:', error);
+		isPlayingRef.current = false;
+		// Try next chunk anyway
+		playNextChunk();
+	  }
+	};
   return (
     <div className="space-y-6">
       <div>
@@ -274,6 +419,7 @@ const AgentTest = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Settings Panel */}
+		
         <div className="lg:col-span-1">
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4 flex items-center">
@@ -320,27 +466,37 @@ const AgentTest = () => {
                   </div>
                 </div>
               )}
-
+				{isConnected && (
+				  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm">
+					<div className="font-medium text-yellow-900">Estimated Cost</div>
+					<div className="text-2xl font-bold text-yellow-700">
+					  ${estimatedCost.toFixed(4)}
+					</div>
+					<div className="text-xs text-yellow-600 mt-1">
+					  This will be deducted from your credits
+					</div>
+				  </div>
+				)}
               <div className="pt-4 border-t">
-                {!isConnected ? (
-                  <button
-                    onClick={connect}
-                    disabled={!selectedAgent}
-                    className="w-full flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                  >
-                    <Phone className="w-5 h-5 mr-2" />
-                    Start Call
-                  </button>
-                ) : (
-                  <button
-                    onClick={disconnect}
-                    className="w-full flex items-center justify-center px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
-                  >
-                    <PhoneOff className="w-5 h-5 mr-2" />
-                    End Call
-                  </button>
-                )}
-              </div>
+				  {!isConnected ? (
+					<button
+					  onClick={connect}
+					  disabled={!selectedAgent || isConnecting}
+					  className="w-full flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+					>
+					  <Phone className="w-5 h-5 mr-2" />
+					  {isConnecting ? 'Connecting...' : 'Start Call'}
+					</button>
+				  ) : (
+					<button
+					  onClick={disconnect}
+					  className="w-full flex items-center justify-center px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
+					>
+					  <PhoneOff className="w-5 h-5 mr-2" />
+					  End Call
+					</button>
+				  )}
+			  </div>
 
               {isConnected && (
                 <>

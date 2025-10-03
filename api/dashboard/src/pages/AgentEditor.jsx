@@ -9,7 +9,8 @@ import {
   getFunctions, 
   createFunction, 
   updateFunction, 
-  deleteFunction 
+  deleteFunction,
+  generateInstructions
 } from '../services/api';
 
 const AgentEditor = () => {
@@ -38,6 +39,11 @@ const AgentEditor = () => {
   const [editingFunction, setEditingFunction] = useState(null);
   const [savingFunction, setSavingFunction] = useState(false);
   
+  const [showAIModal, setShowAIModal] = useState(false);
+  const [generatedInstructions, setGeneratedInstructions] = useState('');
+  const [generatingAI, setGeneratingAI] = useState(false);
+  const [aiCost, setAiCost] = useState(0);
+
   // Function form state - matches your bridge format
   const [functionForm, setFunctionForm] = useState({
     name: '',
@@ -87,6 +93,46 @@ const AgentEditor = () => {
       loadAgent();
     }
   }, [id]);
+
+	const generateAIInstructions = async () => {
+	  if (!agent.name) {
+		toast.error('Please enter an agent name first');
+		return;
+	  }
+
+	  setGeneratingAI(true);
+	  setShowAIModal(true);
+
+	  try {
+		const response = await generateInstructions({
+		  agent_name: agent.name,
+		  agent_type: agent.type,
+		  language: agent.language,
+		  existing_instructions: agent.instructions
+		});
+
+		setGeneratedInstructions(response.data.instructions);
+		setAiCost(response.data.cost);
+		toast.success(`Instructions generated! Cost: $${response.data.cost.toFixed(6)}`);
+	  } catch (error) {
+		toast.error('Failed to generate instructions');
+		setShowAIModal(false);
+	  } finally {
+		setGeneratingAI(false);
+	  }
+	};
+
+	const acceptAIInstructions = () => {
+	  setAgent({ ...agent, instructions: generatedInstructions });
+	  setShowAIModal(false);
+	  toast.success('Instructions applied');
+	};
+
+	const rejectAIInstructions = () => {
+	  setShowAIModal(false);
+	  setGeneratedInstructions('');
+	  toast.info('Instructions discarded');
+	};
 
   const loadAgent = async () => {
     setLoading(true);
@@ -677,15 +723,43 @@ const AgentEditor = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Instructions</label>
-            <textarea
-              value={agent.instructions}
-              onChange={(e) => setAgent({ ...agent, instructions: e.target.value })}
-              rows={10}
-              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
-              placeholder="You are a helpful sales assistant..."
-            />
-          </div>
+			  <div className="flex items-center justify-between mb-2">
+				<label className="block text-sm font-medium text-gray-700">Instructions</label>
+				<button
+				  type="button"
+				  onClick={generateAIInstructions}
+				  disabled={!agent.name || generatingAI}
+				  className="inline-flex items-center px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+				  {generatingAI ? (
+					<>
+					  <svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+						<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+						<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					  </svg>
+					  Generating...
+					</>
+				  ) : (
+					<>
+					  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+					  </svg>
+					  AI Generate
+					</>
+				  )}
+				</button>
+			  </div>
+			  <textarea
+				value={agent.instructions}
+				onChange={(e) => setAgent({ ...agent, instructions: e.target.value })}
+				rows={10}
+				className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+				placeholder="You are a helpful sales assistant..."
+			  />
+			  <p className="mt-1 text-xs text-gray-500">
+				System instructions that define the agent's behavior. Click "AI Generate" for assistance.
+			  </p>
+		  </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700">Greeting (optional)</label>
@@ -1515,6 +1589,83 @@ const AgentEditor = () => {
           </div>
         </div>
       )}
+	  {/* AI Instructions Modal - MOVED TO END */}
+		{showAIModal && (
+		  <div className="fixed inset-0 z-50 overflow-y-auto">
+			<div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20">
+			  <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => !generatingAI && setShowAIModal(false)} />
+			  
+			  <div className="relative bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+				<div className="sticky top-0 bg-white px-6 py-4 border-b border-gray-200 z-10">
+				  <h3 className="text-lg font-medium text-gray-900">
+					AI Generated Instructions
+				  </h3>
+				  {aiCost > 0 && (
+					<p className="mt-1 text-sm text-gray-500">
+					  Cost: ${aiCost.toFixed(6)} (deducted from your credits)
+					</p>
+				  )}
+				</div>
+
+				<div className="px-6 py-5">
+				  {generatingAI ? (
+					<div className="flex items-center justify-center py-12">
+					  <div className="text-center">
+						<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
+						<p className="text-sm text-gray-600">Generating instructions...</p>
+						<p className="text-xs text-gray-500 mt-2">Using AI to create optimized agent instructions</p>
+					  </div>
+					</div>
+				  ) : (
+					<>
+					  <div className="mb-4">
+						<label className="block text-sm font-medium text-gray-700 mb-2">
+						  Generated Instructions
+						</label>
+						<textarea
+						  value={generatedInstructions}
+						  onChange={(e) => setGeneratedInstructions(e.target.value)}
+						  rows={20}
+						  className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 font-mono text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+						/>
+						<p className="mt-2 text-sm text-gray-500">
+						  You can edit these instructions before accepting them.
+						</p>
+					  </div>
+
+					  <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+						<h4 className="text-sm font-medium text-blue-900 mb-2">Review Carefully</h4>
+						<ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+						  <li>Verify the instructions match your use case</li>
+						  <li>Check for any inappropriate content or errors</li>
+						  <li>Customize as needed before accepting</li>
+						  <li>Test the agent after applying instructions</li>
+						</ul>
+					  </div>
+					</>
+				  )}
+				</div>
+
+				{!generatingAI && (
+				  <div className="sticky bottom-0 bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
+					<button
+					  onClick={rejectAIInstructions}
+					  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+					>
+					  Discard
+					</button>
+					<button
+					  onClick={acceptAIInstructions}
+					  className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
+					>
+					  Accept & Apply
+					</button>
+				  </div>
+				)}
+			  </div>
+			</div>
+		  </div>
+		)}
     </div>
   );
 };

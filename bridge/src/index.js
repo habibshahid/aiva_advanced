@@ -233,7 +233,8 @@ class AsteriskOpenAIBridge {
 						temperature: agentConfig.config?.temperature || this.config.temperature,
 						maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
 						instructions: fullInstructions,
-						callerId: callerNumber
+						callerId: callerNumber,
+						language: agentConfig.config?.language
 					}
                 );
 				
@@ -257,7 +258,8 @@ class AsteriskOpenAIBridge {
                 await this.sessionManager.configureSession(
                     connection.sessionId,
                     fullInstructions,
-                    tools
+                    tools,
+					agentConfig.config?.language
                 );
                 
                 // Add to monitor

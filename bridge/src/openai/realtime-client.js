@@ -228,7 +228,7 @@ class OpenAIRealtimeClient extends EventEmitter {
     /**
      * Configure session with instructions and tools
      */
-    async configureSession(instructions, tools = []) {
+    async configureSession(instructions, tools = [], language = 'ur') {
         if (!this.isConnected || !this.ws) {
             throw new Error('Not connected to OpenAI');
         }
@@ -247,7 +247,7 @@ class OpenAIRealtimeClient extends EventEmitter {
                     output_audio_format: 'pcm16',
                     input_audio_transcription: {
                         model: 'whisper-1',
-						language: 'ur'
+						language: language
                     },
                     turn_detection: {
                         type: 'server_vad',
@@ -262,7 +262,7 @@ class OpenAIRealtimeClient extends EventEmitter {
                 }
             };
             
-			console.log('[SESSION-CONFIG] Full config:', JSON.stringify(config, null, 2));
+			//console.log('[SESSION-CONFIG] Full config:', JSON.stringify(config, null, 2));
 			
             this.ws.send(JSON.stringify(config));
             logger.info('Session configured successfully');

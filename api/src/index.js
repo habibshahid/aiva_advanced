@@ -10,6 +10,8 @@ const agentRoutes = require('./routes/agents');
 const functionRoutes = require('./routes/functions');
 const creditRoutes = require('./routes/credits');
 const callRoutes = require('./routes/calls');
+const realtimeRoutes = require('./routes/realtime');
+const aiAssistRoutes = require('./routes/ai-assist');
 
 const app = express();
 const PORT = process.env.API_PORT || 4000;
@@ -48,6 +50,8 @@ app.use('/api/agents', agentRoutes);
 app.use('/api/functions', functionRoutes);
 app.use('/api/credits', creditRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/realtime', realtimeRoutes);
+app.use('/api/ai-assist', aiAssistRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -65,7 +65,7 @@ class SessionManager {
     /**
      * Configure session with instructions and tools
      */
-    async configureSession(sessionId, instructions, tools = []) {
+    async configureSession(sessionId, instructions, tools = [], language = 'ur') {
         const session = this.sessions.get(sessionId);
         if (!session) {
             throw new Error(`Session not found: ${sessionId}`);
@@ -82,7 +82,7 @@ class SessionManager {
             }
             
             // Configure the session
-            await session.client.configureSession(fullInstructions, tools);
+            await session.client.configureSession(fullInstructions, tools, language);
             
             session.lastActivity = Date.now();
             

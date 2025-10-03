@@ -112,4 +112,13 @@ export const getCallStats = (days) =>
 export const getRealtimeToken = (agentId) => 
   api.post('/realtime/token', { agent_id: agentId });
   
+export const finalizeTestCall = (sessionId, durationMs) =>
+  api.post('/realtime/finalize', { 
+    session_id: sessionId, 
+    duration_ms: durationMs 
+  });
+  
+export const generateInstructions = (data) => 
+  api.post('/ai-assist/generate-instructions', data);
+  
 export default api;

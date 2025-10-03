@@ -193,7 +193,7 @@ class ConnectionManager extends EventEmitter {
 		
         const connection = this.connections.get(clientKey);
         if (!connection) {
-            logger.warn(`No connection found for ${clientKey}`);
+            //logger.warn(`No connection found for ${clientKey}`);
             return;
         }
         
