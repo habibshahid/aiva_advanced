@@ -109,4 +109,7 @@ export const getCall = (sessionId) =>
 export const getCallStats = (days) => 
   api.get('/calls/stats/summary', { params: { days } });
 
+export const getRealtimeToken = (agentId) => 
+  api.post('/realtime/token', { agent_id: agentId });
+  
 export default api;
