@@ -303,6 +303,13 @@ class AsteriskOpenAIBridge {
 			}
 		});
 		
+		this.connectionManager.on('transcript', ({ connection, speaker, text }) => {
+			logger.info(`[${speaker.toUpperCase()}] ${text}`);
+			
+			// This line broadcasts to monitor
+			this.monitorServer.broadcastTranscript(connection.clientKey, speaker, text);
+		});
+
         // Connection Manager Events
         this.connectionManager.on('connectionClosed', async ({ clientKey, finalCost, connectionData }) => {
 			logger.info(`Connection closed: ${clientKey}`);

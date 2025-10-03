@@ -17,6 +17,7 @@ const AgentEditor = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   
   const [agent, setAgent] = useState({
     name: '',
@@ -697,6 +698,176 @@ const AgentEditor = () => {
             />
           </div>
         </div>
+      </div>
+
+      {/* Advanced Settings */}
+      <div className="border-t pt-6 mt-6">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="flex items-center text-sm font-medium text-primary-600 hover:text-primary-800 mb-4"
+        >
+          {showAdvanced ? (
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          )}
+          Advanced Settings
+        </button>
+
+        {showAdvanced && (
+          <div className="space-y-6 bg-gray-50 p-6 rounded-lg">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Model
+              </label>
+              <select
+                value={agent.model}
+                onChange={(e) => setAgent({ ...agent, model: e.target.value })}
+                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              >
+                <option value="gpt-4o-realtime-preview-2024-12-17">
+                  GPT-4o Realtime (Latest)
+                </option>
+                <option value="gpt-4o-mini-realtime-preview-2024-12-17">
+                  GPT-4o Mini Realtime (Faster, Cheaper)
+                </option>
+              </select>
+              <p className="mt-2 text-sm text-gray-500">
+                <strong>GPT-4o:</strong> Most capable model with better understanding and responses. Higher cost (~$0.06/min audio).
+                <br />
+                <strong>GPT-4o Mini:</strong> Faster responses, lower cost (~$0.024/min audio), suitable for simple conversations.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Temperature: <span className="text-primary-600 font-semibold">{agent.temperature}</span>
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={agent.temperature}
+                onChange={(e) => setAgent({ ...agent, temperature: parseFloat(e.target.value) })}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>0 (Focused)</span>
+                <span>0.5 (Balanced)</span>
+                <span>1.0 (Creative)</span>
+              </div>
+              <p className="mt-2 text-sm text-gray-500">
+                Controls response randomness and creativity.
+                <br />
+                <strong>Lower (0.0-0.4):</strong> More focused, consistent, and deterministic. Best for factual Q&A, customer support.
+                <br />
+                <strong>Medium (0.5-0.7):</strong> Balanced between consistency and variety. Good for most use cases.
+                <br />
+                <strong>Higher (0.8-1.0):</strong> More creative and varied responses. Good for creative writing, brainstorming.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Max Response Tokens
+              </label>
+              <input
+                type="number"
+                min="200"
+                max="8192"
+                step="100"
+                value={agent.max_tokens}
+                onChange={(e) => setAgent({ ...agent, max_tokens: parseInt(e.target.value) || 200 })}
+                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              />
+              <p className="mt-2 text-sm text-gray-500">
+                Maximum length of each agent response (200-8192 tokens).
+                <br />
+                <strong>Lower (200-1000):</strong> Short, concise responses. Faster and cheaper. Good for quick Q&A.
+                <br />
+                <strong>Medium (1000-4096):</strong> Standard length responses. Balanced cost/quality.
+                <br />
+                <strong>Higher (4096-8192):</strong> Longer, detailed explanations. Higher cost per response.
+                <br />
+                <span className="text-xs">Note: ~1 token ≈ 0.75 words. 4096 tokens ≈ 3000 words.</span>
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                VAD Threshold: <span className="text-primary-600 font-semibold">{agent.vad_threshold}</span>
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.1"
+                value={agent.vad_threshold}
+                onChange={(e) => setAgent({ ...agent, vad_threshold: parseFloat(e.target.value) })}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>0.1 (Sensitive)</span>
+                <span>0.5 (Balanced)</span>
+                <span>1.0 (Strict)</span>
+              </div>
+              <p className="mt-2 text-sm text-gray-500">
+                Voice Activity Detection sensitivity - determines how sensitive the AI is to detecting speech.
+                <br />
+                <strong>Lower (0.1-0.3):</strong> Very sensitive. Picks up quiet speech and whispers. May detect background noise as speech.
+                <br />
+                <strong>Medium (0.4-0.6):</strong> Balanced. Good for normal phone conversations.
+                <br />
+                <strong>Higher (0.7-1.0):</strong> Only detects clear, loud speech. Good for noisy environments but may miss quiet speakers.
+                <br />
+                <span className="text-amber-600">⚠️ If users complain the agent doesn't respond, lower this value. If it responds to background noise, increase it.</span>
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Silence Duration (ms)
+              </label>
+              <input
+                type="number"
+                min="200"
+                max="2000"
+                step="100"
+                value={agent.silence_duration_ms}
+                onChange={(e) => setAgent({ ...agent, silence_duration_ms: parseInt(e.target.value) || 500 })}
+                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              />
+              <p className="mt-2 text-sm text-gray-500">
+                How long (in milliseconds) to wait after user stops speaking before agent responds (200-2000ms).
+                <br />
+                <strong>Lower (200-400ms):</strong> Agent responds very quickly. May interrupt users who pause mid-sentence.
+                <br />
+                <strong>Medium (500-700ms):</strong> Balanced. Good for most conversations.
+                <br />
+                <strong>Higher (800-2000ms):</strong> Agent waits longer. Better for users who speak slowly or pause often.
+                <br />
+                <span className="text-xs">Recommended: 500ms for English, 700ms for Urdu (allows for thinking pauses)</span>
+              </p>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+              <h4 className="text-sm font-medium text-blue-900 mb-2">💡 Quick Tips</h4>
+              <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+                <li>Start with default values and adjust based on user feedback</li>
+                <li>Test calls in your actual environment before going live</li>
+                <li>Lower temperature for consistent banking/support, higher for sales/creative</li>
+                <li>Higher VAD threshold if you have noisy call centers</li>
+                <li>Monitor call costs - higher tokens and GPT-4o increase costs significantly</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Functions Section */}

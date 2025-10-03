@@ -32,6 +32,12 @@ const Calls = () => {
     }
   };
 
+  // Helper function to safely format cost
+  const formatCost = (cost) => {
+    const numCost = parseFloat(cost);
+    return isNaN(numCost) ? '0.0000' : numCost.toFixed(4);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -97,7 +103,7 @@ const Calls = () => {
                     {call.duration_seconds ? `${call.duration_seconds}s` : '-'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${call.final_cost?.toFixed(4) || '0.0000'}
+                    ${formatCost(call.final_cost)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
@@ -153,7 +159,31 @@ const Calls = () => {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-gray-500">Final Cost</p>
-                    <p className="text-sm text-gray-900">${selectedCall.final_cost?.toFixed(4)}</p>
+                    <p className="text-sm text-gray-900">${formatCost(selectedCall.final_cost)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Base Cost</p>
+                    <p className="text-sm text-gray-900">${formatCost(selectedCall.base_cost)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Profit</p>
+                    <p className="text-sm text-gray-900">${formatCost(selectedCall.profit_amount)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Audio Input</p>
+                    <p className="text-sm text-gray-900">{selectedCall.audio_input_seconds}s</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Audio Output</p>
+                    <p className="text-sm text-gray-900">{selectedCall.audio_output_seconds}s</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Text Input Tokens</p>
+                    <p className="text-sm text-gray-900">{selectedCall.text_input_tokens || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">Text Output Tokens</p>
+                    <p className="text-sm text-gray-900">{selectedCall.text_output_tokens || 0}</p>
                   </div>
                 </div>
 
@@ -167,6 +197,11 @@ const Calls = () => {
                           <p className="text-gray-600 mt-1">
                             Status: {fc.status} | Time: {fc.execution_time_ms}ms
                           </p>
+                          {fc.arguments && (
+                            <pre className="mt-2 text-xs bg-gray-50 p-2 rounded overflow-x-auto">
+                              {JSON.stringify(JSON.parse(fc.arguments), null, 2)}
+                            </pre>
+                          )}
                         </li>
                       ))}
                     </ul>

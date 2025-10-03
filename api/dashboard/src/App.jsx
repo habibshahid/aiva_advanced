@@ -10,6 +10,7 @@ import Agents from './pages/Agents';
 import AgentEditor from './pages/AgentEditor';
 import Credits from './pages/Credits';
 import Calls from './pages/Calls';
+import Monitor from './pages/Monitor';
 import Layout from './components/Layout';
 
 // PrivateRoute must be inside Router to use useLocation
@@ -44,6 +45,7 @@ function App() {
               <Layout />
             </PrivateRoute>
           }>
+			<Route path="/monitor" element={<Monitor />} />
             <Route index element={<Dashboard />} />
             <Route path="agents" element={<Agents />} />
             <Route path="agents/new" element={<AgentEditor />} />
