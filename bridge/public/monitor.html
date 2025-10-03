@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asterisk-OpenAI Bridge Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            margin-top: 5px;
+            color: #667eea;
+        }
+
+        .connections-section {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3d3d3d;
+        }
+
+        .connection-card {
+            background: #3d3d3d;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border-left: 4px solid #4caf50;
+        }
+
+        .connection-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .connection-id {
+            font-weight: bold;
+            color: #4caf50;
+        }
+
+        .connection-status {
+            display: flex;
+            gap: 10px;
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .status-active {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status-speaking {
+            background: #ff9800;
+            color: white;
+        }
+
+        .connection-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            font-size: 13px;
+            color: #bbb;
+        }
+
+        .transcript-section {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .transcript-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .transcript-user {
+            background: #3d3d3d;
+            border-left: 4px solid #2196F3;
+        }
+
+        .transcript-agent {
+            background: #3d3d3d;
+            border-left: 4px solid #4caf50;
+        }
+
+        .transcript-speaker {
+            font-weight: bold;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .transcript-text {
+            color: #e0e0e0;
+        }
+
+        .transcript-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .function-section {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .function-item {
+            background: #3d3d3d;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border-left: 4px solid #ff9800;
+        }
+
+        .function-name {
+            font-weight: bold;
+            color: #ff9800;
+            margin-bottom: 5px;
+        }
+
+        .function-args {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #bbb;
+            background: #2d2d2d;
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+
+        .cost-display {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+
+        .cost-main {
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .cost-breakdown {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .status-connected {
+            background: #4caf50;
+            box-shadow: 0 0 10px #4caf50;
+        }
+
+        .status-disconnected {
+            background: #f44336;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #2d2d2d;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>
+                <span class="status-indicator" id="connectionStatus"></span>
+                Asterisk-OpenAI Bridge Monitor
+            </h1>
+            <div class="subtitle" id="agentName">Loading...</div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Active Connections</div>
+                <div class="stat-value" id="activeConnections">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Calls Today</div>
+                <div class="stat-value" id="totalCalls">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Monitor Clients</div>
+                <div class="stat-value" id="monitorClients">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">System Uptime</div>
+                <div class="stat-value" id="uptime">0s</div>
+            </div>
+        </div>
+
+        <div class="connections-section">
+            <h2 class="section-title">Active Connections</h2>
+            <div id="connectionsList">
+                <p style="color: #999; text-align: center;">No active connections</p>
+            </div>
+        </div>
+
+        <div class="transcript-section">
+            <h2 class="section-title">Live Transcripts</h2>
+            <div id="transcriptList"></div>
+        </div>
+
+        <div class="function-section">
+            <h2 class="section-title">Function Calls</h2>
+            <div id="functionList"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let reconnectInterval = null;
+        const connections = new Map();
+        const transcripts = [];
+        const functionCalls = [];
+        const maxTranscripts = 50;
+        const maxFunctions = 20;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('Connected to monitor server');
+                updateConnectionStatus(true);
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                }
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleMessage(message);
+                } catch (error) {
+                    console.error('Error parsing message:', error);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('Disconnected from monitor server');
+                updateConnectionStatus(false);
+                if (!reconnectInterval) {
+                    reconnectInterval = setInterval(() => {
+                        console.log('Attempting to reconnect...');
+                        connect();
+                    }, 5000);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'status':
+                    if (message.agentName) {
+                        document.getElementById('agentName').textContent = message.agentName;
+                    }
+                    if (message.stats) {
+                        updateStats(message.stats);
+                    }
+                    break;
+
+                case 'connection_added':
+                case 'connection_info':
+                    connections.set(message.data.clientKey, message.data);
+                    updateConnectionsList();
+                    break;
+
+                case 'connection_updated':
+                    const existing = connections.get(message.data.clientKey);
+                    if (existing) {
+                        Object.assign(existing, message.data);
+                        updateConnectionsList();
+                    }
+                    break;
+
+                case 'connection_removed':
+                    connections.delete(message.data.clientKey);
+                    updateConnectionsList();
+                    break;
+
+                case 'transcript':
+                    addTranscript(message.data);
+                    break;
+
+                case 'cost_update':
+                    updateCost(message.data);
+                    break;
+
+                case 'function_call':
+                    addFunctionCall(message.data);
+                    break;
+
+                case 'function_response':
+                    updateFunctionResponse(message.data);
+                    break;
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('connectionStatus');
+            indicator.className = 'status-indicator ' + (connected ? 'status-connected' : 'status-disconnected');
+        }
+
+        function updateStats(stats) {
+            document.getElementById('activeConnections').textContent = stats.activeConnections || 0;
+            document.getElementById('monitorClients').textContent = stats.monitors || 0;
+            if (stats.uptime) {
+                document.getElementById('uptime').textContent = formatUptime(stats.uptime);
+            }
+        }
+
+        function updateConnectionsList() {
+            const list = document.getElementById('connectionsList');
+            
+            if (connections.size === 0) {
+                list.innerHTML = '<p style="color: #999; text-align: center;">No active connections</p>';
+                return;
+            }
+
+            list.innerHTML = Array.from(connections.values()).map(conn => `
+                <div class="connection-card">
+                    <div class="connection-header">
+                        <div class="connection-id">${conn.clientKey}</div>
+                        <div class="connection-status">
+                            ${conn.userSpeaking ? '<span class="status-badge status-speaking">User Speaking</span>' : ''}
+                            ${conn.agentSpeaking ? '<span class="status-badge status-speaking">Agent Speaking</span>' : ''}
+                            <span class="status-badge status-active">Active</span>
+                        </div>
+                    </div>
+                    <div class="connection-info">
+                        <div><strong>Caller:</strong> ${conn.callerId || 'Unknown'}</div>
+                        <div><strong>Agent:</strong> ${conn.agentName || 'Unknown'}</div>
+                        <div><strong>Connected:</strong> ${new Date(conn.connectedAt).toLocaleTimeString()}</div>
+                    </div>
+                    ${conn.cost ? `
+                        <div class="cost-display">
+                            <div class="cost-main">Cost: ${conn.cost.formatted?.finalCost || 'N/A'}</div>
+                            <div class="cost-breakdown">
+                                Base: ${conn.cost.costs?.baseCost?.toFixed(4) || '0.0000'} | 
+                                Profit: ${conn.cost.costs?.profitAmount?.toFixed(4) || '0.0000'} | 
+                                Rate: ${conn.cost.formatted?.costPerMinute || 'N/A'}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function addTranscript(data) {
+            transcripts.unshift({
+                ...data,
+                time: new Date().toLocaleTimeString()
+            });
+
+            if (transcripts.length > maxTranscripts) {
+                transcripts.pop();
+            }
+
+            updateTranscriptList();
+        }
+
+        function updateTranscriptList() {
+            const list = document.getElementById('transcriptList');
+            
+            if (transcripts.length === 0) {
+                list.innerHTML = '<p style="color: #999; text-align: center;">No transcripts yet</p>';
+                return;
+            }
+
+            list.innerHTML = transcripts.map(t => `
+                <div class="transcript-item transcript-${t.speaker}">
+                    <div class="transcript-speaker">${t.speaker === 'user' ? '👤 User' : '🤖 Agent'}</div>
+                    <div class="transcript-text">${t.text}</div>
+                    <div class="transcript-time">${t.time}</div>
+                </div>
+            `).join('');
+        }
+
+        function addFunctionCall(data) {
+            functionCalls.unshift({
+                ...data,
+                time: new Date().toLocaleTimeString(),
+                status: 'pending'
+            });
+
+            if (functionCalls.length > maxFunctions) {
+                functionCalls.pop();
+            }
+
+            updateFunctionList();
+        }
+
+        function updateFunctionResponse(data) {
+            const call = functionCalls.find(c => c.functionName === data.functionName);
+            if (call) {
+                call.result = data.result;
+                call.status = 'complete';
+                updateFunctionList();
+            }
+        }
+
+        function updateFunctionList() {
+            const list = document.getElementById('functionList');
+            
+            if (functionCalls.length === 0) {
+                list.innerHTML = '<p style="color: #999; text-align: center;">No function calls yet</p>';
+                return;
+            }
+
+            list.innerHTML = functionCalls.map(f => `
+                <div class="function-item">
+                    <div class="function-name">
+                        ⚡ ${f.functionName} 
+                        <span style="color: ${f.status === 'complete' ? '#4caf50' : '#ff9800'}">
+                            [${f.status}]
+                        </span>
+                    </div>
+                    <div class="function-args">${JSON.stringify(f.args, null, 2)}</div>
+                    ${f.result ? `<div class="function-args" style="border-left: 3px solid #4caf50; margin-top: 5px;">
+                        Result: ${JSON.stringify(f.result, null, 2)}
+                    </div>` : ''}
+                    <div class="transcript-time">${f.time}</div>
+                </div>
+            `).join('');
+        }
+
+        function updateCost(data) {
+            const conn = connections.get(data.clientKey);
+            if (conn) {
+                conn.cost = data.cost;
+                updateConnectionsList();
+            }
+        }
+
+        function formatUptime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+
+        // Initialize
+        connect();
+
+        // Update total calls counter periodically
+        setInterval(() => {
+            const totalCalls = document.getElementById('totalCalls');
+            // This would need to be tracked on the server side
+            // For now, just show number of connections seen
+            totalCalls.textContent = connections.size;
+        }, 1000);
+    </script>
+</body>
+</html>

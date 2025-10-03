@@ -1,0 +1,36 @@
+{
+  "name": "asterisk-openai-realtime-bridge",
+  "version": "2.0.0",
+  "description": "Asterisk to OpenAI Realtime API Bridge",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "setup": "mkdir -p logs && npm install"
+  },
+  "keywords": [
+    "asterisk",
+    "openai",
+    "realtime",
+    "voip",
+    "ai",
+    "voice-agent"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.1",
+    "redis": "^4.6.12",
+    "express": "^4.18.2",
+    "axios": "^1.6.7",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
