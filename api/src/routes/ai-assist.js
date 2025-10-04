@@ -99,8 +99,8 @@ Generate the instructions:`;
 					// Log transaction
 					await db.query(
 						`INSERT INTO yovo_tbl_aiva_credit_transactions 
-						(id, tenant_id, amount, reference_type, note, reference_id, balance_before, balance_after) 
-						VALUES (?, ?, ?, 'debit', ?, ?, ?, ?)`,
+						(id, tenant_id, amount, type, reference_type, note, reference_id, balance_before, balance_after) 
+						VALUES (?, ?, ?, 'deduct', 'AI Generator', ?, ?, ?, ?)`,
 						[logId, req.user.id, totalCost, `AI instruction generation for ${agent_name}`, referenceId, tenantDetails[0].credit_balance, balanceAfter]
 					);
 

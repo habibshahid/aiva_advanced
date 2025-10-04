@@ -220,7 +220,7 @@ class AsteriskOpenAIBridge {
 				`;
 
 				// Prepend context to instructions
-				const fullInstructions = contextString + agentConfig.instructions;
+				const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent.";
 
                 // Create connection
                 const connection = await this.connectionManager.createConnection(

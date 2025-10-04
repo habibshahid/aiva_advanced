@@ -117,8 +117,8 @@ router.post('/finalize', verifyToken, async (req, res) => {
 		
         await db.query(
             `INSERT INTO yovo_tbl_aiva_credit_transactions 
-            (id, tenant_id, amount, reference_type, note, reference_id, balance_before, balance_after) 
-            VALUES (?, ?, ?, 'call', ?, (SELECT id FROM yovo_tbl_aiva_call_logs WHERE session_id = ?), (SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?), ?)`,
+            (id, tenant_id, amount, type, reference_type, note, reference_id, balance_before, balance_after) 
+            VALUES (?, ?, ?, 'deduct', 'test call', ?, (SELECT id FROM yovo_tbl_aiva_call_logs WHERE session_id = ?), (SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?), ?)`,
             [logId, req.user.id, estimatedCost, 'Test call charge', session_id, req.user.id, balanceAfter]
         );
         

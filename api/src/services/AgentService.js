@@ -103,11 +103,15 @@ class AgentService {
         
         if (filters.is_active !== undefined) {
             query += ' AND is_active = ?';
-            params.push(filters.is_active);
+			if (filters.is_active){
+				params.push(1);
+			}
+			else{
+				params.push(0);
+			}
         }
         
         query += ' ORDER BY created_at DESC';
-        
         const [agents] = await db.query(query, params);
         
         return agents;
