@@ -21,17 +21,21 @@ const AgentEditor = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   
   const [agent, setAgent] = useState({
-    name: '',
-    type: 'sales',
-    instructions: '',
-    voice: 'shimmer',
-    language: 'ur',
-    model: 'gpt-4o-mini-realtime-preview-2024-12-17',
-    temperature: 0.6,
-    max_tokens: 4096,
-    vad_threshold: 0.5,
-    silence_duration_ms: 500,
-    greeting: ''
+	  name: '',
+	  type: 'sales',
+	  instructions: '',
+	  voice: 'shimmer',
+	  language: 'ur',
+	  model: 'gpt-4o-mini-realtime-preview-2024-12-17',
+	  provider: 'openai',  // ADD THIS
+	  deepgram_model: 'nova-2',  // ADD THIS
+	  deepgram_voice: 'aura-asteria-en',  // ADD THIS
+	  deepgram_language: 'en',  // ADD THIS
+	  temperature: 0.6,
+	  max_tokens: 4096,
+	  vad_threshold: 0.5,
+	  silence_duration_ms: 500,
+	  greeting: ''
   });
 
   const [functions, setFunctions] = useState([]);
@@ -690,22 +694,73 @@ const AgentEditor = () => {
                 <option value="custom">Custom</option>
               </select>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Voice</label>
-              <select
-                value={agent.voice}
-                onChange={(e) => setAgent({ ...agent, voice: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="alloy">Alloy</option>
-                <option value="echo">Echo</option>
-                <option value="fable">Fable</option>
-                <option value="onyx">Onyx</option>
-                <option value="nova">Nova</option>
-                <option value="shimmer">Shimmer</option>
-              </select>
-            </div>
+			<div>
+			  <label className="block text-sm font-medium text-gray-700">Provider</label>
+			  <select
+				value={agent.provider || 'openai'}
+				onChange={(e) => setAgent({ ...agent, provider: e.target.value })}
+				className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+			  >
+				<option value="openai">OpenAI Realtime API</option>
+				<option value="deepgram">Deepgram</option>
+			  </select>
+			  <p className="mt-1 text-xs text-gray-500">
+				{agent.provider === 'deepgram' 
+				  ? 'Deepgram provides more natural sounding voices'
+				  : 'OpenAI provides superior conversation handling and function calling'}
+			  </p>
+			</div>
+            {agent.provider === 'openai' ? (
+			  <div>
+				<label className="block text-sm font-medium text-gray-700">Voice</label>
+				<select
+				  value={agent.voice}
+				  onChange={(e) => setAgent({ ...agent, voice: e.target.value })}
+				  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+				>
+				  <option value="alloy">Alloy</option>
+				  <option value="ash">Ash</option>
+				  <option value="ballad">Ballad</option>
+				  <option value="coral">Coral</option>
+				  <option value="echo">Echo</option>
+				  <option value="sage">Sage</option>
+				  <option value="shimmer">Shimmer</option>
+				  <option value="verse">Verse</option>
+				  <option value="marin">Marin</option>
+				  <option value="cedar">Cedar</option>
+				</select>
+			  </div>
+			) : (
+			  <>
+				<div>
+				  <label className="block text-sm font-medium text-gray-700">STT Model</label>
+				  <select
+					value={agent.deepgram_model || 'nova-2'}
+					onChange={(e) => setAgent({ ...agent, deepgram_model: e.target.value })}
+					className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+				  >
+					<option value="nova-2">Nova 2</option>
+					<option value="nova-2-general">Nova 2 General</option>
+					<option value="nova-2-phonecall">Nova 2 Phonecall</option>
+				  </select>
+				</div>
+				<div>
+				  <label className="block text-sm font-medium text-gray-700">TTS Voice</label>
+				  <select
+					value={agent.deepgram_voice || 'aura-asteria-en'}
+					onChange={(e) => setAgent({ ...agent, deepgram_voice: e.target.value })}
+					className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+				  >
+					<option value="aura-asteria-en">Asteria</option>
+					<option value="aura-luna-en">Luna</option>
+					<option value="aura-stella-en">Stella</option>
+					<option value="aura-athena-en">Athena</option>
+					<option value="aura-hera-en">Hera</option>
+					<option value="aura-orion-en">Orion</option>
+				  </select>
+				</div>
+			  </>
+			)}
 
             <div>
               <label className="block text-sm font-medium text-gray-700">Language</label>

@@ -103,7 +103,69 @@ class AudioConverter {
         
         return output;
     }
+	
+	static resample24to16(buffer) {
+		const inputSamples = buffer.length / 2;
+		const outputSamples = Math.floor(inputSamples * 2 / 3);
+		const output = Buffer.alloc(outputSamples * 2);
+		
+		for (let i = 0; i < outputSamples; i++) {
+			const srcIndex = (i * 3) / 2;
+			const srcIndexFloor = Math.floor(srcIndex);
+			const fraction = srcIndex - srcIndexFloor;
+			
+			const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
+			const sample2 = srcIndexFloor + 1 < inputSamples ? 
+				buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
+			
+			const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
+			output.writeInt16LE(interpolated, i * 2);
+		}
+		
+		return output;
+	}
     
+	static resample16to24(buffer) {
+		const inputSamples = buffer.length / 2;
+		const outputSamples = Math.floor(inputSamples * 3 / 2);
+		const output = Buffer.alloc(outputSamples * 2);
+		
+		for (let i = 0; i < outputSamples; i++) {
+			const srcIndex = (i * 2) / 3;
+			const srcIndexFloor = Math.floor(srcIndex);
+			const fraction = srcIndex - srcIndexFloor;
+			
+			const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
+			const sample2 = srcIndexFloor + 1 < inputSamples ? 
+				buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
+			
+			const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
+			output.writeInt16LE(interpolated, i * 2);
+		}
+		
+		return output;
+	}
+
+	/**
+	 * Resample from 8kHz to 24kHz (for OpenAI)
+	 */
+	static resample8to24(buffer) {
+		const inputSamples = buffer.length / 2;
+		const outputSamples = inputSamples * 3; // 8kHz * 3 = 24kHz
+		const output = Buffer.alloc(outputSamples * 2);
+		
+		for (let i = 0; i < inputSamples; i++) {
+			const sample = buffer.readInt16LE(i * 2);
+			
+			// Write sample three times for 3x upsampling
+			output.writeInt16LE(sample, (i * 3) * 2);
+			output.writeInt16LE(sample, (i * 3 + 1) * 2);
+			output.writeInt16LE(sample, (i * 3 + 2) * 2);
+		}
+		
+		return output;
+	}
+	
     static resample24to8(buffer) {
         const inputLength = buffer.length - (buffer.length % 2);
         const inputSamples = inputLength / 2;

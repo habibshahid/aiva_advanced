@@ -6,12 +6,12 @@
 require('dotenv').config();
 
 const RtpUdpServer = require('./audio/rtp-server');
-const SessionManager = require('./openai/session-manager');
+const SessionManager = require('./session/session-manager');
 const FunctionExecutor = require('./functions/function-executor');
 const ConnectionManager = require('./bridge/connection-manager');
 const MonitorServer = require('./monitoring/monitor-server');
 const RedisClient = require('./utils/redis-client');
-const openaiConfig = require('./config/openai-config');
+//const openaiConfig = require('./config/openai-config');
 const logger = require('./utils/logger');
 
 // Dynamic loading components
@@ -23,17 +23,27 @@ class AsteriskOpenAIBridge {
     constructor() {
         this.config = {
             rtpHost: process.env.RTP_HOST || '127.0.0.1:9999',
-            monitorPort: parseInt(process.env.MONITOR_PORT || '3001'),
-            debug: process.env.DEBUG === 'true',
-            ...openaiConfig,
-            // Management API config
-            managementApiUrl: process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api',
-            managementApiKey: process.env.MANAGEMENT_API_KEY,
-            // Dynamic mode (set to false to disable dynamic loading)
-            dynamicMode: process.env.DYNAMIC_MODE !== 'false'
+			monitorPort: parseInt(process.env.MONITOR_PORT || '3001'),
+			debug: process.env.DEBUG === 'true',
+			
+			// Provider API Keys
+			openaiApiKey: process.env.OPENAI_API_KEY,
+			deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+			
+			// Default settings (for backward compatibility)
+			model: process.env.OPENAI_MODEL || 'gpt-4o-mini-realtime-preview-2024-12-17',
+			voice: process.env.OPENAI_VOICE || 'shimmer',
+			temperature: parseFloat(process.env.AI_TEMPERATURE || '0.6'),
+			maxResponseTokens: parseInt(process.env.MAX_RESPONSE_OUTPUT_TOKENS || '4096'),
+			profitMargin: parseFloat(process.env.PROFIT_MARGIN_PERCENT || '20') / 100,
+			
+			// Management API config
+			managementApiUrl: process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api',
+			managementApiKey: process.env.MANAGEMENT_API_KEY,
+			dynamicMode: process.env.DYNAMIC_MODE !== 'false'
         };
         
-        if (!this.config.apiKey) {
+        if (!this.config.openaiApiKey) {
             throw new Error('OPENAI_API_KEY is required');
         }
         
@@ -77,10 +87,6 @@ class AsteriskOpenAIBridge {
             
             // Initialize session manager
             logger.info('Initializing session manager...');
-            this.sessionManager = new SessionManager(
-                this.config.apiKey,
-                this.config.profitMargin
-            );
             
             // Initialize RTP server
             logger.info('Initializing RTP server...');
@@ -93,8 +99,8 @@ class AsteriskOpenAIBridge {
             logger.info('Initializing connection manager...');
             this.connectionManager = new ConnectionManager(
                 this.rtpServer,
-                this.sessionManager,
-                this.functionExecutor
+                this.functionExecutor,
+				this.config.profitMargin 
             );
             
             // Initialize monitor server
@@ -224,57 +230,72 @@ class AsteriskOpenAIBridge {
 
                 // Create connection
                 const connection = await this.connectionManager.createConnection(
-                    clientKey,
-                    client,
+					clientKey,
+					client,
 					{
 						sessionId: sessionId,
+						provider: agentConfig.provider || 'openai',
 						model: agentConfig.config?.model || this.config.model,
 						voice: agentConfig.config?.voice || this.config.voice,
 						temperature: agentConfig.config?.temperature || this.config.temperature,
 						maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
+						vadThreshold: agentConfig.config?.vadThreshold || 0.5,
+						silenceDuration: agentConfig.config?.silenceDurationMs || 500,
 						instructions: fullInstructions,
 						callerId: callerNumber,
-						language: agentConfig.config?.language
+						language: agentConfig.config?.language || 'en',
+						functions: tools,
+						greeting: agentConfig.greeting,
+						// Deepgram fields
+						deepgram_model: agentConfig.config?.deepgram_model,
+						deepgram_voice: agentConfig.config?.deepgram_voice,
+						deepgram_language: agentConfig.config?.deepgram_language,
+						// Metadata
+						agentId: agentConfig.id,
+						tenantId: tenantId,
+						asteriskPort: client.port
 					}
-                );
-				
+				);
+
 				connection.tenantId = tenantId;
 				connection.agentId = agentConfig.id;
 				connection.baseInstructions = agentConfig.instructions;
-				connection.asteriskPort = client.port;  // Add this
-                
-                // Create call log
-                if (this.callLogger) {
-                    connection.callLogId = await this.callLogger.createCallLog(
-                        sessionId,
-                        tenantId,
-                        agentConfig.id,
-                        callerNumber,
-                        client.port
-                    );
-                }
-                
-                // Configure session with tools
-                await this.sessionManager.configureSession(
-                    connection.sessionId,
-                    fullInstructions,
-                    tools,
-					agentConfig.config?.language
-                );
-                
-                // Add to monitor
-                this.monitorServer.addConnection(clientKey, {
-                    sessionId: sessionId,
-                    rtpInfo: connection.session.rtpInfo,
-                    callerId: connection.session.callerId,
-                    agentName: agentConfig.name,
-                    tenantId: tenantId
-                });
-                
-                // Trigger initial greeting
-                setTimeout(() => {
-                    connection.session.client.createResponse();
-                }, 500);
+				connection.asteriskPort = client.port;
+
+				// Create call log
+				if (this.callLogger) {
+					connection.callLogId = await this.callLogger.createCallLog(
+						sessionId,
+						tenantId,
+						agentConfig.id,
+						callerNumber,
+						client.port
+					);
+				}
+
+				// Add to monitor
+				this.monitorServer.addConnection(clientKey, {
+					sessionId: sessionId,
+					rtpInfo: {
+						clientKey: clientKey,
+						address: client.address,
+						port: client.port
+					},
+					callerId: callerNumber,
+					agentName: agentConfig.name,
+					tenantId: tenantId
+				});
+
+				// Trigger initial greeting
+				setTimeout(() => {
+					try {
+						if (connection.session && connection.session.client) {
+							connection.session.client.createResponse();
+						}
+					} catch (error) {
+						logger.error('Error triggering initial greeting:', error);
+					}
+				}, 500);
                 
             } catch (error) {
                 logger.error(`Error creating connection for ${clientKey}:`, error);
@@ -349,19 +370,35 @@ class AsteriskOpenAIBridge {
 					
 					// Update call log
 					if (this.callLogger) {
-						await this.callLogger.updateCallLog(finalCost.sessionId, {
+						const updateData = {
 							end_time: new Date(),
 							duration_seconds: Math.floor(parseFloat(cost.duration.seconds)),
 							audio_input_seconds: cost.audio.input.seconds,
 							audio_output_seconds: cost.audio.output.seconds,
-							text_input_tokens: cost.text.input.tokens,
-							text_output_tokens: cost.text.output.tokens,
-							cached_tokens: cost.text.cached.tokens,
 							base_cost: parseFloat(cost.costs.baseCost),
 							profit_amount: parseFloat(cost.costs.profitAmount),
 							final_cost: parseFloat(cost.costs.finalCost),
 							status: 'completed'
-						});
+						};
+						
+						// Add provider-specific data
+						const provider = connectionData.provider || 'openai';
+						if (provider === 'openai' || !provider) {
+							updateData.text_input_tokens = cost.text.input.tokens;
+							updateData.text_output_tokens = cost.text.output.tokens;
+							updateData.cached_tokens = cost.text.cached.tokens;
+						} else if (provider === 'deepgram') {
+							updateData.provider_audio_minutes = 
+								(connectionData.metrics?.stt_minutes || 0) + 
+								(connectionData.metrics?.tts_minutes || 0);
+							updateData.provider_metadata = {
+								stt_minutes: connectionData.metrics?.stt_minutes || 0,
+								tts_minutes: connectionData.metrics?.tts_minutes || 0,
+								llm_calls: connectionData.metrics?.llm_calls || 0
+							};
+						}
+						
+						await this.callLogger.updateCallLog(finalCost.sessionId, updateData);
 					}
 					
 					// Deduct credits

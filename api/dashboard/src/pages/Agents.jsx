@@ -132,10 +132,17 @@ const Agents = () => {
                       </span>
                     </div>
                     <div className="mt-2 flex items-center text-sm text-gray-500 space-x-4">
-                      <span>Type: {agent.type}</span>
-                      <span>Voice: {agent.voice}</span>
-                      <span>Model: {agent.model}</span>
-                    </div>
+					  <span>Type: {agent.type}</span>
+					  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+						agent.provider === 'deepgram' 
+						  ? 'bg-purple-100 text-purple-800' 
+						  : 'bg-blue-100 text-blue-800'
+					  }`}>
+						{agent.provider === 'deepgram' ? 'Deepgram' : 'OpenAI'}
+					  </span>
+					  <span>Voice: {agent.voice || agent.deepgram_voice || 'N/A'}</span>
+					  <span>Model: {agent.model || agent.deepgram_model}</span>
+					</div>
                     <p className="mt-2 text-sm text-gray-600 line-clamp-2">
                       {agent.instructions}
                     </p>

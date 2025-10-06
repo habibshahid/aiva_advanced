@@ -10,23 +10,28 @@ class AgentService {
         const [result] = await db.query(
             `INSERT INTO yovo_tbl_aiva_agents (
                 id, tenant_id, name, type, instructions, voice, language, 
-                model, temperature, max_tokens, vad_threshold, 
-                silence_duration_ms, greeting
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				model, provider, deepgram_model, deepgram_voice, deepgram_language,
+				temperature, max_tokens, vad_threshold, 
+				silence_duration_ms, greeting
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 agentId,
-                tenantId,
-                agentData.name,
-                agentData.type,
-                agentData.instructions,
-                agentData.voice || 'shimmer',
-                agentData.language || 'ur',
-                agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
-                agentData.temperature || 0.6,
-                agentData.max_tokens || 4096,
-                agentData.vad_threshold || 0.5,
-                agentData.silence_duration_ms || 500,
-                agentData.greeting || null
+				tenantId,
+				agentData.name,
+				agentData.type,
+				agentData.instructions,
+				agentData.voice || 'shimmer',
+				agentData.language || 'ur',
+				agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+				agentData.provider || 'openai',  // NEW
+				agentData.deepgram_model || null,  // NEW
+				agentData.deepgram_voice || null,  // NEW
+				agentData.deepgram_language || 'en',  // NEW
+				agentData.temperature || 0.6,
+				agentData.max_tokens || 4096,
+				agentData.vad_threshold || 0.5,
+				agentData.silence_duration_ms || 500,
+				agentData.greeting || null
             ]
         );
         
@@ -124,8 +129,9 @@ class AgentService {
         
         const allowedFields = [
             'name', 'instructions', 'voice', 'language', 'model',
-            'temperature', 'max_tokens', 'vad_threshold', 
-            'silence_duration_ms', 'greeting', 'is_active'
+			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',  // NEW
+			'temperature', 'max_tokens', 'vad_threshold', 
+			'silence_duration_ms', 'greeting', 'is_active'
         ];
         
         for (const field of allowedFields) {

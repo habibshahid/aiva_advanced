@@ -6,13 +6,20 @@ class CallService {
     async createCallLog(sessionId, tenantId, agentId, callerId, asteriskPort) {
         const callLogId = uuidv4();
         
+		const [agents] = await db.query(
+			'SELECT provider FROM yovo_tbl_aiva_agents WHERE id = ?',
+			[agentId]
+		);
+		
+		const provider = agents.length > 0 ? agents[0].provider : 'openai';
+		 
         await db.query(
-            `INSERT INTO yovo_tbl_aiva_call_logs (
-                id, session_id, tenant_id, agent_id, caller_id,
-                asterisk_port, start_time, status
-            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), 'in_progress')`,
-            [callLogId, sessionId, tenantId, agentId, callerId, asteriskPort]
-        );
+			`INSERT INTO yovo_tbl_aiva_call_logs (
+				id, session_id, tenant_id, agent_id, caller_id,
+				asterisk_port, provider, start_time, status
+			) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'in_progress')`,
+			[callLogId, sessionId, tenantId, agentId, callerId, asteriskPort, provider]
+		);
         
         return callLogId;
     }
@@ -32,11 +39,12 @@ class CallService {
             updates.start_time = date.toISOString().slice(0, 19).replace('T', ' ');
         }
 		
-        const allowedFields = [
-            'end_time', 'duration_seconds', 'audio_input_seconds',
-            'audio_output_seconds', 'text_input_tokens', 'text_output_tokens',
-            'cached_tokens', 'base_cost', 'profit_amount', 'final_cost', 'status'
-        ];
+		const allowedFields = [
+			'end_time', 'duration_seconds', 'audio_input_seconds',
+			'audio_output_seconds', 'text_input_tokens', 'text_output_tokens',
+			'cached_tokens', 'base_cost', 'profit_amount', 'final_cost', 
+			'provider_audio_minutes', 'provider_metadata', 'status'  // ADDED provider fields
+		];
         
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {

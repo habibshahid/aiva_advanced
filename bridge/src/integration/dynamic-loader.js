@@ -97,10 +97,11 @@ class DynamicAgentLoader {
 			id: agent.id,
 			name: agent.name,
 			type: agent.type,
+			provider: agent.provider || 'openai',  // ADD THIS
 			greeting: agent.greeting || `Hello! This is ${agent.name}. How can I help you?`,
 			instructions: agent.instructions,
-			tools: openAITools,  // Use the formatted OpenAI tools
-			functions: agent.functions || [],  // Keep original for bridge use
+			tools: openAITools,
+			functions: agent.functions || [],
 			config: {
 				voice: agent.voice || 'shimmer',
 				language: agent.language || 'en',
@@ -109,7 +110,11 @@ class DynamicAgentLoader {
 				maxTokens: parseInt(agent.max_tokens) || 4096,
 				vadThreshold: parseFloat(agent.vad_threshold) || 0.5,
 				silenceDurationMs: parseInt(agent.silence_duration_ms) || 500,
-				prefixPaddingMs: 300
+				prefixPaddingMs: 300,
+				// ADD Deepgram fields
+				deepgram_model: agent.deepgram_model,
+				deepgram_voice: agent.deepgram_voice,
+				deepgram_language: agent.deepgram_language
 			},
 			tenant_id: agent.tenant_id
 		};

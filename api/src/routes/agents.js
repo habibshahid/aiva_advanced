@@ -2,6 +2,7 @@ const express = require('express');
 const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const AgentService = require('../services/AgentService');
+const { validateProvider } = require('../middleware/provider-validation');
 
 const router = express.Router();
 
@@ -51,7 +52,7 @@ router.get('/:id', authenticate, checkPermission('agents.view'), async (req, res
 });
 
 // Create agent
-router.post('/', authenticate, checkPermission('agents.create'), async (req, res) => {
+router.post('/', authenticate, checkPermission('agents.create'), validateProvider, async (req, res) => {
     try {
         const agent = await AgentService.createAgent(req.user.id, req.body);
         res.status(201).json({ agent });
@@ -62,7 +63,7 @@ router.post('/', authenticate, checkPermission('agents.create'), async (req, res
 });
 
 // Update agent
-router.put('/:id', authenticate, checkPermission('agents.update'), async (req, res) => {
+router.put('/:id', authenticate, checkPermission('agents.update'), validateProvider, async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.id);
         
@@ -75,8 +76,8 @@ router.put('/:id', authenticate, checkPermission('agents.update'), async (req, r
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        const updated = await AgentService.updateAgent(req.params.id, req.body);
-        res.json({ agent: updated });
+        const updatedAgent = await AgentService.updateAgent(req.params.id, req.body);
+        res.json({ agent: updatedAgent });
     } catch (error) {
         console.error('Update agent error:', error);
         res.status(500).json({ error: 'Failed to update agent' });

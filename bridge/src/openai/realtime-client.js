@@ -9,10 +9,10 @@ const EventEmitter = require('events');
 const logger = require('../utils/logger');
 
 class OpenAIRealtimeClient extends EventEmitter {
-    constructor(apiKey, options = {}) {
+    constructor(options = {}) {
         super();
         
-        this.apiKey = apiKey;
+        this.apiKey = options.apiKey || options.apiKey || process.env.OPENAI_API_KEY;
         this.options = {
             model: options.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
             voice: options.voice || 'shimmer',
