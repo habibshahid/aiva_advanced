@@ -380,21 +380,30 @@ class ConnectionManager extends EventEmitter {
 		this.updateConnectionActivity(clientKey);
 		
 		const connection = this.connections.get(clientKey);
-		if (!connection) {
+		if (!connection || !connection.provider) {
 			return;
 		}
 		
-		if (!connection.provider) {
-			return;
-		}
-		
-		// Provider-specific audio handling
 		if (connection.providerName === 'deepgram') {
-			// Deepgram expects raw µ-law 8kHz - send directly
-			await connection.provider.sendAudio(audioData);
+			// Buffer µ-law audio exactly like your working bridge
+			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
+			
+			const now = Date.now();
+			const targetBufferSize = 2048;  // Match your working bridge
+			const bufferInterval = 500;     // Match your working bridge
+			
+			if (connection.audioBuffer.length >= targetBufferSize || 
+				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
+				
+				// Send accumulated µ-law buffer
+				await connection.provider.sendAudio(connection.audioBuffer);
+				
+				connection.audioBuffer = Buffer.alloc(0);
+				connection.lastAudioSent = now;
+			}
 			
 		} else if (connection.providerName === 'openai') {
-			// OpenAI expects PCM16 24kHz - convert
+			// OpenAI path (unchanged)
 			const pcmBuffer = AudioConverter.convertUlawToPCM16(audioData);
 			const resampledBuffer = AudioConverter.resample8to24(pcmBuffer);
 			
@@ -416,44 +425,51 @@ class ConnectionManager extends EventEmitter {
      * UPDATED: Provider-aware resampling
      */
     handleProviderAudio(connection, audioData) {
-        this.updateConnectionActivity(connection.clientKey);
-        
-        try {
-            // Decode base64
-            let pcmBuffer;
-            if (typeof audioData === 'string') {
-                pcmBuffer = Buffer.from(audioData, 'base64');
-            } else {
-                pcmBuffer = audioData;
-            }
-            
-            // Ensure even length
-            if (pcmBuffer.length % 2 !== 0) {
-                pcmBuffer = Buffer.concat([pcmBuffer, Buffer.from([0])]);
-            }
-            
-            // Resample based on provider output
-            let downsampledBuffer;
-            if (connection.providerName === 'openai') {
-                // OpenAI sends 24kHz, convert to 8kHz
-                downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
-            } else if (connection.providerName === 'deepgram') {
-                // Deepgram sends 24kHz, convert to 8kHz
-                downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
-            } else {
-                downsampledBuffer = pcmBuffer;
-            }
-            
-            // Convert to µ-law for Asterisk
-            const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
-            
-            // Add to audio queue for RTP transmission
-            connection.audioQueue.addAudio(ulawBuffer);
-            
-        } catch (error) {
-            logger.error('Error processing provider audio:', error);
-        }
-    }
+		this.updateConnectionActivity(connection.clientKey);
+		
+		try {
+			// Decode base64
+			let pcmBuffer;
+			if (typeof audioData === 'string') {
+				pcmBuffer = Buffer.from(audioData, 'base64');
+			} else {
+				pcmBuffer = audioData;
+			}
+			
+			// ADD THIS LOG
+			console.log(`[AUDIO-OUT] Received PCM16 24kHz: ${pcmBuffer.length} bytes`);
+			
+			// Ensure even length
+			if (pcmBuffer.length % 2 !== 0) {
+				pcmBuffer = Buffer.concat([pcmBuffer, Buffer.from([0])]);
+			}
+			
+			// Resample based on provider output
+			let downsampledBuffer;
+			if (connection.providerName === 'openai') {
+				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+			} else if (connection.providerName === 'deepgram') {
+				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+			} else {
+				downsampledBuffer = pcmBuffer;
+			}
+			
+			// ADD THIS LOG
+			console.log(`[AUDIO-OUT] Resampled to PCM16 8kHz: ${downsampledBuffer.length} bytes`);
+			
+			// Convert to µ-law for Asterisk
+			const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
+			
+			// ADD THIS LOG
+			console.log(`[AUDIO-OUT] Converted to µ-law: ${ulawBuffer.length} bytes`);
+			
+			// Add to audio queue for RTP transmission
+			connection.audioQueue.addAudio(ulawBuffer);
+			
+		} catch (error) {
+			logger.error('Error processing provider audio:', error);
+		}
+	}
     
     /**
      * Handle function calls

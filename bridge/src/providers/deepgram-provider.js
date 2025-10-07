@@ -71,16 +71,19 @@ class DeepgramProvider extends BaseProvider {
             this.sttWs.on('open', () => {
                 clearTimeout(timeout);
                 logger.info('Deepgram STT connected');
+				console.log('[DEEPGRAM-STT] Connection opened successfully');
                 this.audioMetrics.stt_start = Date.now();
                 resolve();
             });
             
             this.sttWs.on('message', (data) => {
+				console.log('[DEEPGRAM-STT] Message received, type:', typeof data, 'length:', data.length);
                 this.handleSTTMessage(data);
             });
             
             this.sttWs.on('error', (error) => {
                 logger.error('Deepgram STT error:', error);
+				console.log('[DEEPGRAM-STT] ERROR:', error.message);
                 this.emit('error', error);
             });
             
@@ -185,6 +188,7 @@ class DeepgramProvider extends BaseProvider {
     
 	async sendAudio(audioData) {
 		if (!this.isConnected || !this.sttWs || this.sttWs.readyState !== WebSocket.OPEN) {
+			console.log('[DEEPGRAM-STT] Cannot send - not connected. State:', this.sttWs?.readyState);
 			return false;
 		}
 		
@@ -192,12 +196,13 @@ class DeepgramProvider extends BaseProvider {
 			// Resample from 24kHz to 16kHz before sending to Deepgram
 			//const AudioConverter = require('../audio/audio-converter');
 			//const resampled = AudioConverter.resample24to16(audioData);
-			
+			console.log('[DEEPGRAM-STT] Sending audio:', audioData.length, 'bytes');
 			this.sttWs.send(audioData);
 			return true;
 			
 		} catch (error) {
 			logger.error('Error sending audio to Deepgram:', error);
+			console.log('[DEEPGRAM-STT] Send failed:', error.message);
 			return false;
 		}
 	}
@@ -437,9 +442,12 @@ class DeepgramProvider extends BaseProvider {
     }
     
     handleTTSMessage(data) {
+		console.log('[DEEPGRAM-TTS] Received data, type:', typeof data, 'isBuffer:', Buffer.isBuffer(data), 'length:', data.length);
+		
         try {
             // Check if this is binary audio data
             if (Buffer.isBuffer(data)) {
+				console.log('[DEEPGRAM-TTS] Audio data received:', data.length, 'bytes');
                 // Audio data from Deepgram TTS
                 this.emit('audio.delta', {
                     delta: data.toString('base64')
@@ -449,6 +457,7 @@ class DeepgramProvider extends BaseProvider {
             
             // JSON message
             const message = JSON.parse(data.toString());
+			console.log('[DEEPGRAM-TTS] JSON message:', message.type);
             
             if (message.type === 'SpeakStarted') {
                 this.emit('audio.started');
