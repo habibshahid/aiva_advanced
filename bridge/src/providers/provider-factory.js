@@ -14,42 +14,60 @@ class ProviderFactory {
      * @param {Object} sessionConfig - Session-specific config
      * @returns {BaseProvider}
      */
-    static createProvider(agentConfig, sessionConfig = {}) {
-        const provider = agentConfig.provider || 'openai';
-        
-        logger.info(`Creating provider: ${provider} for agent: ${agentConfig.agentId}`);
-        
-        switch (provider.toLowerCase()) {
-            case 'openai':
-                return new OpenAIProvider({
-                    apiKey: process.env.OPENAI_API_KEY,
-                    model: agentConfig.model,
-                    voice: agentConfig.voice,
-                    temperature: agentConfig.temperature,
-                    maxTokens: agentConfig.max_tokens,
-                    vadThreshold: agentConfig.vad_threshold,
-                    silenceDuration: agentConfig.silence_duration_ms,
-                    language: agentConfig.language,
-                    ...sessionConfig
-                });
-                
-            case 'deepgram':
-                return new DeepgramProvider({
-                    apiKey: process.env.DEEPGRAM_API_KEY,
-                    model: agentConfig.deepgram_model || 'aura-asteria-en',
-                    voice: agentConfig.deepgram_voice || 'default',
-                    language: agentConfig.deepgram_language || 'en',
-                    ...sessionConfig
-                });
-                
-            default:
-                logger.error(`Unknown provider: ${provider}, defaulting to OpenAI`);
-                return new OpenAIProvider({
-                    apiKey: process.env.OPENAI_API_KEY,
-                    ...sessionConfig
-                });
-        }
-    }
+    /**
+	 * Provider Factory Update
+	 * 
+	 * File: bridge/src/providers/provider-factory.js
+	 * Replace the entire 'deepgram' case in the createProvider method
+	 * (around line 30-40)
+	 */
+
+	static createProvider(agentConfig, sessionConfig = {}) {
+		const provider = agentConfig.provider || 'openai';
+		
+		logger.info(`Creating provider: ${provider} for agent: ${agentConfig.agentId}`);
+		
+		switch (provider.toLowerCase()) {
+			case 'openai':
+				return new OpenAIProvider({
+					apiKey: process.env.OPENAI_API_KEY,
+					model: agentConfig.model,
+					voice: agentConfig.voice,
+					temperature: agentConfig.temperature,
+					maxTokens: agentConfig.max_tokens,
+					vadThreshold: agentConfig.vad_threshold,
+					silenceDuration: agentConfig.silence_duration_ms,
+					language: agentConfig.language,
+					...sessionConfig
+				});
+				
+			case 'deepgram':
+				// UPDATED: Pass agent configuration for Deepgram Agent API
+				return new DeepgramProvider({
+					apiKey: process.env.DEEPGRAM_API_KEY,
+					// STT model for listen
+					model: agentConfig.deepgram_model || 'nova-2',
+					// TTS voice for speak
+					voice: agentConfig.deepgram_voice || 'aura-asteria-en',
+					// Language
+					language: agentConfig.deepgram_language || 'en',
+					// IMPORTANT: Pass full agent config for Agent API configuration
+					instructions: agentConfig.instructions,
+					functions: agentConfig.functions || [],
+					greeting: agentConfig.greeting,
+					temperature: agentConfig.temperature || 0.6,
+					// Session config
+					...sessionConfig
+				});
+				
+			default:
+				logger.error(`Unknown provider: ${provider}, defaulting to OpenAI`);
+				return new OpenAIProvider({
+					apiKey: process.env.OPENAI_API_KEY,
+					...sessionConfig
+				});
+		}
+	}
     
     /**
      * Validate provider configuration

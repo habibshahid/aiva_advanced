@@ -304,6 +304,7 @@ class AsteriskOpenAIBridge {
         
 		this.rtpServer.on('audio', async (data) => {
 			const clientKey = `${data.rinfo.address}:${data.rinfo.port}`;
+			console.log(`[DEBUG-RTP] Received ${data.buffer.length} bytes from Asterisk for ${clientKey}`);
 			await this.connectionManager.handleRTPAudio(clientKey, data.buffer);
 		});
 
@@ -432,9 +433,25 @@ class AsteriskOpenAIBridge {
 			this.monitorServer.removeConnection(clientKey);
 		});
         
-        this.connectionManager.on('error', ({ clientKey, error }) => {
-            logger.error(`Connection error for ${clientKey}:`, error);
-        });
+        this.connectionManager.on('error', ({ connection, error }) => {
+			if (!error || !error.message) {
+				// Suppress undefined/empty errors - these are usually spurious
+				return;
+			}
+			
+			const clientKey = connection?.clientKey || 'unknown';
+			logger.error(`Connection error for ${clientKey}:`, error.message);
+			
+			// Handle critical errors
+			if (error.message.includes('authentication') || 
+				error.message.includes('quota exceeded') ||
+				error.message.includes('rate limit')) {
+				logger.error(`Critical error - closing connection: ${clientKey}`);
+				if (connection && connection.clientKey) {
+					this.connectionManager.closeConnection(connection.clientKey);
+				}
+			}
+		});
         
         //this.sessionManager.on('conversationUpdated', ({ sessionId, item }) => {
             //this.monitorServer.updateConversation(sessionId, item);

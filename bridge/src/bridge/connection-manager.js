@@ -111,7 +111,10 @@ class ConnectionManager extends EventEmitter {
 				session: {
 					client: provider.client,
 					callerId: config.callerId
-				}
+				},
+				audioInterrupted: false,
+				isPlayingAudio: false,
+				userSpeaking: false
 			};
 			
 			this.connections.set(clientKey, connection);
@@ -255,81 +258,211 @@ class ConnectionManager extends EventEmitter {
 	}
 
     /**
-     * Set up provider event handlers
-     * UPDATED: Works with any provider (OpenAI or Deepgram)
-     */
-    setupProviderHandlers(connection) {
-        const provider = connection.provider;
-        const sessionId = connection.sessionId;
-        
-        // Speech detection
-        provider.on('speech.started', () => {
-            this.emit('userSpeechStarted', connection);
-            connection.audioQueue.clear();
-        });
-        
-        provider.on('speech.stopped', () => {
-            this.emit('userSpeechStopped', connection);
-        });
-        
-        // Audio output
-        provider.on('audio.delta', (event) => {
-            if (!connection.isReceivingAudio) {
-                connection.isReceivingAudio = true;
-                this.emit('agentSpeechStarted', connection);
-            }
-            
-            this.handleProviderAudio(connection, event.delta);
-        });
-        
-        provider.on('audio.done', () => {
-            if (connection.isReceivingAudio) {
-                connection.isReceivingAudio = false;
-                this.emit('agentSpeechStopped', connection);
-            }
-        });
-        
-        // Transcripts
-        provider.on('transcript.user', (event) => {
-            this.emit('transcript', {
-                connection: connection,
-                speaker: 'user',
-                text: event.transcript
-            });
-        });
-        
-        provider.on('transcript.agent', (event) => {
-            this.emit('transcript', {
-                connection: connection,
-                speaker: 'agent',
-                text: event.transcript
-            });
-        });
-        
-        // Token usage / cost updates
-        provider.on('response.done', (event) => {
-            // Get cost from provider
-            if (connection.provider && typeof connection.provider.getCostMetrics === 'function') {
+	 * Set up provider event handlers
+	 * UPDATED: Works with any provider (OpenAI or Deepgram)
+	 */
+	/*setupProviderHandlers(connection) {
+		const provider = connection.provider;
+		const sessionId = connection.sessionId;
+		const clientKey = connection.clientKey;
+		
+		// Speech detection
+		provider.on('speech.started', () => {
+			this.emit('userSpeechStarted', connection);
+			connection.audioQueue.clear();
+		});
+		
+		provider.on('speech.stopped', () => {
+			this.emit('userSpeechStopped', connection);
+		});
+		
+		// Audio output - FIXED TO HANDLE BOTH OPENAI AND DEEPGRAM
+		provider.on('audio.delta', (event) => {
+			if (!connection.isReceivingAudio) {
+				connection.isReceivingAudio = true;
+				
+				// For Deepgram, also set isPlayingAudio to block STT
+				if (connection.providerName === 'deepgram') {
+					connection.isPlayingAudio = true;
+				}
+				
+				this.emit('agentSpeechStarted', connection);
+			}
+			
+			// Handle different event structures...
+			let audioData;
+			if (event && event.delta) {
+				audioData = event.delta;
+			} else if (typeof event === 'string') {
+				audioData = event;
+			} else if (Buffer.isBuffer(event)) {
+				audioData = event;
+			} else {
+				console.error('[AUDIO-DELTA] Unknown event structure:', typeof event);
+				return;
+			}
+			
+			this.handleProviderAudio(connection, audioData);
+		});
+
+		provider.on('audio.done', () => {
+			if (connection.isReceivingAudio) {
+				connection.isReceivingAudio = false;
+				
+				// For Deepgram, reset isPlayingAudio to allow STT again
+				if (connection.providerName === 'deepgram') {
+					connection.isPlayingAudio = false;
+				}
+				
+				this.emit('agentSpeechStopped', connection);
+			}
+		});
+		
+		// Transcripts
+		provider.on('transcript.user', (event) => {
+			this.emit('transcript', {
+				connection: connection,
+				speaker: 'user',
+				text: event.transcript || event.text
+			});
+		});
+		
+		provider.on('transcript.agent', (event) => {
+			this.emit('transcript', {
+				connection: connection,
+				speaker: 'agent',
+				text: event.transcript || event.text
+			});
+		});
+		
+		// Token usage / cost updates
+		provider.on('response.done', (event) => {
+			// Get cost from provider
+			if (connection.provider && typeof connection.provider.getCostMetrics === 'function') {
 				const cost = connection.provider.getCostMetrics();
 				this.emit('costUpdate', {
 					connection: connection,
 					cost: cost
 				});
 			}
-        });
-        
-        // Function calls
-        provider.on('function.call', async (event) => {
-            logger.info(`Function call from ${connection.providerName}:`, event.name);
-            await this.handleFunctionCall(connection, event);
-        });
-        
-        // Errors
-        provider.on('error', (error) => {
-            logger.error(`Provider error for ${connection.clientKey}:`, error);
-            this.emit('error', { connection, error });
-        });
-    }
+		});
+		
+		// Function calls
+		provider.on('function.call', async (event) => {
+			logger.info(`Function call from ${connection.providerName}:`, event.name);
+			await this.handleFunctionCall(connection, event);
+		});
+		
+		// Errors
+		provider.on('error', (error) => {
+			logger.error(`Provider error for ${connection.clientKey}:`, error);
+			this.emit('error', { connection, error });
+		});
+		
+		// ========================================
+		// DEEPGRAM-SPECIFIC EVENT HANDLERS
+		// ========================================
+		if (connection.providerName === 'deepgram') {
+			logger.info(`Setting up Deepgram-specific event handlers for ${clientKey}`);
+			
+			// User started speaking (for interruption handling)
+			provider.on('user_started_speaking', () => {
+				logger.info(`[DEEPGRAM-EVENT] User started speaking: ${clientKey}`);
+				this.handleUserInterruption(clientKey);
+			});
+			
+			// Agent started speaking (reset interruption state)
+			provider.on('agent_started_speaking', () => {
+				logger.info(`[DEEPGRAM-EVENT] Agent started speaking: ${clientKey}`);
+				this.handleAgentStartedSpeaking(clientKey);
+			});
+			
+			// Agent finished speaking
+			provider.on('agent_audio_done', () => {
+				logger.info(`[DEEPGRAM-EVENT] Agent audio done: ${clientKey}`);
+				this.handleAgentAudioDone(clientKey);
+			});
+		}
+	}*/
+	
+	setupProviderHandlers(connection) {
+		const provider = connection.provider;
+		const sessionId = connection.sessionId;
+		
+		// Speech detection
+		provider.on('speech.started', () => {
+			logger.info('User started speaking');
+			this.emit('userSpeechStarted', connection);
+			// Don't clear audio queue here - this is for user speech detection
+		});
+		
+		provider.on('speech.stopped', () => {
+			this.emit('userSpeechStopped', connection);
+		});
+		
+		// Audio output
+		provider.on('audio.delta', (event) => {
+			if (!connection.isReceivingAudio) {
+				connection.isReceivingAudio = true;
+				this.emit('agentSpeechStarted', connection);
+				// Clear outbound audio queue when agent starts speaking
+				connection.audioQueue.clear();
+			}
+			
+			this.handleProviderAudio(connection, event.delta);
+		});
+		
+		provider.on('audio.done', () => {
+			if (connection.isReceivingAudio) {
+				connection.isReceivingAudio = false;
+				this.emit('agentSpeechStopped', connection);
+			}
+		});
+		
+		// Transcripts
+		provider.on('transcript.user', (event) => {
+			this.emit('transcript', {
+				connection: connection,
+				speaker: 'user',
+				text: event.transcript
+			});
+		});
+		
+		provider.on('transcript.agent', (event) => {
+			this.emit('transcript', {
+				connection: connection,
+				speaker: 'agent',
+				text: event.transcript
+			});
+		});
+		
+		// Token usage / cost updates
+		provider.on('response.done', (event) => {
+			// Get cost from provider
+			if (connection.provider && typeof connection.provider.getCostMetrics === 'function') {
+				const cost = connection.provider.getCostMetrics();
+				this.emit('costUpdate', {
+					connection: connection,
+					cost: cost
+				});
+			}
+		});
+		
+		// Function calls
+		provider.on('function.call', async (event) => {
+			logger.info(`Function call from ${connection.providerName}:`, event.name);
+			await this.handleFunctionCall(connection, event);
+		});
+		
+		// Errors - IMPROVED ERROR HANDLING
+		provider.on('error', (error) => {
+			console.log('#################')
+			//logger.error(`Provider error for ${connection.clientKey}:`, error);  // THIS LINE logs "undefined"
+			//this.emit('error', { connection, error });  // THIS LINE logs "Provider error for..."
+		});
+	}
+	
+	
     
     /**
      * Handle incoming RTP audio
@@ -376,34 +509,67 @@ class ConnectionManager extends EventEmitter {
 		}
 	}*/
 	
+	/**
+	 * DEBUG PATCH - Add to connection-manager.js
+	 * This will show us exactly where audio is getting stuck
+	 * 
+	 * Add these logs to the handleRTPAudio method
+	 */
+
+	// File: bridge/src/bridge/connection-manager.js
+	// Location: handleRTPAudio method (around line 90)
+
 	async handleRTPAudio(clientKey, audioData) {
 		this.updateConnectionActivity(clientKey);
 		
+		// DEBUG: Log incoming audio
+		console.log(`[DEBUG-IN] Received ${audioData.length} bytes for ${clientKey}`);
+		
 		const connection = this.connections.get(clientKey);
 		if (!connection || !connection.provider) {
+			console.log(`[DEBUG-IN] NO CONNECTION or PROVIDER for ${clientKey}`);
 			return;
 		}
 		
+		console.log(`[DEBUG-IN] Provider: ${connection.providerName}, Connected: ${connection.provider.isConnected}`);
+		
 		if (connection.providerName === 'deepgram') {
-			// Buffer µ-law audio exactly like your working bridge
+			// Buffer µ-law audio
 			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
 			
+			console.log(`[DEBUG-IN] Buffer size: ${connection.audioBuffer.length}`);
+			
 			const now = Date.now();
-			const targetBufferSize = 2048;  // Match your working bridge
-			const bufferInterval = 500;     // Match your working bridge
+			const targetBufferSize = 640;
+			const bufferInterval = 100;
 			
 			if (connection.audioBuffer.length >= targetBufferSize || 
 				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
 				
-				// Send accumulated µ-law buffer
-				await connection.provider.sendAudio(connection.audioBuffer);
+				console.log(`[DEBUG-IN] SENDING ${connection.audioBuffer.length} bytes to Deepgram`);
 				
-				connection.audioBuffer = Buffer.alloc(0);
-				connection.lastAudioSent = now;
+				try {
+					const sent = await connection.provider.sendAudio(connection.audioBuffer);
+					console.log(`[DEBUG-IN] Send result: ${sent}`);
+					
+					if (sent) {
+						connection.audioBuffer = Buffer.alloc(0);
+						connection.lastAudioSent = now;
+					} else {
+						console.log(`[DEBUG-IN] SEND FAILED - WebSocket state:`, connection.provider.agentWs?.readyState);
+					}
+				} catch (error) {
+					console.log(`[DEBUG-IN] SEND ERROR:`, error.message);
+					connection.audioBuffer = Buffer.alloc(0);
+					connection.lastAudioSent = now;
+				}
+			} else {
+				console.log(`[DEBUG-IN] Buffering... (need ${targetBufferSize - connection.audioBuffer.length} more bytes)`);
 			}
 			
 		} else if (connection.providerName === 'openai') {
-			// OpenAI path (unchanged)
+			// OpenAI path
+			console.log(`[DEBUG-IN] OpenAI provider - converting audio`);
 			const pcmBuffer = AudioConverter.convertUlawToPCM16(audioData);
 			const resampledBuffer = AudioConverter.resample8to24(pcmBuffer);
 			
@@ -413,30 +579,50 @@ class ConnectionManager extends EventEmitter {
 			if (connection.audioBuffer.length >= this.audioBufferSize || 
 				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= this.audioBufferInterval)) {
 				
-				await connection.provider.sendAudio(connection.audioBuffer);
-				connection.audioBuffer = Buffer.alloc(0);
-				connection.lastAudioSent = now;
+				try {
+					await connection.provider.sendAudio(connection.audioBuffer);
+					connection.audioBuffer = Buffer.alloc(0);
+					connection.lastAudioSent = now;
+				} catch (error) {
+					console.log(`[DEBUG-IN] OpenAI send error:`, error.message);
+					connection.audioBuffer = Buffer.alloc(0);
+					connection.lastAudioSent = now;
+				}
 			}
 		}
 	}
     
     /**
-     * Handle provider audio output
-     * UPDATED: Provider-aware resampling
-     */
-    handleProviderAudio(connection, audioData) {
+	 * Handle provider audio output
+	 * UPDATED: Provider-specific resampling with better error handling
+	 */
+	handleProviderAudio(connection, audioData) {
 		this.updateConnectionActivity(connection.clientKey);
 		
 		try {
-			// Decode base64
+			// Validate audio data
+			if (!audioData) {
+				console.error('[AUDIO-OUT] Received undefined audio data');
+				return;
+			}
+			
+			// Decode base64 if needed
 			let pcmBuffer;
 			if (typeof audioData === 'string') {
 				pcmBuffer = Buffer.from(audioData, 'base64');
-			} else {
+			} else if (Buffer.isBuffer(audioData)) {
 				pcmBuffer = audioData;
+			} else {
+				console.error('[AUDIO-OUT] Unknown audio data type:', typeof audioData);
+				return;
 			}
 			
-			// ADD THIS LOG
+			// Validate buffer
+			if (!pcmBuffer || pcmBuffer.length === 0) {
+				console.error('[AUDIO-OUT] Empty audio buffer');
+				return;
+			}
+			
 			console.log(`[AUDIO-OUT] Received PCM16 24kHz: ${pcmBuffer.length} bytes`);
 			
 			// Ensure even length
@@ -444,33 +630,104 @@ class ConnectionManager extends EventEmitter {
 				pcmBuffer = Buffer.concat([pcmBuffer, Buffer.from([0])]);
 			}
 			
-			// Resample based on provider output
-			let downsampledBuffer;
-			if (connection.providerName === 'openai') {
-				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
-			} else if (connection.providerName === 'deepgram') {
-				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
-			} else {
-				downsampledBuffer = pcmBuffer;
-			}
+			// USE SIMPLE RESAMPLER FOR BOTH (it's faster)
+			const downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
 			
-			// ADD THIS LOG
 			console.log(`[AUDIO-OUT] Resampled to PCM16 8kHz: ${downsampledBuffer.length} bytes`);
 			
 			// Convert to µ-law for Asterisk
 			const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
 			
-			// ADD THIS LOG
 			console.log(`[AUDIO-OUT] Converted to µ-law: ${ulawBuffer.length} bytes`);
+			
+			// Check if audio is interrupted (Deepgram only)
+			if (connection.providerName === 'deepgram' && connection.audioInterrupted) {
+				console.log(`[AUDIO-OUT] Audio interrupted for ${connection.clientKey}, discarding buffer`);
+				return;
+			}
 			
 			// Add to audio queue for RTP transmission
 			connection.audioQueue.addAudio(ulawBuffer);
 			
 		} catch (error) {
 			logger.error('Error processing provider audio:', error);
+			console.error('[AUDIO-OUT] Stack trace:', error.stack);
 		}
 	}
     
+	/**
+	 * Handle user interruption - Deepgram only
+	 * Prevents audio packet conflicts during user speech
+	 */
+	handleUserInterruption(clientKey) {
+		const connection = this.connections.get(clientKey);
+		if (!connection) return;
+		
+		// Only handle for Deepgram (OpenAI has native VAD)
+		if (connection.providerName !== 'deepgram') {
+			return;
+		}
+		
+		console.log(`[INTERRUPTION] User interrupted for ${clientKey} - stopping TTS and clearing queue`);
+		
+		// Mark audio as interrupted
+		connection.audioInterrupted = true;
+		connection.isPlayingAudio = false;
+		connection.userSpeaking = true;
+		
+		// CRITICAL: Stop Deepgram TTS from generating more audio
+		if (connection.provider && typeof connection.provider.stopSpeaking === 'function') {
+			connection.provider.stopSpeaking();
+		}
+		
+		// Clear the audio queue immediately
+		connection.audioQueue.clear();
+		
+		this.emit('userInterruption', { connection });
+	}
+
+	/**
+	* Reset interruption state when agent starts speaking - Deepgram only
+	 */
+	handleAgentStartedSpeaking(clientKey) {
+		const connection = this.connections.get(clientKey);
+		if (!connection) return;
+		
+		// Only handle for Deepgram
+		if (connection.providerName !== 'deepgram') {
+			return;
+		}
+		
+		console.log(`[AGENT-SPEAKING] Agent started for ${clientKey} - blocking STT input`);
+		
+		// CRITICAL: Set this BEFORE audio starts playing
+		connection.audioInterrupted = false;
+		connection.isPlayingAudio = true;  // Block STT input
+		connection.userSpeaking = false;
+		
+		this.emit('agentStartedSpeaking', { connection });
+	}
+
+	/**
+	 * Handle agent finished speaking - Deepgram only
+	 */
+	handleAgentAudioDone(clientKey) {
+		const connection = this.connections.get(clientKey);
+		if (!connection) return;
+		
+		// Only handle for Deepgram
+		if (connection.providerName !== 'deepgram') {
+			return;
+		}
+		
+		console.log(`[AGENT-DONE] Agent finished for ${clientKey}`);
+		
+		// Mark audio as not playing (but don't reset interruption state)
+		connection.isPlayingAudio = false;
+		
+		this.emit('agentAudioDone', { connection });
+	}
+
     /**
      * Handle function calls
      * UNCHANGED: Works with any provider

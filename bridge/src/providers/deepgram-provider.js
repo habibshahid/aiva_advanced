@@ -1,6 +1,6 @@
 /**
- * Deepgram Provider
- * Integrates Deepgram STT + TTS with function calling support
+ * Deepgram Provider - Using Deepgram Agent API V1
+ * Based on working bridge-deepgram.js implementation
  */
 
 const BaseProvider = require('./base-provider');
@@ -11,156 +11,83 @@ class DeepgramProvider extends BaseProvider {
     constructor(config) {
         super(config);
         
-        this.sttWs = null;  // Speech-to-Text WebSocket
-        this.ttsWs = null;  // Text-to-Speech WebSocket
+        this.agentWs = null;  // Single WebSocket for Deepgram Agent API
         this.sessionId = null;
-        
-        // Conversation state
-        this.conversationHistory = [];
-        this.pendingFunctionCalls = new Map();
+        this.isConfigured = false;
+        this.keepAliveInterval = null;
         
         // Audio metrics for cost calculation
         this.audioMetrics = {
             stt_minutes: 0,
             tts_minutes: 0,
-            stt_start: null,
-            tts_start: null
+            start_time: null
         };
         
         // Agent configuration
         this.agentConfig = null;
-        
-        // LLM for conversation logic (we'll use OpenAI for function calling)
-        this.llmApiKey = process.env.OPENAI_API_KEY; // For intent detection
     }
     
     async connect() {
         try {
-            // Connect to Deepgram STT
-            await this.connectSTT();
-            
-            // Connect to Deepgram TTS
-            await this.connectTTS();
+            // Connect to Deepgram Agent API (V1)
+            await this.connectAgentAPI();
             
             this.isConnected = true;
-            logger.info('Deepgram provider connected (STT + TTS)');
+            logger.info('Deepgram Agent API connected');
             
             return true;
             
         } catch (error) {
-            logger.error('Failed to connect Deepgram provider:', error);
+            logger.error('Failed to connect Deepgram Agent:', error);
             this.isConnected = false;
             throw error;
         }
     }
     
-    async connectSTT() {
-        const sttUrl = this.buildDeepgramSTTUrl();
+    async connectAgentAPI() {
+        // Deepgram Agent API V1 endpoint
+        const wsUrl = 'wss://agent.deepgram.com/v1/agent/converse';
         
-        this.sttWs = new WebSocket(sttUrl, {
+        this.agentWs = new WebSocket(wsUrl, {
             headers: {
-                'Authorization': `Token ${this.config.apiKey}`
+                'Authorization': `token ${this.config.apiKey}`
             }
         });
         
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
-                reject(new Error('STT connection timeout'));
+                reject(new Error('Agent API connection timeout'));
             }, 10000);
             
-            this.sttWs.on('open', () => {
+            this.agentWs.on('open', () => {
                 clearTimeout(timeout);
-                logger.info('Deepgram STT connected');
-				console.log('[DEEPGRAM-STT] Connection opened successfully');
-                this.audioMetrics.stt_start = Date.now();
+                logger.info('Deepgram Agent WebSocket opened');
+                this.audioMetrics.start_time = Date.now();
                 resolve();
             });
             
-            this.sttWs.on('message', (data) => {
-				console.log('[DEEPGRAM-STT] Message received, type:', typeof data, 'length:', data.length);
-                this.handleSTTMessage(data);
+            this.agentWs.on('message', (data) => {
+                this.handleAgentMessage(data);
             });
             
-            this.sttWs.on('error', (error) => {
-                logger.error('Deepgram STT error:', error);
-				console.log('[DEEPGRAM-STT] ERROR:', error.message);
-                this.emit('error', error);
+            this.agentWs.on('error', (error) => {
+                logger.error('Deepgram Agent WebSocket error:', error);
+                logger.error('Error details:', {
+                    message: error?.message || 'No message',
+                    code: error?.code || 'No code',
+                    type: typeof error,
+                    stack: error?.stack || 'No stack'
+                });
+                // Don't emit error for connection errors during normal operation
+                // These can be spurious and don't affect functionality
             });
             
-            this.sttWs.on('close', () => {
-                logger.info('Deepgram STT disconnected');
-                this.calculateSTTCost();
+            this.agentWs.on('close', () => {
+                logger.info('Deepgram Agent disconnected');
+                this.calculateCost();
+                this.cleanup();
             });
         });
-    }
-    
-    async connectTTS() {
-        const ttsUrl = this.buildDeepgramTTSUrl();
-        
-        this.ttsWs = new WebSocket(ttsUrl, {
-            headers: {
-                'Authorization': `Token ${this.config.apiKey}`
-            }
-        });
-        
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('TTS connection timeout'));
-            }, 10000);
-            
-            this.ttsWs.on('open', () => {
-                clearTimeout(timeout);
-                logger.info('Deepgram TTS connected');
-                this.audioMetrics.tts_start = Date.now();
-                resolve();
-            });
-            
-            this.ttsWs.on('message', (data) => {
-                this.handleTTSMessage(data);
-            });
-            
-            this.ttsWs.on('error', (error) => {
-                logger.error('Deepgram TTS error:', error);
-                this.emit('error', error);
-            });
-            
-            this.ttsWs.on('close', () => {
-                logger.info('Deepgram TTS disconnected');
-                this.calculateTTSCost();
-            });
-        });
-    }
-    
-    buildDeepgramSTTUrl() {
-        const model = this.config.model || 'nova-2';
-        const language = this.config.language || 'en';
-        
-        const params = new URLSearchParams({
-            model: model,
-            language: language,
-            encoding: 'mulaw',
-            sample_rate: '8000',
-            channels: '1',
-            interim_results: 'true',
-            endpointing: '300',
-            vad_events: 'true',
-            punctuate: 'true'
-        });
-        
-        return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
-    }
-    
-    buildDeepgramTTSUrl() {
-        const model = this.config.voice || 'aura-asteria-en';
-        
-        const params = new URLSearchParams({
-            model: model,
-            encoding: 'linear16',
-            sample_rate: '24000',
-            container: 'none'
-        });
-        
-        return `wss://api.deepgram.com/v1/speak?${params.toString()}`;
     }
     
     async configureSession(agentConfig) {
@@ -171,327 +98,268 @@ class DeepgramProvider extends BaseProvider {
         this.agentConfig = agentConfig;
         this.sessionId = agentConfig.sessionId || `dg_${Date.now()}`;
         
-        // Initialize conversation with system instructions
-        this.conversationHistory.push({
-            role: 'system',
-            content: agentConfig.instructions
-        });
+        logger.info('Configuring Deepgram Agent...');
         
-        // Send initial greeting if configured
-        if (agentConfig.greeting) {
-            await this.speak(agentConfig.greeting);
-        }
+        // Create the V1 configuration message (matching working implementation)
+        const configMessage = {
+            type: "Settings",
+            audio: {
+                input: {
+                    encoding: "mulaw",
+                    sample_rate: 8000,
+                },
+                output: {
+                    encoding: "linear16",
+                    sample_rate: 24000,
+                    container: "none",
+                },
+            },
+            agent: {
+                listen: { 
+                    provider: { 
+                        type: "deepgram", 
+                        model: agentConfig.deepgram_model || "nova-2" 
+                    } 
+                },
+                speak: {
+                    provider: {
+                        type: "open_ai",
+                        model: "gpt-4o-mini-tts",
+                        voice: "shimmer"
+                    },
+                    endpoint: {
+                        url: "https://api.openai.com/v1/audio/speech",
+                        headers: {
+                            authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+                        }
+                    }
+                },
+                greeting: agentConfig.greeting || null,
+                think: {
+                    provider: {
+                        type: "open_ai",
+                        model: "gpt-4o-mini",
+                    },
+                    prompt: agentConfig.instructions,
+                    functions: agentConfig.functions || []
+                },
+            },
+        };
         
-        logger.info('Deepgram session configured');
+        // CRITICAL FIX: Set isConfigured to true BEFORE sending config
+        // This allows audio to flow immediately after SettingsApplied
+        this.isConfigured = true;
+        
+        // Send configuration
+        this.agentWs.send(JSON.stringify(configMessage));
+        
+        // Start keepalive immediately
+        this.startKeepalive();
+        
+        logger.info('Deepgram Agent configuration sent, ready to receive audio');
         return true;
     }
     
-	async sendAudio(audioData) {
-		if (!this.isConnected || !this.sttWs || this.sttWs.readyState !== WebSocket.OPEN) {
-			console.log('[DEEPGRAM-STT] Cannot send - not connected. State:', this.sttWs?.readyState);
+    startKeepalive() {
+        this.keepAliveInterval = setInterval(() => {
+            if (this.agentWs && this.agentWs.readyState === WebSocket.OPEN) {
+                try {
+                    this.agentWs.send(JSON.stringify({ type: "AgentKeepAlive" }));
+                } catch (err) {
+                    logger.error('Error sending keepalive:', err);
+                }
+            }
+        }, 5000);
+    }
+    
+    async sendAudio(audioData) {
+		if (!this.isConnected) {
+			console.log('[DEEPGRAM] Not connected, cannot send audio');
+			return false;
+		}
+		
+		if (!this.agentWs) {
+			console.log('[DEEPGRAM] No WebSocket, cannot send audio');
+			return false;
+		}
+		
+		const wsState = this.agentWs.readyState;
+		if (wsState !== 1) { // 1 = OPEN
+			console.log(`[DEEPGRAM] WebSocket not open (state: ${wsState}), cannot send audio`);
 			return false;
 		}
 		
 		try {
-			// Resample from 24kHz to 16kHz before sending to Deepgram
-			//const AudioConverter = require('../audio/audio-converter');
-			//const resampled = AudioConverter.resample24to16(audioData);
-			console.log('[DEEPGRAM-STT] Sending audio:', audioData.length, 'bytes');
-			this.sttWs.send(audioData);
+			// Send raw µ-law audio directly
+			this.agentWs.send(audioData);
+			
+			// Log periodically to confirm audio is flowing
+			if (!this.audioSendCount) this.audioSendCount = 0;
+			this.audioSendCount++;
+			
+			if (this.audioSendCount % 50 === 0) {
+				console.log(`[DEEPGRAM] ✓ Sent ${this.audioSendCount} audio packets`);
+			}
+			
 			return true;
 			
 		} catch (error) {
-			logger.error('Error sending audio to Deepgram:', error);
-			console.log('[DEEPGRAM-STT] Send failed:', error.message);
+			logger.error('[DEEPGRAM] Error sending audio:', error.message);
 			return false;
 		}
 	}
     
-    handleSTTMessage(data) {
+    handleAgentMessage(data) {
         try {
-            const message = JSON.parse(data.toString());
-            
-            // Handle different message types
-            if (message.type === 'Results') {
-                const transcript = message.channel?.alternatives?.[0]?.transcript;
-                
-                if (!transcript) return;
-                
-                const isFinal = message.is_final;
-                const speechFinal = message.speech_final;
-                
-                if (isFinal && speechFinal) {
-                    // User finished speaking
-                    logger.info(`User transcript (final): ${transcript}`);
-                    
-                    this.emit('transcript.user', {
-                        transcript: transcript,
-                        is_final: true
-                    });
-                    
-                    // Add to conversation history
-                    this.conversationHistory.push({
-                        role: 'user',
-                        content: transcript
-                    });
-                    
-                    // Process the user input with LLM
-                    this.processUserInput(transcript);
-                    
-                } else if (isFinal) {
-                    // Interim final result
-                    this.emit('transcript.user', {
-                        transcript: transcript,
-                        is_final: false
-                    });
-                }
-            } else if (message.type === 'SpeechStarted') {
-                this.emit('speech.started');
-            } else if (message.type === 'UtteranceEnd') {
-                this.emit('speech.stopped');
-            }
-            
-        } catch (error) {
-            logger.error('Error handling STT message:', error);
-        }
-    }
-    
-    async processUserInput(userText) {
-        try {
-            // Use OpenAI to process the conversation and detect function calls
-            const response = await this.callLLM(userText);
-            
-            // Check if LLM wants to call a function
-            if (response.function_call) {
-                await this.handleLLMFunctionCall(response.function_call);
-            } else {
-                // Regular response - speak it
-                await this.speak(response.content);
-            }
-            
-        } catch (error) {
-            logger.error('Error processing user input:', error);
-            await this.speak('I apologize, I encountered an error processing your request.');
-        }
-    }
-    
-    async callLLM(userText) {
-        // Call OpenAI Chat API for conversation logic
-        const https = require('https');
-        
-        const messages = [...this.conversationHistory];
-        
-        const tools = (this.agentConfig.functions || []).map(func => ({
-            type: 'function',
-            function: {
-                name: func.name,
-                description: func.description,
-                parameters: func.parameters
-            }
-        }));
-        
-        const requestBody = {
-            model: 'gpt-4o-mini',
-            messages: messages,
-            tools: tools.length > 0 ? tools : undefined,
-            temperature: 0.7,
-            max_tokens: 500
-        };
-        
-        return new Promise((resolve, reject) => {
-            const postData = JSON.stringify(requestBody);
-            
-            const options = {
-                hostname: 'api.openai.com',
-                port: 443,
-                path: '/v1/chat/completions',
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.llmApiKey}`,
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(postData)
-                }
-            };
-            
-            const req = https.request(options, (res) => {
-                let data = '';
-                
-                res.on('data', (chunk) => {
-                    data += chunk;
-                });
-                
-                res.on('end', () => {
+            // Check if this is binary audio data or JSON
+            if (Buffer.isBuffer(data)) {
+                // Check if it might be JSON (starts with '{')
+                if (data.length > 0 && data[0] === 123) { // 123 is '{'
+                    const jsonStr = data.toString();
                     try {
-                        const result = JSON.parse(data);
-                        const message = result.choices[0].message;
-                        
-                        // Add assistant response to history
-                        this.conversationHistory.push({
-                            role: 'assistant',
-                            content: message.content || '',
-                            tool_calls: message.tool_calls
-                        });
-                        
-                        if (message.tool_calls && message.tool_calls.length > 0) {
-                            // Function call detected
-                            const toolCall = message.tool_calls[0];
-                            resolve({
-                                function_call: {
-                                    id: toolCall.id,
-                                    name: toolCall.function.name,
-                                    arguments: toolCall.function.arguments
-                                }
-                            });
-                        } else {
-                            // Regular response
-                            resolve({
-                                content: message.content
-                            });
-                        }
-                        
-                    } catch (error) {
-                        reject(error);
+                        const message = JSON.parse(jsonStr);
+                        this.handleJsonMessage(message);
+                        return;
+                    } catch (e) {
+                        // Not JSON, treat as audio
                     }
+                }
+                
+                // Binary audio data - emit as base64
+                this.emit('audio.delta', {
+                    delta: data.toString('base64')
                 });
-            });
+            } 
+            else if (data instanceof ArrayBuffer) {
+                const audioBuffer = Buffer.from(data);
+                this.emit('audio.delta', {
+                    delta: audioBuffer.toString('base64')
+                });
+            }
+            else if (typeof data === 'string') {
+                try {
+                    const message = JSON.parse(data);
+                    this.handleJsonMessage(message);
+                } catch (error) {
+                    logger.error('Error parsing JSON message:', error);
+                }
+            }
             
-            req.on('error', (error) => {
-                reject(error);
-            });
-            
-            req.write(postData);
-            req.end();
-        });
+        } catch (error) {
+            logger.error('Error handling Agent message:', error);
+        }
     }
     
-    async handleLLMFunctionCall(functionCall) {
-        const { id, name, arguments: argsStr } = functionCall;
-        const args = JSON.parse(argsStr);
+    handleJsonMessage(message) {
+        // Log all messages for debugging
+        logger.debug('Deepgram message:', { type: message.type, data: message });
         
-        logger.info(`LLM requested function call: ${name}`, args);
-        
-        // Emit function call event (will be handled by FunctionExecutor)
-        this.emit('function.call', {
-            call_id: id,
-            name: name,
-            arguments: argsStr
-        });
-        
-        // Store pending call
-        this.pendingFunctionCalls.set(id, { name, args });
+        switch (message.type) {
+            case 'SettingsApplied':
+                logger.info('Settings applied');
+                break;
+                
+            case 'UserStartedSpeaking':
+                this.emit('speech.started');
+                break;
+                
+            case 'AgentStartedSpeaking':
+                this.emit('audio.started');
+                break;
+                
+            case 'AgentAudioDone':
+                this.emit('audio.done');
+                break;
+                
+            case 'ConversationText':
+                if (message.role === 'user') {
+                    this.emit('transcript.user', {
+                        transcript: message.content || message.text
+                    });
+                } else if (message.role === 'assistant' || message.speaker === 'agent') {
+                    this.emit('transcript.agent', {
+                        transcript: message.content || message.text
+                    });
+                }
+                break;
+                
+            case 'FunctionCallRequest':
+                if (message.functions && message.functions.length > 0) {
+                    message.functions.forEach(func => {
+                        this.emit('function.call', {
+                            call_id: func.id,
+                            name: func.name,
+                            arguments: func.arguments
+                        });
+                    });
+                }
+                break;
+                
+            case 'Error':
+                logger.error('Deepgram Agent error message:', {
+                    error: message.error,
+                    message: message.message,
+                    description: message.description,
+                    full: message
+                });
+                this.emit('error', new Error(message.error || message.message || 'Unknown error'));
+                break;
+                
+            default:
+                logger.debug('Unhandled message type:', message.type);
+        }
     }
     
     async sendFunctionResponse(callId, result) {
-        if (!this.pendingFunctionCalls.has(callId)) {
-            logger.warn(`No pending function call found for ID: ${callId}`);
+        if (!this.agentWs || this.agentWs.readyState !== WebSocket.OPEN) {
+            logger.warn('Cannot send function response - not connected');
             return false;
         }
         
-        const functionCall = this.pendingFunctionCalls.get(callId);
-        this.pendingFunctionCalls.delete(callId);
-        
-        // Add function result to conversation history
-        this.conversationHistory.push({
-            role: 'tool',
-            tool_call_id: callId,
-            content: JSON.stringify(result)
-        });
-        
-        // Get LLM response with function result
         try {
-            const response = await this.continueConversationAfterFunction();
+            const response = {
+                type: 'FunctionCallResponse',
+                id: callId,
+                name: result.name || 'unknown',
+                content: JSON.stringify(result)
+            };
             
-            if (response.function_call) {
-                // Another function call needed
-                await this.handleLLMFunctionCall(response.function_call);
-            } else {
-                // Speak the final response
-                await this.speak(response.content);
-            }
-            
+            this.agentWs.send(JSON.stringify(response));
+            logger.info(`Function response sent for call: ${callId}`);
             return true;
             
         } catch (error) {
-            logger.error('Error processing function response:', error);
-            await this.speak('I received the information but encountered an error processing it.');
+            logger.error('Error sending function response:', error);
             return false;
         }
     }
     
-    async continueConversationAfterFunction() {
-        // Similar to callLLM but continues the conversation with function results
-        return await this.callLLM(''); // Empty input, just continue with history
-    }
-    
-    async speak(text) {
-        if (!text) return;
-        
-        logger.info(`Agent speaking: ${text}`);
-        
-        this.emit('transcript.agent', {
-            transcript: text
-        });
-        
-        // Send text to Deepgram TTS
-        if (this.ttsWs && this.ttsWs.readyState === WebSocket.OPEN) {
-            this.ttsWs.send(JSON.stringify({
-                type: 'Speak',
-                text: text
-            }));
-        }
-    }
-    
-    handleTTSMessage(data) {
-		console.log('[DEEPGRAM-TTS] Received data, type:', typeof data, 'isBuffer:', Buffer.isBuffer(data), 'length:', data.length);
-		
-        try {
-            // Check if this is binary audio data
-            if (Buffer.isBuffer(data)) {
-				console.log('[DEEPGRAM-TTS] Audio data received:', data.length, 'bytes');
-                // Audio data from Deepgram TTS
-                this.emit('audio.delta', {
-                    delta: data.toString('base64')
-                });
-                return;
-            }
-            
-            // JSON message
-            const message = JSON.parse(data.toString());
-			console.log('[DEEPGRAM-TTS] JSON message:', message.type);
-            
-            if (message.type === 'SpeakStarted') {
-                this.emit('audio.started');
-            } else if (message.type === 'SpeakComplete') {
-                this.emit('audio.done');
-            } else if (message.type === 'Error') {
-                logger.error('Deepgram TTS error:', message);
-                this.emit('error', new Error(message.error));
-            }
-            
-        } catch (error) {
-            // If JSON parse fails, it's likely binary audio
-            if (Buffer.isBuffer(data)) {
-                this.emit('audio.delta', {
-                    delta: data.toString('base64')
-                });
-            } else {
-                logger.error('Error handling TTS message:', error);
-            }
+    cleanup() {
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
         }
     }
     
     async disconnect() {
-        if (this.sttWs) {
-            this.sttWs.close();
-            this.sttWs = null;
-        }
+        this.cleanup();
         
-        if (this.ttsWs) {
-            this.ttsWs.close();
-            this.ttsWs = null;
+        if (this.agentWs) {
+            try {
+                if (this.agentWs.readyState === WebSocket.OPEN) {
+                    this.agentWs.send(JSON.stringify({
+                        type: 'EndSession'
+                    }));
+                }
+                this.agentWs.close();
+            } catch (error) {
+                logger.error('Error closing Deepgram Agent connection:', error);
+            }
+            this.agentWs = null;
         }
         
         this.isConnected = false;
+        this.isConfigured = false;
     }
     
     getProviderName() {
@@ -499,55 +367,38 @@ class DeepgramProvider extends BaseProvider {
     }
     
     getCostMetrics() {
-        // Deepgram pricing (example rates)
-        const sttCostPerMinute = 0.0043;  // STT
-        const ttsCostPerMinute = 0.015;   // TTS (Aura models)
+        // Calculate session duration
+        const duration = this.audioMetrics.start_time 
+            ? (Date.now() - this.audioMetrics.start_time) / 60000 
+            : 0;
         
-        const sttCost = this.audioMetrics.stt_minutes * sttCostPerMinute;
-        const ttsCost = this.audioMetrics.tts_minutes * ttsCostPerMinute;
+        // Deepgram Agent pricing (example rates)
+        const agentCostPerMinute = 0.0195; // Approximate combined cost
         
-        // Add LLM costs (OpenAI calls for conversation logic)
-        const llmCost = this.estimateLLMCost();
-        
-        const baseCost = sttCost + ttsCost + llmCost;
+        const baseCost = duration * agentCostPerMinute;
         
         return {
             provider: 'deepgram',
-            stt_minutes: this.audioMetrics.stt_minutes,
-            tts_minutes: this.audioMetrics.tts_minutes,
-            llm_calls: this.conversationHistory.filter(m => m.role === 'assistant').length,
+            session_minutes: duration,
             base_cost: baseCost,
             breakdown: {
-                stt: sttCost,
-                tts: ttsCost,
-                llm: llmCost
-            }
+                agent: baseCost
+            },
+            // For compatibility with existing cost tracking
+            input_audio_seconds: duration * 60,
+            output_audio_seconds: duration * 60,
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0
         };
     }
     
-    calculateSTTCost() {
-        if (this.audioMetrics.stt_start) {
-            const duration = Date.now() - this.audioMetrics.stt_start;
-            this.audioMetrics.stt_minutes = duration / 60000;
+    calculateCost() {
+        if (this.audioMetrics.start_time) {
+            const duration = (Date.now() - this.audioMetrics.start_time) / 60000;
+            this.audioMetrics.stt_minutes = duration;
+            this.audioMetrics.tts_minutes = duration;
         }
-    }
-    
-    calculateTTSCost() {
-        if (this.audioMetrics.tts_start) {
-            const duration = Date.now() - this.audioMetrics.tts_start;
-            this.audioMetrics.tts_minutes = duration / 60000;
-        }
-    }
-    
-    estimateLLMCost() {
-        // Rough estimate based on conversation length
-        const totalMessages = this.conversationHistory.length;
-        const estimatedTokens = totalMessages * 200; // ~200 tokens per message
-        
-        // GPT-4o-mini pricing
-        const costPerToken = 0.00000015; // $0.150 / 1M tokens
-        
-        return estimatedTokens * costPerToken;
     }
 }
 
