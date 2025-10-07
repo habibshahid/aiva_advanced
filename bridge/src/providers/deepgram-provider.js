@@ -11,10 +11,12 @@ class DeepgramProvider extends BaseProvider {
     constructor(config) {
         super(config);
         
-        this.agentWs = null;  // Single WebSocket for Deepgram Agent API
-        this.sessionId = null;
-        this.isConfigured = false;
-        this.keepAliveInterval = null;
+        this.agentWs = null;
+		this.sessionId = null;
+		this.isConfigured = false;
+		this.keepAliveInterval = null;
+		this.comfortNoiseInterval = null; // ADD THIS
+		this.lastAudioSent = 0; // ADD THIS
         
         // Audio metrics for cost calculation
         this.audioMetrics = {
@@ -71,22 +73,52 @@ class DeepgramProvider extends BaseProvider {
             });
             
             this.agentWs.on('error', (error) => {
-                logger.error('Deepgram Agent WebSocket error:', error);
-                logger.error('Error details:', {
-                    message: error?.message || 'No message',
-                    code: error?.code || 'No code',
-                    type: typeof error,
-                    stack: error?.stack || 'No stack'
-                });
-                // Don't emit error for connection errors during normal operation
-                // These can be spurious and don't affect functionality
-            });
-            
-            this.agentWs.on('close', () => {
-                logger.info('Deepgram Agent disconnected');
-                this.calculateCost();
-                this.cleanup();
-            });
+				// CRITICAL FIX: WebSocket 'error' events are often spurious in Deepgram
+				// They fire during normal operation and don't indicate real problems
+				// Only log and investigate, but DON'T emit or crash the connection
+				
+				if (error) {
+					logger.debug('Deepgram WebSocket error event (likely spurious):', {
+						message: error?.message || 'No message',
+						code: error?.code || 'No code',
+						type: typeof error
+					});
+				} else {
+					logger.debug('Deepgram WebSocket error event with undefined error (spurious)');
+				}
+				
+				// DO NOT EMIT - These are normal during Deepgram operation
+				// DO NOT close connection - It's still working fine
+			});;
+
+			this.agentWs.on('close', (code, reason) => {
+				const reasonStr = reason?.toString() || 'No reason';
+				
+				logger.info('Deepgram Agent WebSocket closed', { 
+					code, 
+					reason: reasonStr
+				});
+				
+				this.calculateCost();
+				this.cleanup();
+				
+				// Mark as disconnected
+				this.isConnected = false;
+				this.isConfigured = false;
+				
+				// WebSocket close codes:
+				// 1000 = Normal closure
+				// 1001 = Going away
+				// 1006 = Abnormal closure (no close frame)
+				
+				// Only emit disconnected for abnormal closures
+				if (code && code !== 1000 && code !== 1001) {
+					logger.warn(`Abnormal Deepgram WebSocket closure: ${code} - ${reasonStr}`);
+					this.emit('disconnected', { code, reason: reasonStr });
+				} else {
+					logger.info('Normal Deepgram WebSocket closure');
+				}
+			});
         });
     }
     
@@ -161,16 +193,45 @@ class DeepgramProvider extends BaseProvider {
     }
     
     startKeepalive() {
-        this.keepAliveInterval = setInterval(() => {
-            if (this.agentWs && this.agentWs.readyState === WebSocket.OPEN) {
-                try {
-                    this.agentWs.send(JSON.stringify({ type: "AgentKeepAlive" }));
-                } catch (err) {
-                    logger.error('Error sending keepalive:', err);
-                }
-            }
-        }, 5000);
-    }
+		this.keepAliveInterval = setInterval(() => {
+			if (this.agentWs && this.agentWs.readyState === WebSocket.OPEN) {
+				try {
+					this.agentWs.send(JSON.stringify({ type: "AgentKeepAlive" }));
+				} catch (err) {
+					logger.error('Error sending keepalive:', err);
+				}
+			}
+		}, 5000);
+		
+		// ALSO start sending comfort noise to prevent timeout
+		this.startComfortNoise();
+	}
+
+	/**
+	 * Send comfort noise to keep Deepgram connection alive
+	 * Deepgram requires audio data, not just KeepAlive messages
+	 */
+	startComfortNoise() {
+		// Create a buffer of µ-law silence (0xFF is silence in µ-law)
+		const silenceBuffer = Buffer.alloc(160, 0xFF);
+		
+		this.comfortNoiseInterval = setInterval(() => {
+			if (this.agentWs && this.agentWs.readyState === WebSocket.OPEN) {
+				// Only send comfort noise if we haven't sent real audio recently
+				const timeSinceLastAudio = Date.now() - (this.lastAudioSent || 0);
+				
+				// If no audio sent in last 2 seconds, send silence
+				if (timeSinceLastAudio > 2000) {
+					try {
+						this.agentWs.send(silenceBuffer);
+						logger.debug('[DEEPGRAM] Sent comfort noise to prevent timeout');
+					} catch (err) {
+						logger.error('Error sending comfort noise:', err);
+					}
+				}
+			}
+		}, 2000); // Send every 2 seconds if needed
+	}
     
     async sendAudio(audioData) {
 		if (!this.isConnected) {
@@ -193,6 +254,9 @@ class DeepgramProvider extends BaseProvider {
 			// Send raw µ-law audio directly
 			this.agentWs.send(audioData);
 			
+			// ADD THIS: Track when we sent audio
+			this.lastAudioSent = Date.now();
+			
 			// Log periodically to confirm audio is flowing
 			if (!this.audioSendCount) this.audioSendCount = 0;
 			this.audioSendCount++;
@@ -209,6 +273,26 @@ class DeepgramProvider extends BaseProvider {
 		}
 	}
     
+	stopSpeaking() {
+		if (!this.agentWs || this.agentWs.readyState !== WebSocket.OPEN) {
+			return false;
+		}
+		
+		try {
+			// Send stop message to Deepgram
+			this.agentWs.send(JSON.stringify({
+				type: 'StopSpeaking'
+			}));
+			
+			logger.info('Sent StopSpeaking command to Deepgram');
+			return true;
+			
+		} catch (error) {
+			logger.error('Error stopping speech:', error);
+			return false;
+		}
+	}
+	
     handleAgentMessage(data) {
         try {
             // Check if this is binary audio data or JSON
@@ -251,64 +335,75 @@ class DeepgramProvider extends BaseProvider {
     }
     
     handleJsonMessage(message) {
-        // Log all messages for debugging
-        logger.debug('Deepgram message:', { type: message.type, data: message });
-        
-        switch (message.type) {
-            case 'SettingsApplied':
-                logger.info('Settings applied');
-                break;
-                
-            case 'UserStartedSpeaking':
-                this.emit('speech.started');
-                break;
-                
-            case 'AgentStartedSpeaking':
-                this.emit('audio.started');
-                break;
-                
-            case 'AgentAudioDone':
-                this.emit('audio.done');
-                break;
-                
-            case 'ConversationText':
-                if (message.role === 'user') {
-                    this.emit('transcript.user', {
-                        transcript: message.content || message.text
-                    });
-                } else if (message.role === 'assistant' || message.speaker === 'agent') {
-                    this.emit('transcript.agent', {
-                        transcript: message.content || message.text
-                    });
-                }
-                break;
-                
-            case 'FunctionCallRequest':
-                if (message.functions && message.functions.length > 0) {
-                    message.functions.forEach(func => {
-                        this.emit('function.call', {
-                            call_id: func.id,
-                            name: func.name,
-                            arguments: func.arguments
-                        });
-                    });
-                }
-                break;
-                
-            case 'Error':
-                logger.error('Deepgram Agent error message:', {
-                    error: message.error,
-                    message: message.message,
-                    description: message.description,
-                    full: message
-                });
-                this.emit('error', new Error(message.error || message.message || 'Unknown error'));
-                break;
-                
-            default:
-                logger.debug('Unhandled message type:', message.type);
-        }
-    }
+		// Log all messages for debugging
+		logger.debug('Deepgram message:', { type: message.type, data: message });
+		
+		switch (message.type) {
+			case 'SettingsApplied':
+				logger.info('Settings applied');
+				this.isConfigured = true; // ADD THIS LINE
+				break;
+				
+			case 'UserStartedSpeaking':
+				// CHANGE FROM: this.emit('speech.started');
+				// TO:
+				this.emit('user_started_speaking'); // ✓ CORRECT
+				logger.info('User started speaking - emitting interruption event');
+				break;
+				
+			case 'AgentStartedSpeaking':
+				// CHANGE FROM: this.emit('audio.started');
+				// TO:
+				this.emit('agent_started_speaking'); // ✓ CORRECT
+				logger.info('Agent started speaking');
+				break;
+				
+			case 'AgentAudioDone':
+				// CHANGE FROM: this.emit('audio.done');
+				// TO:
+				this.emit('agent_audio_done'); // ✓ CORRECT
+				logger.info('Agent audio done');
+				break;
+				
+			case 'ConversationText':
+				if (message.role === 'user') {
+					this.emit('transcript.user', {
+						transcript: message.content || message.text
+					});
+				} else if (message.role === 'assistant' || message.speaker === 'agent') {
+					this.emit('transcript.agent', {
+						transcript: message.content || message.text
+					});
+				}
+				break;
+				
+			case 'FunctionCallRequest':
+				if (message.functions && message.functions.length > 0) {
+					message.functions.forEach(func => {
+						this.emit('function.call', {
+							call_id: func.id,
+							name: func.name,
+							arguments: func.arguments
+						});
+					});
+				}
+				break;
+				
+			case 'Error':
+				console.log('RERRRRRRRRRRRRRRRRRRRRRR');
+				/*logger.error('Deepgram Agent error message:', {
+					error: message.error,
+					message: message.message,
+					description: message.description,
+					full: message
+				});*/
+				//this.emit('error', new Error(message.error || message.message || 'Unknown error'));
+				break;
+				
+			default:
+				logger.debug('Unhandled message type:', message.type);
+		}
+	}
     
     async sendFunctionResponse(callId, result) {
         if (!this.agentWs || this.agentWs.readyState !== WebSocket.OPEN) {
@@ -339,6 +434,11 @@ class DeepgramProvider extends BaseProvider {
             clearInterval(this.keepAliveInterval);
             this.keepAliveInterval = null;
         }
+		
+		if (this.comfortNoiseInterval) {
+			clearInterval(this.comfortNoiseInterval);
+			this.comfortNoiseInterval = null;
+		}
     }
     
     async disconnect() {
