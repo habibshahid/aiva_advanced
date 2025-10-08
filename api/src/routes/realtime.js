@@ -8,6 +8,59 @@ require('dotenv').config();
 const router = express.Router();
 
 // Get ephemeral token for realtime testing
+router.post('/token/deepgram', verifyToken, async (req, res) => {
+    try {
+        const { agent_id } = req.body;
+        
+        if (!agent_id) {
+            return res.status(400).json({ error: 'agent_id is required' });
+        }
+        
+        // Get agent details
+        const [agents] = await db.query(
+            'SELECT * FROM yovo_tbl_aiva_agents WHERE id = ? AND tenant_id = ?',
+            [agent_id, req.user.id]
+        );
+        
+        if (agents.length === 0) {
+            return res.status(404).json({ error: 'Agent not found' });
+        }
+        
+        const agent = agents[0];
+        
+        if (agent.provider !== 'deepgram') {
+            return res.status(400).json({ error: 'Agent is not configured for Deepgram' });
+        }
+        
+        // Generate session ID
+        const session_id = uuidv4();
+        
+        // Create call log
+        await db.query(
+            `INSERT INTO yovo_tbl_aiva_call_logs 
+            (id, session_id, tenant_id, agent_id, caller_id, status, asterisk_port, start_time) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [session_id, session_id, req.user.id, agent_id, 'web-test', 'in_progress', 0]
+        );
+        
+        res.json({
+            api_key: process.env.DEEPGRAM_API_KEY,
+            session_id: session_id,
+            agent: {
+                model: agent.deepgram_model || 'nova-2',
+                voice: agent.deepgram_voice || 'aura-asteria-en',
+                language: agent.deepgram_language || 'en',
+                instructions: agent.instructions,
+				greeting: agent.greeting
+            }
+        });
+        
+    } catch (error) {
+        console.error('Deepgram token error:', error);
+        res.status(500).json({ error: 'Failed to generate Deepgram session' });
+    }
+});
+
 router.post('/token', verifyToken, async (req, res) => {
     try {
         const { agent_id } = req.body;
