@@ -85,6 +85,11 @@ class AsteriskOpenAIBridge {
             logger.info('Initializing function executor...');
             this.functionExecutor = new FunctionExecutor();
             
+			logger.info('Initializing transfer handler...');
+			const TransferHandler = require('./functions/transfer-handler');
+			this.transferHandler = new TransferHandler(this.redisClient);
+			this.registerBuiltInFunctions();
+			
             // Initialize session manager
             logger.info('Initializing session manager...');
             
@@ -154,152 +159,169 @@ class AsteriskOpenAIBridge {
             const clientKey = `${client.address}:${client.port}`;
             logger.info(`New RTP client: ${clientKey}`);
             
-            try {
+			setTimeout(async () => {
+				try {
                 // Get session info from Redis (stored by Asterisk)
-                const redisKey = `transcriptionPort:${client.port}`;
-                const callInfo = await this.redisClient.hGetAll(redisKey);
-                
-                if (!callInfo || !callInfo.sessionId) {
-                    logger.error(`No session info found in Redis for port ${client.port}`);
-                    return;
-                }
-                
-                const sessionId = callInfo.sessionId;
-                const callerNumber = callInfo.callerId || 'unknown';
-                const agentId = callInfo.agentId; // This is set by Asterisk
-                
-                logger.info(`Session: ${sessionId}, Caller: ${callerNumber}, Agent ID: ${agentId}`);
-                
-                if (!agentId) {
-                    logger.error(`No agent_id provided in Redis for session ${sessionId}`);
-                    return;
-                }
-                
-                // Load agent configuration from database
-                logger.info(`Loading agent: ${agentId}`);
-                const agentConfig = await this.agentLoader.getAgentById(agentId);
-                
-                if (!agentConfig) {
-                    logger.error(`Failed to load agent ${agentId}`);
-                    return;
-                }
-                
-                logger.info(`Loaded agent: ${agentConfig.name} (${agentConfig.id})`);
-                
-                // Get tenant ID from agent
-                const tenantId = callInfo.tenantId || agentConfig.tenant_id;
-                
-                // Check credits
-                if (this.creditManager) {
-                    const creditCheck = await this.creditManager.checkCredits(tenantId);
-                    
-                    if (!creditCheck.allowed) {
-                        logger.warn(`Call rejected: Insufficient credits for tenant ${tenantId}`);
-                        // TODO: Play "insufficient credits" message
-                        return;
-                    }
-                }
-                
-                // Register functions for this agent
-                await this.registerAgentFunctions(agentConfig.functions);
-
-				// Use the pre-formatted OpenAI tools from agent config
-				const tools = agentConfig.tools;
-                
-                logger.info(`Registered ${tools.length} functions for agent ${agentConfig.name}`);
-                
-				const customData = callInfo.customData ? JSON.parse(callInfo.customData) : {};
-				// Build context string
-				const contextString = `
-
-				===== CALLER INFORMATION =====
-				Caller ID: ${callerNumber}
-				Caller Name: ${callInfo.callerName || 'Unknown'}
-				Session ID: ${sessionId}
-				Call Start Time: ${new Date().toISOString()}
-
-				===== CUSTOM CONTEXT =====
-				${Object.entries(customData).map(([key, value]) => `${key}: ${value}`).join('\n')}
-
-				===== END OF CONTEXT =====
-
-				`;
-
-				// Prepend context to instructions
-				const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent.";
-
-                // Create connection
-                const connection = await this.connectionManager.createConnection(
-					clientKey,
-					client,
-					{
-						sessionId: sessionId,
-						provider: agentConfig.provider || 'openai',
-						model: agentConfig.config?.model || this.config.model,
-						voice: agentConfig.config?.voice || this.config.voice,
-						temperature: agentConfig.config?.temperature || this.config.temperature,
-						maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
-						vadThreshold: agentConfig.config?.vadThreshold || 0.5,
-						silenceDuration: agentConfig.config?.silenceDurationMs || 500,
-						instructions: fullInstructions,
-						callerId: callerNumber,
-						language: agentConfig.config?.language || 'en',
-						functions: tools,
-						greeting: agentConfig.greeting,
-						// Deepgram fields
-						deepgram_model: agentConfig.config?.deepgram_model,
-						deepgram_voice: agentConfig.config?.deepgram_voice,
-						deepgram_language: agentConfig.config?.deepgram_language,
-						// Metadata
-						agentId: agentConfig.id,
-						tenantId: tenantId,
-						asteriskPort: client.port
+				
+					const redisKey = `transcriptionPort:${client.port}`;
+					const callInfo = await this.redisClient.hGetAll(redisKey);
+					
+					if (!callInfo || !callInfo.sessionId) {
+						logger.error(`No session info found in Redis for port ${client.port}`);
+						return;
 					}
-				);
-
-				connection.tenantId = tenantId;
-				connection.agentId = agentConfig.id;
-				connection.baseInstructions = agentConfig.instructions;
-				connection.asteriskPort = client.port;
-
-				// Create call log
-				if (this.callLogger) {
-					connection.callLogId = await this.callLogger.createCallLog(
-						sessionId,
-						tenantId,
-						agentConfig.id,
-						callerNumber,
-						client.port
-					);
-				}
-
-				// Add to monitor
-				this.monitorServer.addConnection(clientKey, {
-					sessionId: sessionId,
-					rtpInfo: {
-						clientKey: clientKey,
-						address: client.address,
-						port: client.port
-					},
-					callerId: callerNumber,
-					agentName: agentConfig.name,
-					tenantId: tenantId
-				});
-
-				// Trigger initial greeting
-				setTimeout(() => {
-					try {
-						if (connection.session && connection.session.client) {
-							connection.session.client.createResponse();
+					
+					const sessionId = callInfo.sessionId;
+					const callerNumber = callInfo.callerId || 'unknown';
+					const agentId = callInfo.agentId; // This is set by Asterisk
+					
+					logger.info(`Session: ${sessionId}, Caller: ${callerNumber}, Agent ID: ${agentId}`);
+					
+					if (!agentId) {
+						logger.error(`No agent_id provided in Redis for session ${sessionId}`);
+						return;
+					}
+					
+					// Load agent configuration from database
+					logger.info(`Loading agent: ${agentId}`);
+					const agentConfig = await this.agentLoader.getAgentById(agentId);
+					
+					if (!agentConfig) {
+						logger.error(`Failed to load agent ${agentId}`);
+						return;
+					}
+					
+					logger.info(`Loaded agent: ${agentConfig.name} (${agentConfig.id})`);
+					
+					// Get tenant ID from agent
+					const tenantId = callInfo.tenantId || agentConfig.tenant_id;
+					
+					// Check credits
+					if (this.creditManager) {
+						const creditCheck = await this.creditManager.checkCredits(tenantId);
+						
+						if (!creditCheck.allowed) {
+							logger.warn(`Call rejected: Insufficient credits for tenant ${tenantId}`);
+							// TODO: Play "insufficient credits" message
+							return;
 						}
-					} catch (error) {
-						logger.error('Error triggering initial greeting:', error);
 					}
-				}, 500);
-                
-            } catch (error) {
-                logger.error(`Error creating connection for ${clientKey}:`, error);
-            }
+					
+					// Register functions for this agent
+					await this.registerAgentFunctions(agentConfig.functions);
+
+					// Use the pre-formatted OpenAI tools from agent config
+					const tools = agentConfig.tools;
+					
+					logger.info(`Registered ${tools.length} functions for agent ${agentConfig.name}`);
+					
+					const customData = callInfo.customData ? JSON.parse(callInfo.customData) : {};
+					// Build context string
+					const contextString = `
+
+					===== CALLER INFORMATION =====
+					Caller ID: ${callerNumber}
+					Caller Name: ${callInfo.callerName || 'Unknown'}
+					Session ID: ${sessionId}
+					Call Start Time: ${new Date().toISOString()}
+
+					===== CUSTOM CONTEXT =====
+					${Object.entries(customData).map(([key, value]) => `${key}: ${value}`).join('\n')}
+
+					===== END OF CONTEXT =====
+
+					`;
+
+					// Prepend context to instructions
+					const transferInstructions = `
+CRITICAL TRANSFER INSTRUCTIONS:
+When a customer requests to speak with a human agent:
+1. IMMEDIATELY call the transfer_to_agent function - DO NOT speak first
+2. DO NOT say "I'm transferring you" or any message before calling the function
+3. After calling transfer_to_agent, the system will automatically handle the transfer message
+4. NEVER just acknowledge the transfer request without calling the function
+
+The queue names should be specified in your instructions above. Common queues are: sales, support, billing, general.
+
+IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or similar:
+→ Call transfer_to_agent function FIRST
+→ Do NOT generate a spoken response
+→ Let the function handle the transfer message
+`;
+					const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent." + transferInstructions;
+
+					// Create connection
+					const connection = await this.connectionManager.createConnection(
+						clientKey,
+						client,
+						{
+							sessionId: sessionId,
+							provider: agentConfig.provider || 'openai',
+							model: agentConfig.config?.model || this.config.model,
+							voice: agentConfig.config?.voice || this.config.voice,
+							temperature: agentConfig.config?.temperature || this.config.temperature,
+							maxResponseTokens: agentConfig.config?.maxTokens || this.config.maxResponseTokens,
+							vadThreshold: agentConfig.config?.vadThreshold || 0.5,
+							silenceDuration: agentConfig.config?.silenceDurationMs || 500,
+							instructions: fullInstructions,
+							callerId: callerNumber,
+							language: agentConfig.config?.language || 'en',
+							functions: tools,
+							greeting: agentConfig.greeting,
+							// Deepgram fields
+							deepgram_model: agentConfig.config?.deepgram_model,
+							deepgram_voice: agentConfig.config?.deepgram_voice,
+							deepgram_language: agentConfig.config?.deepgram_language,
+							// Metadata
+							agentId: agentConfig.id,
+							tenantId: tenantId,
+							asteriskPort: client.port
+						}
+					);
+
+					connection.tenantId = tenantId;
+					connection.agentId = agentConfig.id;
+					connection.baseInstructions = agentConfig.instructions;
+					connection.asteriskPort = client.port;
+
+					// Create call log
+					if (this.callLogger) {
+						connection.callLogId = await this.callLogger.createCallLog(
+							sessionId,
+							tenantId,
+							agentConfig.id,
+							callerNumber,
+							client.port
+						);
+					}
+
+					// Add to monitor
+					this.monitorServer.addConnection(clientKey, {
+						sessionId: sessionId,
+						rtpInfo: {
+							clientKey: clientKey,
+							address: client.address,
+							port: client.port
+						},
+						callerId: callerNumber,
+						agentName: agentConfig.name,
+						tenantId: tenantId
+					});
+
+					// Trigger initial greeting
+					setTimeout(() => {
+						try {
+							if (connection.session && connection.session.client) {
+								connection.session.client.createResponse();
+							}
+						} catch (error) {
+							logger.error('Error triggering initial greeting:', error);
+						}
+					}, 500);
+				} catch (error) {
+					logger.error(`Error creating connection for ${clientKey}:`, error);
+				}
+			},700)
         });
         
 		this.rtpServer.on('audio', async (data) => {
@@ -490,27 +512,41 @@ class AsteriskOpenAIBridge {
 					retries: func.retries
 				});
 			} else if (func.handler_type === 'inline') {
-				// Placeholder for inline functions
-				this.functionExecutor.registerFunction(
-					func.name, 
-					async (args) => {
+				// Handle built-in transfer function
+				if (func.name === 'transfer_to_agent' || func.name === 'transfer_call') {
+					this.functionExecutor.registerFunction(func.name, async (args, context) => {
+						return await this.transferHandler.transferCall(args, context);
+					});
+					logger.info(`Registered transfer function: ${func.name}`);
+				} else {
+					// Placeholder for other inline functions
+					this.functionExecutor.registerFunction(func.name, async (args) => {
 						logger.warn(`Inline function ${func.name} called but no handler implemented`);
 						return {
 							success: false,
 							message: `Function ${func.name} is configured as inline but has no implementation`
 						};
-					},
-					{
-						execution_mode: func.execution_mode || 'sync',
-						timeout_ms: func.timeout_ms || 30000,
-						retries: func.retries || 2
-					}
-				);
+					});
+				}
 			}
 		}
 		
 		// Return tools from agent config (already formatted by dynamic loader)
 		return tools;
+	}
+	
+	/**
+	 * Register built-in transfer function for all agents
+	 */
+	registerBuiltInFunctions() {
+		logger.info('Registering built-in transfer_to_agent function...');
+		
+		// Always register the transfer function
+		this.functionExecutor.registerFunction('transfer_to_agent', async (args, context) => {
+			return await this.transferHandler.transferCall(args, context);
+		});
+		
+		logger.info('Built-in transfer_to_agent function registered');
 	}
     
     startCleanupIntervals() {

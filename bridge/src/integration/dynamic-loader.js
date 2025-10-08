@@ -84,15 +84,53 @@ class DynamicAgentLoader {
      */
     formatAgentForBridge(agent) {
 		// Format functions for OpenAI (only what OpenAI needs)
-		const openAITools = (agent.functions || [])
-			.filter(f => f.is_active)
-			.map(func => ({
-				type: "function",
-				name: func.name,
-				description: func.description,
-				parameters: func.parameters
-			}));
+		const builtInTransferTool = {
+			type: "function",
+			name: "transfer_to_agent",
+			description: "IMMEDIATELY transfer the call to a human agent queue when requested. DO NOT respond with speech first - call this function right away when customer asks for human agent, transfer, or live person. This is the ONLY correct action when transfer is requested.",
+			parameters: {
+				type: "object",
+				properties: {
+					queue: {
+						type: "string",
+						description: "The queue name to transfer to (e.g., sales, support, billing)"
+					}
+				},
+				required: ["queue"]
+			}
+		};
 		
+		const openAITools = [
+			builtInTransferTool, // Always include transfer tool first
+			...(agent.functions || [])
+				.filter(f => f.is_active)
+				.map(func => ({
+					type: "function",
+					name: func.name,
+					description: func.description,
+					parameters: func.parameters
+				}))
+		];
+		
+		const builtInTransferFunction = {
+			id: 'builtin_transfer_to_agent',
+			agent_id: agent.id,
+			name: 'transfer_to_agent',
+			description: 'IMMEDIATELY transfer the call to a human agent queue when requested. DO NOT respond with speech first - call this function right away when customer asks for human agent, transfer, or live person. This is the ONLY correct action when transfer is requested.',
+			execution_mode: 'sync',
+			handler_type: 'inline',
+			parameters: {
+				type: "object",
+				properties: {
+					queue: {
+						type: "string",
+						description: "The queue name to transfer to"
+					}
+				},
+				required: ["queue"]
+			},
+			is_active: true
+		};
 		return {
 			id: agent.id,
 			name: agent.name,
@@ -101,7 +139,7 @@ class DynamicAgentLoader {
 			greeting: agent.greeting || `Hello! This is ${agent.name}. How can I help you?`,
 			instructions: agent.instructions,
 			tools: openAITools,
-			functions: agent.functions || [],
+			functions: [builtInTransferFunction, ...(agent.functions || [])],
 			config: {
 				voice: agent.voice || 'shimmer',
 				language: agent.language || 'en',

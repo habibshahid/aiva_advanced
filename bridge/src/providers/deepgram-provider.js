@@ -219,11 +219,15 @@ class DeepgramProvider extends BaseProvider {
 						model: "gpt-4o-mini",
 					},
 					prompt: agentConfig.instructions,
-					functions: agentConfig.functions || []
+					functions: (agentConfig.functions || []).map(func => ({
+						name: func.name,
+						description: func.description,
+						parameters: func.parameters
+					}))
 				},
 			},
 		};
-		
+				
 		// CRITICAL: Wait for SettingsApplied before returning
 		// This matches the working server-deepgram.js implementation
 		return new Promise((resolve, reject) => {

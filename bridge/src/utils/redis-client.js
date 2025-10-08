@@ -106,6 +106,51 @@ class RedisClient {
         }
     }
     
+	/**
+	 * Publish message to Redis channel
+	 */
+	async publish(channel, message) {
+		try {
+			return await this.client.publish(channel, message);
+		} catch (error) {
+			logger.error(`Redis PUBLISH error for channel ${channel}:`, error);
+			return false;
+		}
+	}
+
+	/**
+	 * Subscribe to Redis channel
+	 * Note: Requires a separate subscriber client
+	 */
+	async subscribe(channel, callback) {
+		try {
+			const subscriber = this.client.duplicate();
+			await subscriber.connect();
+			
+			await subscriber.subscribe(channel, (message) => {
+				callback(message);
+			});
+			
+			logger.info(`Subscribed to Redis channel: ${channel}`);
+			return subscriber;
+		} catch (error) {
+			logger.error(`Redis SUBSCRIBE error for channel ${channel}:`, error);
+			return null;
+		}
+	}
+
+	/**
+	 * Set expiry on existing key
+	 */
+	async expire(key, seconds) {
+		try {
+			return await this.client.expire(key, seconds);
+		} catch (error) {
+			logger.error(`Redis EXPIRE error for key ${key}:`, error);
+			return false;
+		}
+	}
+
     async disconnect() {
         if (this.client && this.isConnected) {
             await this.client.quit();

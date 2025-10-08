@@ -527,10 +527,13 @@ class ConnectionManager extends EventEmitter {
             // SYNC: Wait for execution
             try {
                 const result = await this.functionExecutor.execute(functionName, args, {
-                    sessionId: connection.sessionId,
-                    clientKey: connection.clientKey,
-                    callerId: connection.callerId
-                });
+					sessionId: connection.sessionId,
+					clientKey: connection.clientKey,
+					callerId: connection.callerId,
+					asteriskPort: connection.asteriskPort,
+					tenantId: connection.tenantId,
+					agentId: connection.agentId
+				});
                 
                 logger.info(`Function ${functionName} result:`, result);
                 
