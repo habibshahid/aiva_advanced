@@ -92,11 +92,82 @@ const AgentEditor = () => {
   });
   const [showParameterForm, setShowParameterForm] = useState(false);
 
+  // Add this handler function after your state declarations
+	const handleProviderChange = (newProvider) => {
+	  if (newProvider === 'openai') {
+		setAgent({
+		  ...agent,
+		  provider: 'openai',
+		  voice: 'shimmer',
+		  model: 'gpt-4o-mini-realtime-preview-2024-12-17',
+		  language: 'en',
+		  deepgram_model: null,
+		  deepgram_voice: null,
+		  deepgram_language: null
+		});
+		toast.success('Switched to OpenAI - defaults applied');
+	  } else if (newProvider === 'deepgram') {
+		setAgent({
+		  ...agent,
+		  provider: 'deepgram',
+		  deepgram_model: 'nova-2',
+		  deepgram_voice: 'shimmer',
+		  deepgram_language: 'en',
+		  voice: null,
+		  model: null
+		});
+		toast.success('Switched to Deepgram - defaults applied');
+	  }
+	};
+
   useEffect(() => {
     if (id) {
       loadAgent();
     }
   }, [id]);
+
+	const loadAgent = async () => {
+	  try {
+		setLoading(true);
+		const response = await getAgent(id);
+		const loadedAgent = response.data.agent;
+		
+		// Ensure provider-specific fields have defaults
+		if (loadedAgent.provider === 'openai') {
+		  setAgent({
+			...loadedAgent,
+			voice: loadedAgent.voice || 'shimmer',
+			model: loadedAgent.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+			language: loadedAgent.language || 'en'
+		  });
+		} else if (loadedAgent.provider === 'deepgram') {
+		  setAgent({
+			...loadedAgent,
+			deepgram_model: loadedAgent.deepgram_model || 'nova-2',
+			deepgram_voice: loadedAgent.deepgram_voice || 'shimmer',
+			deepgram_language: loadedAgent.deepgram_language || 'en'
+		  });
+		} else {
+		  // Default to OpenAI if no provider set
+		  setAgent({
+			...loadedAgent,
+			provider: 'openai',
+			voice: loadedAgent.voice || 'shimmer',
+			model: loadedAgent.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+			language: loadedAgent.language || 'en'
+		  });
+		}
+		
+		// Load functions
+		const functionsResponse = await getFunctions(id);
+		setFunctions(functionsResponse.data.functions || []);
+	  } catch (error) {
+		toast.error('Failed to load agent');
+		console.error(error);
+	  } finally {
+		setLoading(false);
+	  }
+	};
 
 	const generateAIInstructions = async () => {
 	  if (!agent.name) {
@@ -137,24 +208,6 @@ const AgentEditor = () => {
 	  setGeneratedInstructions('');
 	  toast.info('Instructions discarded');
 	};
-
-  const loadAgent = async () => {
-    setLoading(true);
-    try {
-      const [agentRes, functionsRes] = await Promise.all([
-        getAgent(id),
-        getFunctions(id)
-      ]);
-      
-      setAgent(agentRes.data.agent);
-      setFunctions(functionsRes.data.functions);
-    } catch (error) {
-      toast.error('Failed to load agent');
-      navigate('/agents');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSave = async () => {
     if (!agent.name || !agent.instructions) {
@@ -697,10 +750,10 @@ const AgentEditor = () => {
 			<div>
 			  <label className="block text-sm font-medium text-gray-700">Provider</label>
 			  <select
-				value={agent.provider || 'openai'}
-				onChange={(e) => setAgent({ ...agent, provider: e.target.value })}
-				className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-			  >
+				  value={agent.provider || 'openai'}
+				  onChange={(e) => handleProviderChange(e.target.value)}
+				  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+				>
 				<option value="openai">OpenAI Realtime API</option>
 				<option value="deepgram">Deepgram</option>
 			  </select>
@@ -733,31 +786,174 @@ const AgentEditor = () => {
 			) : (
 			  <>
 				<div>
-				  <label className="block text-sm font-medium text-gray-700">STT Model</label>
+				  <label className="block text-sm font-medium text-gray-700">
+					Speech-to-Text (STT) Model
+				  </label>
 				  <select
 					value={agent.deepgram_model || 'nova-2'}
 					onChange={(e) => setAgent({ ...agent, deepgram_model: e.target.value })}
 					className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
 				  >
-					<option value="nova-2">Nova 2</option>
-					<option value="nova-2-general">Nova 2 General</option>
-					<option value="nova-2-phonecall">Nova 2 Phonecall</option>
+					<optgroup label="Nova-3 (Recommended - Best Accuracy)">
+					  <option value="nova-3">Nova-3 General</option>
+					  <option value="nova-3-general">Nova-3 General (Explicit)</option>
+					  <option value="nova-3-phonecall">Nova-3 Phone Call</option>
+					  <option value="nova-3-medical">Nova-3 Medical</option>
+					  <option value="nova-3-finance">Nova-3 Finance</option>
+					  <option value="nova-3-conversationalai">Nova-3 Conversational AI</option>
+					  <option value="nova-3-voicemail">Nova-3 Voicemail</option>
+					  <option value="nova-3-video">Nova-3 Video</option>
+					  <option value="nova-3-meeting">Nova-3 Meeting</option>
+					  <option value="nova-3-drive_thru">Nova-3 Drive-Thru</option>
+					  <option value="nova-3-automotive">Nova-3 Automotive</option>
+					</optgroup>
+					<optgroup label="Nova-2 (Good for Non-English)">
+					  <option value="nova-2">Nova-2 General</option>
+					  <option value="nova-2-general">Nova-2 General (Explicit)</option>
+					  <option value="nova-2-phonecall">Nova-2 Phone Call</option>
+					  <option value="nova-2-meeting">Nova-2 Meeting</option>
+					  <option value="nova-2-voicemail">Nova-2 Voicemail</option>
+					  <option value="nova-2-finance">Nova-2 Finance</option>
+					  <option value="nova-2-conversationalai">Nova-2 Conversational AI</option>
+					  <option value="nova-2-video">Nova-2 Video</option>
+					  <option value="nova-2-medical">Nova-2 Medical</option>
+					  <option value="nova-2-drivethru">Nova-2 Drive-Thru</option>
+					  <option value="nova-2-automotive">Nova-2 Automotive</option>
+					</optgroup>
+					<optgroup label="Flux (Voice Agents - NEW)">
+					  <option value="flux">Flux (Conversational Flow)</option>
+					</optgroup>
+					<optgroup label="Legacy Models">
+					  <option value="nova">Nova-1</option>
+					  <option value="enhanced">Enhanced General</option>
+					  <option value="enhanced-general">Enhanced General (Explicit)</option>
+					  <option value="enhanced-phonecall">Enhanced Phone Call</option>
+					  <option value="enhanced-meeting">Enhanced Meeting</option>
+					  <option value="base">Base General</option>
+					  <option value="base-general">Base General (Explicit)</option>
+					  <option value="base-phonecall">Base Phone Call</option>
+					  <option value="base-meeting">Base Meeting</option>
+					</optgroup>
+					<optgroup label="Whisper (Slower, Limited)">
+					  <option value="whisper-tiny">Whisper Tiny</option>
+					  <option value="whisper-base">Whisper Base</option>
+					  <option value="whisper-small">Whisper Small</option>
+					  <option value="whisper-medium">Whisper Medium</option>
+					  <option value="whisper-large">Whisper Large</option>
+					</optgroup>
 				  </select>
+				  <p className="mt-1 text-xs text-gray-500">
+					Nova-3 offers best accuracy. Flux is optimized for voice agents with built-in turn detection.
+				  </p>
 				</div>
+
 				<div>
-				  <label className="block text-sm font-medium text-gray-700">TTS Voice</label>
+				  <label className="block text-sm font-medium text-gray-700">
+					STT Language
+				  </label>
 				  <select
-					value={agent.deepgram_voice || 'aura-asteria-en'}
+					value={agent.deepgram_language || 'en'}
+					onChange={(e) => setAgent({ ...agent, deepgram_language: e.target.value })}
+					className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+				  >
+					<optgroup label="Multilingual (Nova-2 & Nova-3)">
+					  <option value="multi">🌍 Multi (10 Languages - Code Switching)</option>
+					</optgroup>
+					<optgroup label="Common Languages">
+					  <option value="en">🇺🇸 English</option>
+					  <option value="en-US">🇺🇸 English (US)</option>
+					  <option value="en-GB">🇬🇧 English (UK)</option>
+					  <option value="en-AU">🇦🇺 English (Australia)</option>
+					  <option value="en-NZ">🇳🇿 English (New Zealand)</option>
+					  <option value="en-IN">🇮🇳 English (India)</option>
+					  <option value="es">🇪🇸 Spanish</option>
+					  <option value="es-419">🇲🇽 Spanish (Latin America)</option>
+					  <option value="fr">🇫🇷 French</option>
+					  <option value="fr-CA">🇨🇦 French (Canada)</option>
+					  <option value="de">🇩🇪 German</option>
+					  <option value="hi">🇮🇳 Hindi</option>
+					  <option value="pt">🇵🇹 Portuguese</option>
+					  <option value="pt-BR">🇧🇷 Portuguese (Brazil)</option>
+					  <option value="ru">🇷🇺 Russian</option>
+					  <option value="ja">🇯🇵 Japanese</option>
+					  <option value="it">🇮🇹 Italian</option>
+					  <option value="nl">🇳🇱 Dutch</option>
+					  <option value="zh">🇨🇳 Chinese (Simplified)</option>
+					  <option value="zh-CN">🇨🇳 Chinese (Mandarin)</option>
+					  <option value="zh-TW">🇹🇼 Chinese (Taiwan)</option>
+					  <option value="ko">🇰🇷 Korean</option>
+					  <option value="tr">🇹🇷 Turkish</option>
+					  <option value="ar">🇸🇦 Arabic</option>
+					</optgroup>
+					<optgroup label="European Languages">
+					  <option value="pl">🇵🇱 Polish</option>
+					  <option value="uk">🇺🇦 Ukrainian</option>
+					  <option value="sv">🇸🇪 Swedish</option>
+					  <option value="da">🇩🇰 Danish</option>
+					  <option value="no">🇳🇴 Norwegian</option>
+					  <option value="fi">🇫🇮 Finnish</option>
+					  <option value="el">🇬🇷 Greek</option>
+					  <option value="cs">🇨🇿 Czech</option>
+					  <option value="ro">🇷🇴 Romanian</option>
+					  <option value="hu">🇭🇺 Hungarian</option>
+					  <option value="bg">🇧🇬 Bulgarian</option>
+					</optgroup>
+					<optgroup label="Asian Languages">
+					  <option value="th">🇹🇭 Thai</option>
+					  <option value="vi">🇻🇳 Vietnamese</option>
+					  <option value="id">🇮🇩 Indonesian</option>
+					  <option value="ms">🇲🇾 Malay</option>
+					  <option value="ta">🇮🇳 Tamil</option>
+					</optgroup>
+					<optgroup label="Other Languages">
+					  <option value="he">🇮🇱 Hebrew</option>
+					  <option value="ur">🇵🇰 Urdu</option>
+					</optgroup>
+				  </select>
+				  <p className="mt-1 text-xs text-gray-500">
+					{agent.deepgram_language === 'multi' 
+					  ? '🌍 Multi supports: English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, Dutch'
+					  : 'Select language for speech recognition. Use "Multi" for code-switching conversations.'}
+				  </p>
+				</div>
+
+				<div>
+				  <label className="block text-sm font-medium text-gray-700">
+					Text-to-Speech (TTS) Voice
+				  </label>
+				  <select
+					value={agent.deepgram_voice || 'shimmer'}
 					onChange={(e) => setAgent({ ...agent, deepgram_voice: e.target.value })}
 					className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
 				  >
-					<option value="aura-asteria-en">Asteria</option>
-					<option value="aura-luna-en">Luna</option>
-					<option value="aura-stella-en">Stella</option>
-					<option value="aura-athena-en">Athena</option>
-					<option value="aura-hera-en">Hera</option>
-					<option value="aura-orion-en">Orion</option>
+					<optgroup label="OpenAI Voices (Used with Deepgram STT)">
+					  <option value="alloy">Alloy (Neutral)</option>
+					  <option value="ash">Ash (Warm Male)</option>
+					  <option value="ballad">Ballad (Expressive)</option>
+					  <option value="coral">Coral (Friendly Female)</option>
+					  <option value="echo">Echo (Professional Male)</option>
+					  <option value="sage">Sage (Calm Female)</option>
+					  <option value="shimmer">Shimmer (Clear Female)</option>
+					  <option value="verse">Verse (Conversational)</option>
+					</optgroup>
+					<optgroup label="Deepgram Aura Voices (Alternative)">
+					  <option value="aura-asteria-en">Asteria (English - Female)</option>
+					  <option value="aura-luna-en">Luna (English - Female)</option>
+					  <option value="aura-stella-en">Stella (English - Female)</option>
+					  <option value="aura-athena-en">Athena (English - Female)</option>
+					  <option value="aura-hera-en">Hera (English - Female)</option>
+					  <option value="aura-orion-en">Orion (English - Male)</option>
+					  <option value="aura-arcas-en">Arcas (English - Male)</option>
+					  <option value="aura-perseus-en">Perseus (English - Male)</option>
+					  <option value="aura-angus-en">Angus (English - Irish Male)</option>
+					  <option value="aura-orpheus-en">Orpheus (English - Male)</option>
+					  <option value="aura-helios-en">Helios (English - Male)</option>
+					  <option value="aura-zeus-en">Zeus (English - Male)</option>
+					</optgroup>
 				  </select>
+				  <p className="mt-1 text-xs text-gray-500">
+					Currently using OpenAI TTS with Deepgram STT for best quality. Deepgram Aura voices coming soon.
+				  </p>
 				</div>
 			  </>
 			)}

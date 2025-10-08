@@ -2,6 +2,9 @@ api/.env
 api/node_modules/
 api/dashboard/node_modules/
 api/package-lock.json
+api/logs/
+api/dashboard/package-lock.json
+api/dashboard/node_modules/
 bridge/.env
 bridge/node_modules/
 bridge/package-lock.json

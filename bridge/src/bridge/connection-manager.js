@@ -262,6 +262,17 @@ class ConnectionManager extends EventEmitter {
         const provider = connection.provider;
         const sessionId = connection.sessionId;
         
+		provider.on('agent.ready', (event) => {
+			logger.info(`Agent ready for ${connection.clientKey}:`, event.agentName);
+			this.emit('agentReady', {
+				connection: connection,
+				agentName: event.agentName,
+				sessionId: event.sessionId,
+				status: 'ready',
+				type: 'status'
+			});
+		});
+
         // Speech detection
         provider.on('speech.started', () => {
             this.emit('userSpeechStarted', connection);
@@ -437,7 +448,7 @@ class ConnectionManager extends EventEmitter {
 			}
 			
 			// ADD THIS LOG
-			console.log(`[AUDIO-OUT] Received PCM16 24kHz: ${pcmBuffer.length} bytes`);
+			//console.log(`[AUDIO-OUT] Received PCM16 24kHz: ${pcmBuffer.length} bytes`);
 			
 			// Ensure even length
 			if (pcmBuffer.length % 2 !== 0) {
@@ -455,13 +466,13 @@ class ConnectionManager extends EventEmitter {
 			}
 			
 			// ADD THIS LOG
-			console.log(`[AUDIO-OUT] Resampled to PCM16 8kHz: ${downsampledBuffer.length} bytes`);
+			//console.log(`[AUDIO-OUT] Resampled to PCM16 8kHz: ${downsampledBuffer.length} bytes`);
 			
 			// Convert to µ-law for Asterisk
 			const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
 			
 			// ADD THIS LOG
-			console.log(`[AUDIO-OUT] Converted to µ-law: ${ulawBuffer.length} bytes`);
+			//console.log(`[AUDIO-OUT] Converted to µ-law: ${ulawBuffer.length} bytes`);
 			
 			// Add to audio queue for RTP transmission
 			connection.audioQueue.addAudio(ulawBuffer);

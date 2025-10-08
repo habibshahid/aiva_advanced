@@ -304,7 +304,7 @@ class AsteriskOpenAIBridge {
         
 		this.rtpServer.on('audio', async (data) => {
 			const clientKey = `${data.rinfo.address}:${data.rinfo.port}`;
-			console.log(`[DEBUG-RTP] Received ${data.buffer.length} bytes from Asterisk for ${clientKey}`);
+			//console.log(`[DEBUG-RTP] Received ${data.buffer.length} bytes from Asterisk for ${clientKey}`);
 			await this.connectionManager.handleRTPAudio(clientKey, data.buffer);
 		});
 
@@ -389,14 +389,19 @@ class AsteriskOpenAIBridge {
 							updateData.text_output_tokens = cost.text.output.tokens;
 							updateData.cached_tokens = cost.text.cached.tokens;
 						} else if (provider === 'deepgram') {
-							updateData.provider_audio_minutes = 
-								(connectionData.metrics?.stt_minutes || 0) + 
-								(connectionData.metrics?.tts_minutes || 0);
-							updateData.provider_metadata = {
-								stt_minutes: connectionData.metrics?.stt_minutes || 0,
-								tts_minutes: connectionData.metrics?.tts_minutes || 0,
-								llm_calls: connectionData.metrics?.llm_calls || 0
-							};
+							// Get cost metrics from provider
+							const providerCost = cost.provider_metrics || {};
+							
+							updateData.provider_audio_minutes = providerCost.session_minutes || 0;
+							
+							// Store provider metadata as JSON string
+							updateData.provider_metadata = JSON.stringify({
+								stt_minutes: providerCost.session_minutes || 0,
+								tts_minutes: providerCost.session_minutes || 0,
+								llm_calls: 0,
+								model: connectionData.deepgram_model || 'nova-2',
+								voice: connectionData.deepgram_voice || 'shimmer'
+							});
 						}
 						
 						await this.callLogger.updateCallLog(finalCost.sessionId, updateData);

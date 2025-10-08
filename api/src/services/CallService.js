@@ -39,6 +39,10 @@ class CallService {
             updates.start_time = date.toISOString().slice(0, 19).replace('T', ' ');
         }
 		
+		if (updates.provider_metadata && typeof updates.provider_metadata === 'object') {
+			updates.provider_metadata = JSON.stringify(updates.provider_metadata);
+		}
+		
 		const allowedFields = [
 			'end_time', 'duration_seconds', 'audio_input_seconds',
 			'audio_output_seconds', 'text_input_tokens', 'text_output_tokens',

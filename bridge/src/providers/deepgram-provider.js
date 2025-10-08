@@ -89,7 +89,7 @@ class DeepgramProvider extends BaseProvider {
 				
 				// DO NOT EMIT - These are normal during Deepgram operation
 				// DO NOT close connection - It's still working fine
-			});;
+			});
 
 			this.agentWs.on('close', (code, reason) => {
 				const reasonStr = reason?.toString() || 'No reason';
@@ -99,104 +99,200 @@ class DeepgramProvider extends BaseProvider {
 					reason: reasonStr
 				});
 				
-				this.calculateCost();
-				this.cleanup();
+				// DON'T cleanup or mark as disconnected immediately
+				// Let the connection manager decide what to do
 				
-				// Mark as disconnected
-				this.isConnected = false;
-				this.isConfigured = false;
-				
-				// WebSocket close codes:
-				// 1000 = Normal closure
-				// 1001 = Going away
-				// 1006 = Abnormal closure (no close frame)
-				
-				// Only emit disconnected for abnormal closures
-				if (code && code !== 1000 && code !== 1001) {
+				// Only handle truly abnormal closures
+				if (code && code !== 1000 && code !== 1001 && code !== 1006) {
 					logger.warn(`Abnormal Deepgram WebSocket closure: ${code} - ${reasonStr}`);
-					this.emit('disconnected', { code, reason: reasonStr });
+					
+					// Only NOW mark as disconnected for real errors
+					this.calculateCost();
+					this.cleanup();
+					this.isConnected = false;
+					this.isConfigured = false;
+					
+					//this.emit('disconnected', { code, reason: reasonStr });
 				} else {
-					logger.info('Normal Deepgram WebSocket closure');
+					logger.info('Normal Deepgram WebSocket closure - maintaining connection state');
+					// DO NOT set isConnected = false or isConfigured = false
 				}
 			});
         });
     }
     
     async configureSession(agentConfig) {
-        if (!this.isConnected) {
-            throw new Error('Provider not connected');
-        }
-        
-        this.agentConfig = agentConfig;
-        this.sessionId = agentConfig.sessionId || `dg_${Date.now()}`;
-        
-        logger.info('Configuring Deepgram Agent...');
-        
-        // Create the V1 configuration message (matching working implementation)
-        const configMessage = {
-            type: "Settings",
-            audio: {
-                input: {
-                    encoding: "mulaw",
-                    sample_rate: 8000,
-                },
-                output: {
-                    encoding: "linear16",
-                    sample_rate: 24000,
-                    container: "none",
-                },
-            },
-            agent: {
-                listen: { 
-                    provider: { 
-                        type: "deepgram", 
-                        model: agentConfig.deepgram_model || "nova-2" 
-                    } 
-                },
-                speak: {
-                    provider: {
-                        type: "open_ai",
-                        model: "gpt-4o-mini-tts",
-                        voice: "shimmer"
-                    },
-                    endpoint: {
-                        url: "https://api.openai.com/v1/audio/speech",
-                        headers: {
-                            authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-                        }
-                    }
-                },
-                greeting: agentConfig.greeting || null,
-                think: {
-                    provider: {
-                        type: "open_ai",
-                        model: "gpt-4o-mini",
-                    },
-                    prompt: agentConfig.instructions,
-                    functions: agentConfig.functions || []
-                },
-            },
-        };
-        
-        // CRITICAL FIX: Set isConfigured to true BEFORE sending config
-        // This allows audio to flow immediately after SettingsApplied
-        this.isConfigured = true;
-        
-        // Send configuration
-        this.agentWs.send(JSON.stringify(configMessage));
-        
-        // Start keepalive immediately
-        this.startKeepalive();
-        
-        logger.info('Deepgram Agent configuration sent, ready to receive audio');
-        return true;
-    }
+		if (!this.isConnected) {
+			throw new Error('Provider not connected');
+		}
+		
+		this.agentConfig = agentConfig;
+		this.sessionId = agentConfig.sessionId || `dg_${Date.now()}`;
+		
+		logger.info('Configuring Deepgram Agent...', agentConfig);
+		
+		const voice = this.config.voice || agentConfig.deepgram_voice || 'shimmer';
+		const language = this.config.language || agentConfig.deepgram_language || agentConfig.language || 'en';
+		const sttModel = this.config.model || agentConfig.deepgram_model || 'nova-2';
+		
+		logger.info(`Configuring Deepgram with voice: ${voice}, language: ${language}, STT model: ${sttModel}`);
+		
+		// Determine TTS provider based on voice selection
+		const isOpenAIVoice = [
+			'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 
+			'shimmer', 'verse', 'marin', 'cedar'
+		].includes(voice);
+		
+		const isDeepgramVoice = voice.startsWith('aura-');
+
+		let speakConfig;
+		
+		if (isOpenAIVoice) {
+			// Use OpenAI TTS
+			logger.info(`Using OpenAI TTS with voice: ${voice}`);
+			speakConfig = {
+				provider: {
+					type: "open_ai",
+					model: "gpt-4o-mini-tts",
+					voice: voice
+				},
+				endpoint: {
+					url: "https://api.openai.com/v1/audio/speech",
+					headers: {
+						authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+					}
+				}
+			};
+		} else if (isDeepgramVoice) {
+			// Use Deepgram Aura TTS
+			logger.info(`Using Deepgram Aura TTS with voice: ${voice}`);
+			speakConfig = {
+				provider: {
+					type: "deepgram",
+					model: voice
+				}
+			};
+		} else {
+			// Default to OpenAI with shimmer
+			logger.warn(`Unknown voice: ${voice}, defaulting to OpenAI shimmer`);
+			speakConfig = {
+				provider: {
+					type: "open_ai",
+					model: "gpt-4o-mini-tts",
+					voice: "shimmer"
+				},
+				endpoint: {
+					url: "https://api.openai.com/v1/audio/speech",
+					headers: {
+						authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+					}
+				}
+			};
+		}		
+		
+		// Create the V1 configuration message (matching working implementation)
+		const configMessage = {
+			type: "Settings",
+			audio: {
+				input: {
+					encoding: "mulaw",
+					sample_rate: 8000,
+				},
+				output: {
+					encoding: "linear16",
+					sample_rate: 24000,
+					container: "none",
+				},
+			},
+			agent: {
+				listen: { 
+					provider: { 
+						type: "deepgram", 
+						model: sttModel
+					} 
+				},
+				speak: speakConfig,
+				greeting: agentConfig.greeting || null,
+				think: {
+					provider: {
+						type: "open_ai",
+						model: "gpt-4o-mini",
+					},
+					prompt: agentConfig.instructions,
+					functions: agentConfig.functions || []
+				},
+			},
+		};
+		
+		// CRITICAL: Wait for SettingsApplied before returning
+		// This matches the working server-deepgram.js implementation
+		return new Promise((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				logger.error('Timeout waiting for SettingsApplied');
+				reject(new Error('Timeout waiting for Deepgram Agent configuration'));
+			}, 10000);
+			
+			// Set up one-time listener for SettingsApplied
+			const handleSettingsApplied = (data) => {
+				try {
+					// Check if this is binary data or JSON
+					if (Buffer.isBuffer(data)) {
+						if (data.length > 0 && data[0] === 123) { // '{' character
+							data = data.toString();
+						} else {
+							return; // Binary audio, ignore
+						}
+					}
+					
+					const message = typeof data === 'string' ? JSON.parse(data) : data;
+					
+					if (message.type === 'SettingsApplied') {
+						clearTimeout(timeout);
+						
+						// NOW set isConfigured to true
+						this.isConfigured = true;
+						
+						// Remove this one-time listener
+						this.agentWs.removeListener('message', handleSettingsApplied);
+						
+						// Start keepalive AFTER configuration is confirmed
+						this.startKeepalive();
+						
+						// Emit ready event for connection manager
+						this.emit('agent.ready', {
+							sessionId: this.sessionId,
+							agentName: this.agentConfig?.name || 'Voice Agent'
+						});
+						
+						resolve(true);
+					} else if (message.type === 'Error') {
+						clearTimeout(timeout);
+						logger.error('Error configuring Deepgram Agent:', message);
+						this.agentWs.removeListener('message', handleSettingsApplied);
+						reject(new Error(message.error || 'Unknown error configuring agent'));
+					}
+				} catch (error) {
+					// Don't reject on parse errors, might be unrelated messages
+					logger.debug('Error in settings handler:', error);
+				}
+			};
+			
+			// Add the listener
+			this.agentWs.on('message', handleSettingsApplied);
+			
+			// Send configuration message
+			this.agentWs.send(JSON.stringify(configMessage));
+			
+			logger.info('Deepgram Agent configuration sent, waiting for confirmation...');
+		});
+	}
     
     startKeepalive() {
 		this.keepAliveInterval = setInterval(() => {
 			if (this.agentWs && this.agentWs.readyState === WebSocket.OPEN) {
 				try {
-					this.agentWs.send(JSON.stringify({ type: "AgentKeepAlive" }));
+					console.log('SENDING KEEPALIVE');
+					//this.agentWs.send(JSON.stringify({ type: "AgentKeepAlive" }));
 				} catch (err) {
 					logger.error('Error sending keepalive:', err);
 				}
@@ -230,7 +326,7 @@ class DeepgramProvider extends BaseProvider {
 					}
 				}
 			}
-		}, 2000); // Send every 2 seconds if needed
+		}, 500); // Send every 2 seconds if needed
 	}
     
     async sendAudio(audioData) {
@@ -336,12 +432,20 @@ class DeepgramProvider extends BaseProvider {
     
     handleJsonMessage(message) {
 		// Log all messages for debugging
-		logger.debug('Deepgram message:', { type: message.type, data: message });
+		//logger.info('Deepgram message:', { type: message.type, data: message });
 		
 		switch (message.type) {
 			case 'SettingsApplied':
-				logger.info('Settings applied');
-				this.isConfigured = true; // ADD THIS LINE
+				logger.info('Deepgram agent settings applied successfully');
+				this.isConfigured = true;
+				
+				// Emit ready event to notify connection manager
+				this.emit('agent.ready', {
+					sessionId: this.sessionId,
+					agentName: this.agentConfig?.name || 'Voice Agent',						
+					status: 'ready',
+					type: 'status'
+				});
 				break;
 				
 			case 'UserStartedSpeaking':
@@ -390,13 +494,12 @@ class DeepgramProvider extends BaseProvider {
 				break;
 				
 			case 'Error':
-				console.log('RERRRRRRRRRRRRRRRRRRRRRR');
-				/*logger.error('Deepgram Agent error message:', {
+				logger.error('Deepgram Agent error message:', {
 					error: message.error,
 					message: message.message,
 					description: message.description,
 					full: message
-				});*/
+				});
 				//this.emit('error', new Error(message.error || message.message || 'Unknown error'));
 				break;
 				
