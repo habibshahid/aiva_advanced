@@ -52,10 +52,11 @@ class FunctionService {
         const func = functions[0];
         
         return {
-            ...func,
-            parameters: JSON.parse(func.parameters),
-            api_headers: func.api_headers ? JSON.parse(func.api_headers) : null
-        };
+			...func,
+			parameters: typeof func.parameters === 'string' ? JSON.parse(func.parameters) : func.parameters,
+			api_headers: func.api_headers ? (typeof func.api_headers === 'string' ? JSON.parse(func.api_headers) : func.api_headers) : null,
+			api_body: func.api_body ? (typeof func.api_body === 'string' ? JSON.parse(func.api_body) : func.api_body) : null
+		};
     }
     
     // List functions for agent
@@ -66,10 +67,11 @@ class FunctionService {
         );
         
         return functions.map(f => ({
-            ...f,
-            parameters: JSON.parse(f.parameters),
-            api_headers: f.api_headers ? JSON.parse(f.api_headers) : null
-        }));
+			...f,
+			parameters: typeof f.parameters === 'string' ? JSON.parse(f.parameters) : f.parameters,
+			api_headers: f.api_headers ? (typeof f.api_headers === 'string' ? JSON.parse(f.api_headers) : f.api_headers) : null,
+			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null
+		}));
     }
     
     // Update function

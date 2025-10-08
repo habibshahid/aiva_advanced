@@ -484,16 +484,28 @@ class AsteriskOpenAIBridge {
 			
 			// Register handler in executor (for when OpenAI calls it)
 			if (func.handler_type === 'api') {
-				this.functionExecutor.registerApiFunction(func);
+				this.functionExecutor.registerApiFunction(func, {
+					execution_mode: func.execution_mode,
+					timeout_ms: func.timeout_ms,
+					retries: func.retries
+				});
 			} else if (func.handler_type === 'inline') {
 				// Placeholder for inline functions
-				this.functionExecutor.registerFunction(func.name, async (args) => {
-					logger.warn(`Inline function ${func.name} called but no handler implemented`);
-					return {
-						success: false,
-						message: `Function ${func.name} is configured as inline but has no implementation`
-					};
-				});
+				this.functionExecutor.registerFunction(
+					func.name, 
+					async (args) => {
+						logger.warn(`Inline function ${func.name} called but no handler implemented`);
+						return {
+							success: false,
+							message: `Function ${func.name} is configured as inline but has no implementation`
+						};
+					},
+					{
+						execution_mode: func.execution_mode || 'sync',
+						timeout_ms: func.timeout_ms || 30000,
+						retries: func.retries || 2
+					}
+				);
 			}
 		}
 		

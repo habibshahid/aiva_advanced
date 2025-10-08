@@ -67,10 +67,11 @@ class AgentService {
         );
         
         agent.functions = functions.map(f => ({
-            ...f,
-            parameters: JSON.parse(f.parameters),
-            api_headers: f.api_headers ? JSON.parse(f.api_headers) : null
-        }));
+			...f,
+			parameters: typeof f.parameters === 'string' ? JSON.parse(f.parameters) : f.parameters,
+			api_headers: f.api_headers ? (typeof f.api_headers === 'string' ? JSON.parse(f.api_headers) : f.api_headers) : null,
+			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null
+		}));
         
         // Cache it
         await redisClient.setEx(
