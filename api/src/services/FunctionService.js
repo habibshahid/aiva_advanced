@@ -122,7 +122,7 @@ class FunctionService {
         // Get agent_id before deletion
         const [functions] = await db.query('SELECT agent_id FROM yovo_tbl_aiva_functions WHERE id = ?', [functionId]);
         
-        await db.query('DELETE FROM functions WHERE id = ?', [functionId]);
+        await db.query('DELETE FROM yovo_tbl_aiva_functions WHERE id = ?', [functionId]);
         
         // Invalidate agent cache
         if (functions.length > 0) {

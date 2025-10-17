@@ -18,6 +18,7 @@ const logger = require('./utils/logger');
 const DynamicAgentLoader = require('./integration/dynamic-loader');
 const CreditManager = require('./integration/credit-manager');
 const CallLogger = require('./integration/call-logger');
+const TranscriptionService = require('./services/transcription-service');
 
 class AsteriskOpenAIBridge {
     constructor() {
@@ -61,6 +62,9 @@ class AsteriskOpenAIBridge {
             this.redisClient = new RedisClient({});
             await this.redisClient.connect();
             
+			logger.info('Connecting to MongoDB...');
+			await TranscriptionService.initialize();
+
             // Initialize dynamic components
             if (this.config.dynamicMode) {
                 logger.info('Initializing dynamic management integration...');
@@ -236,7 +240,7 @@ class AsteriskOpenAIBridge {
 					const transferInstructions = `
 CRITICAL TRANSFER INSTRUCTIONS:
 When a customer requests to speak with a human agent:
-1. IMMEDIATELY call the transfer_to_agent function - DO NOT speak first
+1. Always reconfirm the caller that they would like to be transferred to a human agent and only upon their acknowledgement make the transfer
 2. DO NOT say "I'm transferring you" or any message before calling the function
 3. After calling transfer_to_agent, the system will automatically handle the transfer message
 4. NEVER just acknowledge the transfer request without calling the function
@@ -349,8 +353,28 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 			}
 		});
 		
-		this.connectionManager.on('transcript', ({ connection, speaker, text }) => {
+		this.connectionManager.on('transcript', async ({ connection, speaker, text }) => {
 			logger.info(`[${speaker.toUpperCase()}] ${text}`);
+			
+			const clientKey = connection.clientKey;
+			const phoneNumber = connection.callerId || 'unknown';
+			const port = connection.asteriskPort || 0;
+			const sessionId = connection.sessionId;
+			
+			logger.debug(`[TRANSCRIPT] ${speaker}: ${text}`);
+			
+			// Save to MongoDB
+			try {
+				await TranscriptionService.saveTranscription(
+					sessionId,
+					speaker,
+					phoneNumber,
+					text,
+					port
+				);
+			} catch (error) {
+				logger.error('Failed to save transcription to MongoDB:', error);
+			}
 			
 			// This line broadcasts to monitor
 			this.monitorServer.broadcastTranscript(connection.clientKey, speaker, text);
@@ -586,6 +610,8 @@ async function main() {
         process.on('SIGINT', async () => {
             logger.info('Received SIGINT, shutting down...');
             await bridge.shutdown();
+			const mongoClient = require('./config/mongodb-config');
+			await mongoClient.close();
             process.exit(0);
         });
         
@@ -595,6 +621,7 @@ async function main() {
             process.exit(0);
         });
         
+		
     } catch (error) {
         logger.error('Fatal error:', error);
         process.exit(1);

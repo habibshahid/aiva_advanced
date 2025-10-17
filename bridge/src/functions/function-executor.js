@@ -68,6 +68,11 @@ class FunctionExecutor {
 					config.data = body;
 					processedBody = body;
 				}
+				else{
+					let body = args;
+					config.body = body;
+					config.data = body;
+				}
 				
 				if (DEBUG_FUNCTIONS) {
 					// ============================================
@@ -117,6 +122,7 @@ class FunctionExecutor {
 							console.log(`\n[RETRY ${attempt}/${maxRetries}] Attempting function call: ${name}`);
 						}
 						
+						console.log('*************', config)
 						const response = await axios(config);
 						const attemptDuration = Date.now() - attemptStartTime;
 						const totalDuration = Date.now() - startTime;
