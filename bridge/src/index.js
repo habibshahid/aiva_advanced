@@ -299,6 +299,13 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 						);
 					}
 
+					const aivaReady = {
+						session_id: sessionId
+					};
+					
+					logger.info(`aivaReady for session: ${sessionId}`);
+					await this.redisClient.publish('aiva_ready', JSON.stringify(aivaReady));
+					
 					// Add to monitor
 					this.monitorServer.addConnection(clientKey, {
 						sessionId: sessionId,

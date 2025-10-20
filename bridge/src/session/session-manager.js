@@ -69,7 +69,7 @@ class SessionManager {
      * UPDATED: Provider-agnostic cost handling
      */
     updateCostMetrics(sessionId, providerMetrics) {
-		console.log('$$$$$$$$$$$$$$$$$$$$', this.sessions)
+		
         const session = this.sessions.get(sessionId);
         if (!session) {
             logger.warn(`Session not found: ${sessionId}`);

@@ -31,9 +31,9 @@ class TransferHandler {
             };
             
             // Publish to Redis channel
-            await this.redis.publish('aiva_call', JSON.stringify(transferEvent));
+            await this.redis.publish('aiva_call_transfer', JSON.stringify(transferEvent));
             
-            logger.info(`Transfer event published to aiva_call channel: ${JSON.stringify(transferEvent)}`);
+            logger.info(`Transfer event published to aiva_call_transfer channel: ${JSON.stringify(transferEvent)}`);
             
             return {
                 success: true,
