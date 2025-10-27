@@ -1,0 +1,26 @@
+# Update package list
+sudo apt update
+
+# Install Python 3.11 and development tools
+sudo apt install -y python3.11 python3.11-venv python3.11-dev python3-pip
+
+# Install build essentials (needed for some Python packages)
+sudo apt install -y build-essential gcc g++ make
+
+# Install system libraries for image processing
+sudo apt install -y libjpeg-dev zlib1g-dev libpng-dev
+
+# Install XML/HTML parsing libraries
+sudo apt install -y libxml2-dev libxslt1-dev
+
+# Install SSL/TLS libraries
+sudo apt install -y libssl-dev libffi-dev
+
+# Install database client libraries
+sudo apt install -y libmysqlclient-dev default-libmysqlclient-dev
+
+# Optional: Install Redis tools
+sudo apt install -y redis-tools
+
+# Verify Python version
+python3.11 --version

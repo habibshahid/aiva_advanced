@@ -14,6 +14,13 @@ import Monitor from './pages/Monitor';
 import AgentTest from './pages/AgentTest';
 import Layout from './components/Layout';
 
+// Knowledge Base Pages
+import KnowledgeList from './pages/Knowledge/KnowledgeList';
+import KnowledgeEditor from './pages/Knowledge/KnowledgeEditor';
+import KnowledgeDocuments from './pages/Knowledge/KnowledgeDocuments';
+import KnowledgeSearch from './pages/Knowledge/KnowledgeSearch';
+import KnowledgeStats from './pages/Knowledge/KnowledgeStats';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -46,14 +53,23 @@ function App() {
               <Layout />
             </PrivateRoute>
           }>
-			<Route path="/monitor" element={<Monitor />} />
+            <Route path="/monitor" element={<Monitor />} />
             <Route index element={<Dashboard />} />
             <Route path="agents" element={<Agents />} />
-			<Route path="/test" element={<AgentTest />} />
+            <Route path="/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
             <Route path="agents/:id" element={<AgentEditor />} />
             <Route path="credits" element={<Credits />} />
             <Route path="calls" element={<Calls />} />
+            
+            {/* Knowledge Base Routes */}
+            <Route path="knowledge" element={<KnowledgeList />} />
+            <Route path="knowledge/new" element={<KnowledgeEditor />} />
+            <Route path="knowledge/:id/edit" element={<KnowledgeEditor />} />
+            <Route path="knowledge/:id/documents" element={<KnowledgeDocuments />} />
+            <Route path="knowledge/:id/search" element={<KnowledgeSearch />} />
+            <Route path="knowledge/:id/stats" element={<KnowledgeStats />} />
+			<Route path="knowledge/:id/chat" element={<KnowledgeChat />} />
           </Route>
         </Routes>
         

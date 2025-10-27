@@ -8,3 +8,5 @@ api/dashboard/node_modules/
 bridge/.env
 bridge/node_modules/
 bridge/package-lock.json
+shared/.env
+python-service/.env

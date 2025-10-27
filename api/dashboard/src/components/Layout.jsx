@@ -9,7 +9,8 @@ import {
   Menu,
   X,
   Activity,
-  Mic
+  Mic,
+  BookOpen
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -21,6 +22,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Agents', href: '/agents', icon: Bot },
+	{ name: 'Knowledge Base', href: '/knowledge', icon: BookOpen },
     { name: 'Live Monitor', href: '/monitor', icon: Activity }, // Added
     { name: 'Credits', href: '/credits', icon: DollarSign },
     { name: 'Calls', href: '/calls', icon: Phone },

@@ -6,9 +6,15 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate": "node src/config/migrate.js"
+    "test": "echo \"No tests yet\"",
+    "test:utils": "node src/utils/__tests__/response-builder.test.js",
+    "test:cost": "node src/utils/__tests__/cost-calculator.test.js",
+    "test:markdown": "node src/utils/__tests__/markdown.test.js",
+    "test:validators": "node src/utils/__tests__/validators.test.js",
+    "test:python": "node src/services/__tests__/python-service-client.test.js"
   },
   "dependencies": {
+    "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
@@ -16,12 +22,15 @@
     "express-rate-limit": "^7.1.5",
     "express-validator": "^7.0.1",
     "fetch": "^1.1.0",
+    "form-data": "^4.0.4",
     "helmet": "^7.1.0",
     "https": "^1.0.0",
     "joi": "^17.11.0",
     "jsonwebtoken": "^9.0.2",
+    "marked": "^15.0.12",
+    "multer": "^2.0.2",
     "mysql2": "^3.6.5",
-    "openai": "^6.1.0",
+    "openai": "^6.7.0",
     "redis": "^4.6.12",
     "uuid": "^9.0.1"
   },

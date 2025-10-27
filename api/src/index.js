@@ -12,6 +12,8 @@ const creditRoutes = require('./routes/credits');
 const callRoutes = require('./routes/calls');
 const realtimeRoutes = require('./routes/realtime');
 const aiAssistRoutes = require('./routes/ai-assist');
+const chatRoutes = require('./routes/chat');
+const knowledgeRoutes = require('./routes/knowledge');
 
 const app = express();
 const PORT = process.env.API_PORT || 4000;
@@ -52,6 +54,8 @@ app.use('/api/credits', creditRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/realtime', realtimeRoutes);
 app.use('/api/ai-assist', aiAssistRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/knowledge', knowledgeRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

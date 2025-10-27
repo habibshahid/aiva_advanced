@@ -12,6 +12,7 @@ import {
   deleteFunction,
   generateInstructions
 } from '../services/api';
+import { getKnowledgeBases } from '../services/knowledgeApi';
 
 const AgentEditor = () => {
   const { id } = useParams();
@@ -19,6 +20,7 @@ const AgentEditor = () => {
   const [loading, setLoading] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [knowledgeBases, setKnowledgeBases] = useState([]);
   
   const [agent, setAgent] = useState({
 	  name: '',
@@ -119,12 +121,25 @@ const AgentEditor = () => {
 		toast.success('Switched to Deepgram - defaults applied');
 	  }
 	};
+	
+  useEffect(() => {
+    loadKnowledgeBases();
+  }, []);	
 
   useEffect(() => {
     if (id) {
       loadAgent();
     }
   }, [id]);
+  
+  const loadKnowledgeBases = async () => {
+    try {
+      const response = await getKnowledgeBases({ status: 'active' });
+      setKnowledgeBases(response.data?.data?.knowledge_bases || []);
+    } catch (error) {
+      console.error('Failed to load knowledge bases:', error);
+    }
+  };
 
 	const loadAgent = async () => {
 	  try {
@@ -1013,7 +1028,7 @@ const AgentEditor = () => {
 		  </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Greeting (optional)</label>
+            <label className="block text-sm font-medium text-gray-700">Greeting</label>
             <textarea
               value={agent.greeting}
               onChange={(e) => setAgent({ ...agent, greeting: e.target.value })}
@@ -1021,10 +1036,101 @@ const AgentEditor = () => {
               className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               placeholder="Hello! How can I help you today?"
             />
+			<p className="mt-2 text-sm text-gray-500">
+                <strong>Inbound Call:</strong> On an inbound call setting a greeting will automatically start playback when the call connects with AiVA
+                <br />
+                <strong>Outbound Call:</strong> Not recommended to set up greeting on an Outbound Call because the AiVA should respond once the Caller answers the call and Starts Speaking
+			</p>
           </div>
         </div>
       </div>
 
+	  {/* Knowledge Base Section */}
+		<div className="bg-white shadow rounded-lg p-6">
+		  <h3 className="text-lg font-medium text-gray-900 mb-4">Knowledge Base</h3>
+		  
+		  <div className="space-y-4">
+			{/* Enable KB Toggle */}
+			<div className="flex items-center justify-between">
+			  <div>
+				<label className="text-sm font-medium text-gray-700">
+				  Enable Knowledge Base
+				</label>
+				<p className="text-xs text-gray-500 mt-1">
+				  Allow agent to search knowledge base for answers
+				</p>
+			  </div>
+			  <button
+				type="button"
+				onClick={() => setFormData({
+				  ...formData,
+				  knowledge_base_enabled: !formData.knowledge_base_enabled
+				})}
+				className={`${
+				  formData.knowledge_base_enabled ? 'bg-primary-600' : 'bg-gray-200'
+				} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2`}
+			  >
+				<span
+				  className={`${
+					formData.knowledge_base_enabled ? 'translate-x-5' : 'translate-x-0'
+				  } pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+				/>
+			  </button>
+			</div>
+
+			{/* KB Selection */}
+			{formData.knowledge_base_enabled && (
+			  <div>
+				<label className="block text-sm font-medium text-gray-700 mb-2">
+				  Select Knowledge Base
+				</label>
+				<select
+				  value={formData.knowledge_base_id || ''}
+				  onChange={(e) => setFormData({
+					...formData,
+					knowledge_base_id: e.target.value || null
+				  })}
+				  className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+				>
+				  <option value="">-- Select Knowledge Base --</option>
+				  {knowledgeBases.map((kb) => (
+					<option key={kb.id} value={kb.id}>
+					  {kb.name} ({kb.stats?.document_count || 0} docs, {kb.stats?.chunk_count || 0} chunks)
+					</option>
+				  ))}
+				</select>
+				
+				{knowledgeBases.length === 0 && (
+				  <p className="mt-2 text-sm text-amber-600">
+					No knowledge bases available. <a href="/knowledge/new" className="underline">Create one</a>
+				  </p>
+				)}
+				
+				{formData.knowledge_base_id && (
+				  <div className="mt-3 flex gap-2">
+					
+					  href={`/knowledge/${formData.knowledge_base_id}/documents`}
+					  target="_blank"
+					  rel="noopener noreferrer"
+					  className="text-sm text-primary-600 hover:text-primary-700"
+					>
+					  View Knowledge Base →
+					</a>
+					<span className="text-gray-300">|</span>
+					
+					  href={`/knowledge/${formData.knowledge_base_id}/chat`}
+					  target="_blank"
+					  rel="noopener noreferrer"
+					  className="text-sm text-primary-600 hover:text-primary-700"
+					>
+					  Test Chat →
+					</a>
+				  </div>
+				)}
+			  </div>
+			)}
+		  </div>
+		</div>
       {/* Advanced Settings */}
       <div className="border-t pt-6 mt-6">
         <button
