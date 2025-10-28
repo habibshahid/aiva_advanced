@@ -21,7 +21,7 @@ const {
   validateSearchQuery,
   validatePagination 
 } = require('../utils/validators');
-
+const PythonServiceClient = require('../services/PythonServiceClient');
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -477,13 +477,13 @@ router.post('/search', verifyToken, async (req, res) => {
     await CreditService.deductCredits(
       tenantId,
       result.cost,
-      null,
       'knowledge_search',
       {
         kb_id: kb_id,
         query: query,
         results_count: result.results?.total_found || 0
-      }
+      },
+      null
     );
 
     // Get new balance
@@ -750,6 +750,397 @@ router.post('/:kbId/scrape-sitemap', verifyToken, async (req, res) => {
     }
     
     res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
+/**
+ * @route POST /api/knowledge/:kbId/images
+ * @desc Upload image to knowledge base
+ * @access Private
+ */
+router.post('/:kbId/images', verifyToken, upload.single('file'), async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    // Validate file
+    const errors = validateDocumentUpload(req.file);
+    if (errors.length > 0) {
+      return res.status(422).json(ResponseBuilder.validationError(errors));
+    }
+
+    // Check if it's an image
+    const imageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!imageTypes.includes(req.file.mimetype)) {
+      return res.status(422).json(ResponseBuilder.badRequest('File must be an image (JPG, PNG, GIF, or WEBP)'));
+    }
+
+    // Check credits
+    const balance = await CreditService.getBalance(tenantId);
+    if (balance < 0.001) {
+      return res.status(402).json(ResponseBuilder.insufficientCredits(balance));
+    }
+
+    // Upload image to Python service
+    const result = await PythonServiceClient.uploadImage({
+      kb_id: req.params.kbId,
+      file: req.file.buffer,
+      filename: req.file.originalname,
+      description: req.body.description || null,
+      metadata: req.body.metadata ? JSON.parse(req.body.metadata) : {}
+    });
+
+    // Deduct credits
+    const imageCost = result.cost_summary?.total_cost || 0.0003; // From Python response or default
+    await CreditService.deductCredits(
+      tenantId,
+      imageCost,
+      'image_upload',
+      {
+        kb_id: req.params.kbId,
+        image_id: result.image_id,
+        filename: req.file.originalname,
+        file_size: req.file.size
+      }
+    );
+
+    // Get new balance
+    const newBalance = await CreditService.getBalance(tenantId);
+
+    // Build credits info
+    const creditsInfo = rb.buildCreditsInfo(
+      'image_upload',
+      imageCost,
+      newBalance,
+      result.cost_summary?.breakdown || {}
+    );
+
+    res.status(201).json(rb.success(result, creditsInfo, 201));
+
+  } catch (error) {
+    console.error('Upload image error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route POST /api/knowledge/:kbId/images/search
+ * @desc Search images by text query
+ * @access Private
+ */
+router.post('/:kbId/images/search', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { query, limit } = req.body;
+
+    if (!query) {
+      return res.status(422).json(ResponseBuilder.badRequest('Query is required'));
+    }
+
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    // Check credits
+    const balance = await CreditService.getBalance(tenantId);
+    if (balance < 0.0001) {
+      return res.status(402).json(ResponseBuilder.insufficientCredits(balance));
+    }
+
+    // Search images
+    const result = await PythonServiceClient.searchImages({
+      kb_id: req.params.kbId,
+      query: query,
+      limit: limit || 5
+    });
+
+    // Deduct credits
+    const searchCost = result.cost_summary?.cost || 0.0001;
+    await CreditService.deductCredits(
+      tenantId,
+      searchCost,
+      'image_search',
+      {
+        kb_id: req.params.kbId,
+        query: query,
+        results_count: result.results?.length || 0
+      }
+    );
+
+    const newBalance = await CreditService.getBalance(tenantId);
+    const creditsInfo = rb.buildCreditsInfo(
+      'image_search',
+      searchCost,
+      newBalance,
+      result.cost_summary || {}
+    );
+
+    res.json(rb.success(result, creditsInfo));
+
+  } catch (error) {
+    console.error('Image search error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route GET /api/knowledge/:kbId/images
+ * @desc List images in knowledge base
+ * @access Private
+ */
+router.get('/:kbId/images', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = parseInt(req.query.offset) || 0;
+
+    const result = await PythonServiceClient.listImages(req.params.kbId, limit, offset);
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('List images error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route DELETE /api/knowledge/:kbId/images/:imageId
+ * @desc Delete image
+ * @access Private
+ */
+router.delete('/:kbId/images/:imageId', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    const result = await PythonServiceClient.deleteImage(req.params.kbId, req.params.imageId);
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Delete image error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route POST /api/knowledge/:kb_id/images/upload
+ * @desc Upload image to knowledge base
+ * @access Private
+ */
+router.post('/:kb_id/images/upload', verifyToken, upload.single('file'), async (req, res) => {
+  try {
+    const { kb_id } = req.params;
+    const { metadata } = req.body;
+    const rb = new ResponseBuilder();
+	
+    // Validate file
+    if (!req.file) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('No image file provided')
+      );
+    }
+
+    // Validate image type
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('Invalid image type. Only JPG, PNG, GIF, and WEBP are supported.')
+      );
+    }
+
+    // Validate file size (10MB max)
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('Image file too large. Maximum size is 10MB.')
+      );
+    }
+
+    // Parse metadata
+    let parsedMetadata = {};
+    if (metadata) {
+      try {
+        parsedMetadata = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
+      } catch (error) {
+        console.error('Error parsing metadata:', error);
+      }
+    }
+
+    // Upload image
+    const result = await KnowledgeService.uploadImage({
+      kbId: kb_id,
+      tenantId: req.user.tenant_id || req.user.id,
+      file: req.file,
+      metadata: parsedMetadata
+    });
+
+    res.json(rb.success(result, 'Image uploaded successfully'));
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to upload image')
+    );
+  }
+});
+
+/**
+ * @route POST /api/knowledge/:kb_id/images/search
+ * @desc Search images in knowledge base
+ * @access Private
+ */
+router.post('/:kb_id/images/search', verifyToken, async (req, res) => {
+  try {
+    const { kb_id } = req.params;
+    const { query, image_base64, search_type, top_k, filters } = req.body;
+	const rb = new ResponseBuilder();
+	
+    // Validate search type
+    const validTypes = ['text', 'image', 'hybrid'];
+    if (search_type && !validTypes.includes(search_type)) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest(`Invalid search_type. Must be one of: ${validTypes.join(', ')}`)
+      );
+    }
+
+    // Validate required fields based on search type
+    if (search_type === 'image' && !image_base64) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('image_base64 is required for image search')
+      );
+    }
+
+    if (search_type === 'hybrid' && (!query || !image_base64)) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('Both query and image_base64 are required for hybrid search')
+      );
+    }
+
+    const result = await KnowledgeService.searchImages({
+      kbId: kb_id,
+      tenantId: req.user.tenant_id || req.user.id,
+      query,
+      imageBase64: image_base64,
+      searchType: search_type || 'text',
+      topK: top_k || 5,
+      filters: filters || {}
+    });
+
+    res.json(rb.success(result, 'Search completed successfully'));
+  } catch (error) {
+    console.error('Image search error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to search images')
+    );
+  }
+});
+
+/**
+ * @route GET /api/knowledge/:kb_id/images/stats
+ * @desc Get image statistics for knowledge base
+ * @access Private
+ */
+router.get('/:kb_id/images/stats', verifyToken, async (req, res) => {
+  try {
+    const { kb_id } = req.params;
+	const rb = new ResponseBuilder();
+	
+    const stats = await KnowledgeService.getImageStats(kb_id);
+
+    res.json(rb.success(stats, 'Statistics retrieved successfully'));
+  } catch (error) {
+    console.error('Get image stats error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to retrieve statistics')
+    );
+  }
+});
+
+/**
+ * @route GET /api/knowledge/:kb_id/images/list
+ * @desc List images in knowledge base
+ * @access Private
+ */
+router.get('/:kb_id/images/list', verifyToken, async (req, res) => {
+  try {
+    const { kb_id } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+	const rb = new ResponseBuilder();
+	
+    const result = await KnowledgeService.listImages(
+      kb_id,
+      parseInt(page),
+      parseInt(limit)
+    );
+
+    res.json(rb.success(result, 'Images retrieved successfully'));
+  } catch (error) {
+    console.error('List images error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to list images')
+    );
+  }
+});
+
+/**
+ * @route DELETE /api/knowledge/:kb_id/images/:image_id
+ * @desc Delete image from knowledge base
+ * @access Private
+ */
+router.delete('/:kb_id/images/:image_id', verifyToken, async (req, res) => {
+  try {
+    const { kb_id, image_id } = req.params;
+	const rb = new ResponseBuilder();
+	
+    const result = await KnowledgeService.deleteImage(kb_id, image_id);
+
+    res.json(rb.success(result, 'Image deleted successfully'));
+  } catch (error) {
+    console.error('Delete image error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to delete image')
+    );
   }
 });
 

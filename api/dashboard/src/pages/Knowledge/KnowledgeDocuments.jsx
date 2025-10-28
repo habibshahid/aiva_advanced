@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Upload, Globe, Search, Trash2, FileText, 
   Download, Eye, RefreshCw, AlertCircle, CheckCircle,
-  Clock, Database, MessageSquare 
+  Clock, Database, MessageSquare, ImageIcon
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
@@ -15,6 +15,8 @@ import {
 import DocumentUploader from '../../components/Knowledge/DocumentUploader';
 import WebScraper from '../../components/Knowledge/WebScraper';
 import ImageUploader from '../../components/Knowledge/ImageUploader';
+import ImageGallery from '../../components/Knowledge/ImageGallery';
+import ImageSearch from '../../components/Knowledge/ImageSearch';
 
 const KnowledgeDocuments = () => {
   const { id } = useParams();
@@ -25,6 +27,7 @@ const KnowledgeDocuments = () => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('documents');
+  const [refreshImages, setRefreshImages] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -272,14 +275,14 @@ const KnowledgeDocuments = () => {
             </button>
 			<button
 			  onClick={() => setActiveTab('images')}
-			  className={`${
+			  className={`flex items-center px-4 py-2 text-sm font-medium rounded-md transition-colors ${
 				activeTab === 'images'
-				  ? 'border-primary-500 text-primary-600'
-				  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-			  } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+				  ? 'bg-primary-100 text-primary-700'
+				  : 'text-gray-700 hover:bg-gray-100'
+			  }`}
 			>
-			  <ImageIcon className="w-5 h-5 mr-2" />
-			  Upload Images
+			  <ImageIcon className="w-4 h-4 mr-2" />
+			  Images
 			</button>
           </nav>
         </div>
@@ -437,12 +440,38 @@ const KnowledgeDocuments = () => {
               onComplete={handleScrapeComplete}
             />
           )}
-		  {activeTab === 'images' && (
-			  <ImageUploader 
-				kbId={id} 
-				onComplete={handleUploadComplete}
-			  />
-		  )}
+		  {/* Images Tab */}
+			{activeTab === 'images' && (
+			  <div className="space-y-6">
+				{/* Upload Section */}
+				<div className="bg-white shadow rounded-lg p-6">
+				  <h3 className="text-lg font-medium text-gray-900 mb-4">
+					Upload Images
+				  </h3>
+				  <ImageUploader 
+					kbId={id} 
+					onComplete={() => setRefreshImages(prev => prev + 1)} 
+				  />
+				</div>
+				{/* Search Section - NEW */}
+				<div className="bg-white shadow rounded-lg p-6">
+				  <h3 className="text-lg font-medium text-gray-900 mb-4">
+					Search Images
+				  </h3>
+				  <ImageSearch kbId={id} />
+				</div>
+				{/* Gallery Section */}
+				<div className="bg-white shadow rounded-lg p-6">
+				  <h3 className="text-lg font-medium text-gray-900 mb-4">
+					Image Gallery
+				  </h3>
+				  <ImageGallery 
+					kbId={id} 
+					refreshTrigger={refreshImages}
+				  />
+				</div>
+			  </div>
+			)}
         </div>
       </div>
     </div>

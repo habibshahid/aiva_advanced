@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { Upload, X, Image as ImageIcon, AlertCircle, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { uploadDocument } from '../../services/knowledgeApi';
+import { uploadImage } from '../../services/knowledgeApi';
 
 const ImageUploader = ({ kbId, onComplete }) => {
   const [images, setImages] = useState([]);
@@ -87,65 +87,71 @@ const ImageUploader = ({ kbId, onComplete }) => {
   };
 
   const uploadImages = async () => {
-    if (images.length === 0) {
-      toast.error('Please select images to upload');
-      return;
-    }
+	  if (images.length === 0) {
+		toast.error('Please select images to upload');
+		return;
+	  }
 
-    setUploading(true);
+	  setUploading(true);
 
-    for (const imageObj of images) {
-      try {
-        setImages(prev => prev.map(img => 
-          img.id === imageObj.id ? { ...img, status: 'uploading' } : img
-        ));
+	  for (const imageObj of images) {
+		try {
+		  setImages(prev => prev.map(img => 
+			img.id === imageObj.id ? { ...img, status: 'uploading' } : img
+		  ));
 
-        const formData = new FormData();
-        formData.append('file', imageObj.file);
-        
-        // Add metadata
-        const metadata = {
-          source: 'image_upload',
-          content_type: 'image',
-          uploaded_at: new Date().toISOString(),
-          ...imageObj.metadata,
-          tags: imageObj.metadata.tags ? imageObj.metadata.tags.split(',').map(t => t.trim()) : []
-        };
-        
-        formData.append('metadata', JSON.stringify(metadata));
+		  const formData = new FormData();
+		  formData.append('file', imageObj.file);
+		  
+		  // Add description
+		  if (imageObj.metadata.description) {
+			formData.append('description', imageObj.metadata.description);
+		  }
+		  
+		  // Add metadata
+		  const metadata = {
+			source: 'image_upload',
+			content_type: 'image',
+			uploaded_at: new Date().toISOString(),
+			title: imageObj.metadata.title,
+			category: imageObj.metadata.category,
+			tags: imageObj.metadata.tags ? imageObj.metadata.tags.split(',').map(t => t.trim()) : []
+		  };
+		  
+		  formData.append('metadata', JSON.stringify(metadata));
 
-        await uploadDocument(kbId, formData, (progressEvent) => {
-          const percentCompleted = Math.round(
-            (progressEvent.loaded * 100) / progressEvent.total
-          );
-          setUploadProgress(prev => ({
-            ...prev,
-            [imageObj.id]: percentCompleted
-          }));
-        });
+		  // Use image-specific API endpoint
+		  await uploadImage(kbId, formData, (progressEvent) => {
+			const percentCompleted = Math.round(
+			  (progressEvent.loaded * 100) / progressEvent.total
+			);
+			setUploadProgress(prev => ({
+			  ...prev,
+			  [imageObj.id]: percentCompleted
+			}));
+		  });
 
-        setImages(prev => prev.map(img => 
-          img.id === imageObj.id ? { ...img, status: 'completed' } : img
-        ));
+		  setImages(prev => prev.map(img => 
+			img.id === imageObj.id ? { ...img, status: 'completed' } : img
+		  ));
 
-        toast.success(`${imageObj.file.name} uploaded successfully`);
-      } catch (error) {
-        console.error(`Error uploading ${imageObj.file.name}:`, error);
-        setImages(prev => prev.map(img => 
-          img.id === imageObj.id ? { ...img, status: 'failed' } : img
-        ));
-        toast.error(`Failed to upload ${imageObj.file.name}`);
-      }
-    }
+		  toast.success(`${imageObj.file.name} uploaded and embedded with CLIP`);
+		} catch (error) {
+		  console.error(`Error uploading ${imageObj.file.name}:`, error);
+		  setImages(prev => prev.map(img => 
+			img.id === imageObj.id ? { ...img, status: 'failed' } : img
+		  ));
+		  toast.error(`Failed to upload ${imageObj.file.name}`);
+		}
+	  }
 
-    setUploading(false);
+	  setUploading(false);
 
-    // Check if all completed
-    const allCompleted = images.every(img => img.status === 'completed' || img.status === 'failed');
-    if (allCompleted && onComplete) {
-      setTimeout(onComplete, 1000);
-    }
-  };
+	  const allCompleted = images.every(img => img.status === 'completed' || img.status === 'failed');
+	  if (allCompleted && onComplete) {
+		setTimeout(onComplete, 1000);
+	  }
+	};
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';

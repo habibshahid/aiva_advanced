@@ -97,3 +97,30 @@ class CostTracker:
         cost_with_profit = cost * (1 + self.profit_margin)
         
         return round(cost_with_profit, 6)
+        
+    def calculate_image_processing_cost(self, image_count: int, processing_time_ms: int = 0) -> float:
+        """
+        Calculate cost for image processing (CLIP embedding generation)
+        
+        Args:
+            image_count: Number of images processed
+            processing_time_ms: Processing time in milliseconds
+            
+        Returns:
+            Total cost with profit margin
+        """
+        cost = 0.0
+        
+        # Base cost per image (CLIP model inference)
+        cost += image_count * self.processing_costs["image_processing"]
+        
+        # Add small compute cost based on processing time
+        # $0.0001 per second of processing
+        if processing_time_ms > 0:
+            compute_cost = (processing_time_ms / 1000) * 0.0001
+            cost += compute_cost
+        
+        # Add profit margin
+        cost_with_profit = cost * (1 + self.profit_margin)
+        
+        return round(cost_with_profit, 6)

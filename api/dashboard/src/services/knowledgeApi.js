@@ -55,3 +55,79 @@ export const getKBStats = (kbId) =>
 
 export const getSearchHistory = (kbId, params) => 
   api.get(`/knowledge/${kbId}/searches`, { params });
+  
+/**
+ * Upload image to knowledge base with progress tracking
+ */
+export const uploadImage = async (kbId, formData, onProgress) => {
+  try {
+    const config = {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    };
+
+    // Add progress tracking if callback provided
+    if (onProgress) {
+      config.onUploadProgress = onProgress;
+    }
+
+    const response = await api.post(`/knowledge/${kbId}/images/upload`, formData, config);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Upload image error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Search images in knowledge base
+ */
+export const searchImages = async (kbId, params) => {
+  try {
+    const response = await api.post(`/knowledge/${kbId}/images/search`, params);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Search images error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get image statistics
+ */
+export const getImageStats = async (kbId) => {
+  try {
+    const response = await api.get(`/knowledge/${kbId}/images/stats`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Get image stats error:', error);
+    throw error;
+  }
+};
+
+/**
+ * List images in knowledge base
+ */
+export const listImages = async (kbId, page = 1, limit = 20) => {
+  try {
+    const response = await api.get(`/knowledge/${kbId}/images/list?page=${page}&limit=${limit}`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('List images error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Delete image from knowledge base
+ */
+export const deleteImage = async (kbId, imageId) => {
+  try {
+    const response = await api.delete(`/knowledge/${kbId}/images/${imageId}?kb_id=${kbId}`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Delete image error:', error);
+    throw error;
+  }
+};

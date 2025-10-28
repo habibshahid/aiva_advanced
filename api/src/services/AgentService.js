@@ -12,8 +12,8 @@ class AgentService {
                 id, tenant_id, name, type, instructions, voice, language, 
 				model, provider, deepgram_model, deepgram_voice, deepgram_language,
 				temperature, max_tokens, vad_threshold, 
-				silence_duration_ms, greeting
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				silence_duration_ms, greeting, kb_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 agentId,
 				tenantId,
@@ -31,7 +31,8 @@ class AgentService {
 				agentData.max_tokens || 4096,
 				agentData.vad_threshold || 0.5,
 				agentData.silence_duration_ms || 500,
-				agentData.greeting || null
+				agentData.greeting || null,
+				agentData.kb_id || null
             ]
         );
         
@@ -132,7 +133,7 @@ class AgentService {
             'name', 'instructions', 'voice', 'language', 'model',
 			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
-			'silence_duration_ms', 'greeting', 'is_active'
+			'silence_duration_ms', 'greeting', 'is_active', 'kb_id' 
         ];
         
         for (const field of allowedFields) {

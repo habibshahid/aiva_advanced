@@ -510,8 +510,8 @@ function validateDocumentUpload(file) {
     return errors;
   }
 
-  // File type validation
-  const allowedTypes = (process.env.ALLOWED_FILE_TYPES || 'pdf,docx,pptx,xlsx,csv,txt,md,json,html')
+  // File type validation - includes both documents and images
+  const allowedTypes = (process.env.ALLOWED_FILE_TYPES || 'pdf,docx,pptx,xlsx,csv,txt,md,json,html,jpg,jpeg,png,gif,webp')
     .split(',')
     .map(t => t.trim());
 

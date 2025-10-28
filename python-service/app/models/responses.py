@@ -114,3 +114,35 @@ class ErrorResponse(BaseModel):
     error: str
     details: Optional[Any] = None
     timestamp: str
+    
+class ImageResult(BaseModel):
+    result_id: str
+    type: str
+    image_id: Optional[str] = None
+    filename: Optional[str] = None
+    image_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    description: Optional[str] = None
+    score: float
+    similarity: Optional[float] = None
+    scoring_details: Optional[Dict[str, float]] = None
+    source: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any]
+    search_type: Optional[str] = None
+
+class ImageUploadResponse(BaseModel):
+    image_id: str
+    filename: str
+    kb_id: str
+    status: str
+    processing_time_ms: int
+    embedding_dimension: int
+    cost: float
+
+
+class ImageSearchResponse(BaseModel):
+    total_found: int
+    returned: int
+    results: List[ImageResult]
+    metrics: SearchMetrics
+    cost: float

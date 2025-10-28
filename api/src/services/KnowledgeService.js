@@ -9,6 +9,7 @@ const redisClient = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const PythonServiceClient = require('./PythonServiceClient');
 const CostCalculator = require('../utils/cost-calculator');
+const CreditService = require('./CreditService');
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -630,6 +631,153 @@ class KnowledgeService {
       vector_dimension: 1536,
       total_vectors: chunkCount[0]?.total || 0 // Same as chunks
     };
+  }
+  
+  /**
+   * Upload image to knowledge base
+   * @param {Object} params - Upload parameters
+   * @returns {Promise<Object>} Upload result with cost
+   */
+  async uploadImage({ kbId, tenantId, file, metadata = {} }) {
+    try {
+      const FormData = require('form-data');
+      const formData = new FormData();
+      
+      // Add file
+      formData.append('file', file.buffer, {
+        filename: file.originalname,
+        contentType: file.mimetype
+      });
+      
+      // Add required fields
+      formData.append('kb_id', kbId);
+      formData.append('tenant_id', tenantId);
+      
+      // Add metadata
+      if (Object.keys(metadata).length > 0) {
+        formData.append('metadata', JSON.stringify(metadata));
+      }
+
+      // Upload to Python service
+      const result = await PythonServiceClient.uploadImage(formData);
+      
+      // Deduct credits
+      if (result.cost && result.cost > 0) {
+        try {
+		  //tenantId, amount, operationType, operationDetails, referenceId
+          await CreditService.deductCredits(
+            tenantId,
+            result.cost,
+            'image_processing',
+            {
+              image_id: result.image_id,
+              filename: file.originalname,
+              kb_id: kbId,
+              processing_time_ms: result.processing_time_ms,
+              embedding_dimension: result.embedding_dimension
+            },
+			result.image_id
+          );
+        } catch (creditError) {
+          console.error('Error deducting credits for image upload:', creditError);
+          // Don't fail the upload if credit deduction fails
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Search images in knowledge base
+   * @param {Object} params - Search parameters
+   * @returns {Promise<Object>} Search results
+   */
+  async searchImages({ kbId, tenantId, query, imageBase64 = null, searchType = 'text', topK = 5, filters = {} }) {
+    try {
+      const result = await PythonServiceClient.searchImages({
+        kb_id: kbId,
+        query,
+        image_base64: imageBase64,
+        search_type: searchType,
+        top_k: topK,
+        filters
+      });
+
+      // Deduct credits for search
+      if (result.cost && result.cost > 0) {
+        try {
+          await CreditService.deductCredits({
+            tenantId,
+            amount: result.cost,
+            operationType: 'image_search',
+            referenceId: `search-${Date.now()}`,
+            operationDetails: {
+              query,
+              search_type: searchType,
+              results_count: result.returned,
+              kb_id: kbId
+            }
+          });
+        } catch (creditError) {
+          console.error('Error deducting credits for image search:', creditError);
+          // Don't fail the search if credit deduction fails
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Error searching images:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get image statistics for knowledge base
+   * @param {string} kbId - Knowledge base ID
+   * @returns {Promise<Object>} Statistics
+   */
+  async getImageStats(kbId) {
+    try {
+      return await PythonServiceClient.getImageStats(kbId);
+    } catch (error) {
+      console.error('Error getting image stats:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * List images in knowledge base
+   * @param {string} kbId - Knowledge base ID
+   * @param {number} page - Page number
+   * @param {number} limit - Items per page
+   * @returns {Promise<Object>} Images list
+   */
+  async listImages(kbId, page = 1, limit = 20) {
+    try {
+      return await PythonServiceClient.listImages(kbId, page, limit);
+    } catch (error) {
+      console.error('Error listing images:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete image from knowledge base
+   * @param {string} kbId - Knowledge base ID
+   * @param {string} imageId - Image ID
+   * @returns {Promise<Object>} Delete result
+   */
+  async deleteImage(kbId, imageId) {
+    try {
+      return await PythonServiceClient.deleteImage(imageId, kbId);
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      throw error;
+    }
   }
 }
 

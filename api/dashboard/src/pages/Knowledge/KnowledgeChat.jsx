@@ -76,7 +76,7 @@ const KnowledgeChat = () => {
         search_type: 'text'
       });
 
-      const results = searchResponse.data.data.results.text_results || [];
+      const results = searchResponse.data.data.text_results || [];
       
       let assistantContent = '';
       

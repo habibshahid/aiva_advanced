@@ -305,6 +305,88 @@ class PythonServiceClient {
       return false;
     }
   }
+  
+  /**
+   * Upload image to Python service
+   * @param {FormData} formData - Image form data
+   * @returns {Promise<Object>} Upload result
+   */
+  async uploadImage(formData) {
+    try {
+      const response = await this.client.post('/api/v1/images/upload', formData, {
+        headers: formData.getHeaders ? formData.getHeaders() : {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Image upload error:', error.response?.data || error.message);
+      throw new Error(`Image upload failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+
+  /**
+   * Search images in Python service
+   * @param {Object} params - Search parameters
+   * @returns {Promise<Object>} Search results
+   */
+  async searchImages(params) {
+    try {
+      const response = await this.client.post('/api/v1/images/search', params);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Image search error:', error.response?.data || error.message);
+      throw new Error(`Image search failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+
+  /**
+   * Get image statistics
+   * @param {string} kbId - Knowledge base ID
+   * @returns {Promise<Object>} Statistics
+   */
+  async getImageStats(kbId) {
+    try {
+      const response = await this.client.get(`/api/v1/images/${kbId}/stats`);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Get image stats error:', error.response?.data || error.message);
+      throw new Error(`Get image stats failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+
+  /**
+   * List images in knowledge base
+   * @param {string} kbId - Knowledge base ID
+   * @param {number} page - Page number
+   * @param {number} limit - Items per page
+   * @returns {Promise<Object>} Images list
+   */
+  async listImages(kbId, page = 1, limit = 20) {
+    try {
+      const response = await this.client.get(`/api/v1/images/${kbId}/list?page=${page}&limit=${limit}`);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - List images error:', error.response?.data || error.message);
+      throw new Error(`List images failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+
+  /**
+   * Delete image
+   * @param {string} imageId - Image ID
+   * @param {string} kbId - Knowledge base ID
+   * @returns {Promise<Object>} Delete result
+   */
+  async deleteImage(imageId, kbId) {
+    try {
+      const response = await this.client.delete(`/api/v1/images/${imageId}?kb_id=${kbId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Delete image error:', error.response?.data || error.message);
+      throw new Error(`Delete image failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
 }
 
 module.exports = new PythonServiceClient();

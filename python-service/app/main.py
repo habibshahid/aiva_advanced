@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime
 
 from app.config import settings
-from app.routes import health, documents, search
+from app.routes import health, documents, search, images
 
 # Configure logging
 logging.basicConfig(
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="AIVA Knowledge Service",
-    description="Document processing, embeddings, and vector search",
+    description="Document processing, embeddings, image search, and vector search",
     version="1.0.0"
 )
 
@@ -72,13 +72,21 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router, tags=["Health"])
 app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])
 app.include_router(search.router, prefix="/api/v1", tags=["Search"])
+app.include_router(images.router, prefix="/api/v1", tags=["Images"])  # NEW: Image routes
 
 @app.get("/")
 async def root():
     return {
         "service": "AIVA Knowledge Service",
         "version": "1.0.0",
-        "status": "running"
+        "status": "running",
+        "features": [
+            "Document processing",
+            "Text embeddings",
+            "Image processing (CLIP)",
+            "Vector search",
+            "Multi-format support"
+        ]
     }
 
 if __name__ == "__main__":

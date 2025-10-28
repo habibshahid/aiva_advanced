@@ -20,6 +20,7 @@ import KnowledgeEditor from './pages/Knowledge/KnowledgeEditor';
 import KnowledgeDocuments from './pages/Knowledge/KnowledgeDocuments';
 import KnowledgeSearch from './pages/Knowledge/KnowledgeSearch';
 import KnowledgeStats from './pages/Knowledge/KnowledgeStats';
+import KnowledgeChat from './pages/Knowledge/KnowledgeChat';
 
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
