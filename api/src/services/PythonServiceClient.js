@@ -387,6 +387,68 @@ class PythonServiceClient {
       throw new Error(`Delete image failed: ${error.response?.data?.detail || error.message}`);
     }
   }
+  
+  /**
+   * Get semantic cache statistics
+   * @param {string} kbId - Knowledge base ID (optional)
+   * @returns {Promise<Object>} Cache statistics
+   */
+  async getCacheStats(kbId = null) {
+    try {
+      const url = kbId 
+        ? `/api/v1/cache/stats?kb_id=${kbId}`
+        : '/api/v1/cache/stats';
+      
+      const response = await this.client.get(url);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Get cache stats error:', error.response?.data || error.message);
+      throw new Error(`Get cache stats failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+
+  /**
+   * Clear semantic cache
+   * @param {string} kbId - Knowledge base ID (optional)
+   * @returns {Promise<Object>} Success message
+   */
+  async clearCache(kbId = null) {
+    try {
+      const url = kbId 
+        ? `/api/v1/cache/clear?kb_id=${kbId}`
+        : '/api/v1/cache/clear';
+      
+      const response = await this.client.delete(url);
+      return response.data;
+    } catch (error) {
+      console.error('Python service - Clear cache error:', error.response?.data || error.message);
+      throw new Error(`Clear cache failed: ${error.response?.data?.detail || error.message}`);
+    }
+  }
+  
+  /**
+   * Get image file
+   * @param {string} kbId - Knowledge base ID
+   * @param {string} imageId - Image ID
+   * @returns {Promise<Object>} Image buffer and metadata
+   */
+  async getImageFile(kbId, imageId) {
+    try {
+      const response = await this.client.get(
+        `/api/v1/images/${imageId}/file?kb_id=${kbId}`,
+        { responseType: 'arraybuffer' }
+      );
+      
+      return {
+        buffer: response.data,
+        content_type: response.headers['content-type'],
+        file_size: response.headers['content-length']
+      };
+    } catch (error) {
+      console.error('Python service - Get image file error:', error.response?.data || error.message);
+      throw new Error(`Get image file failed: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new PythonServiceClient();

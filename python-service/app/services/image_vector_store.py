@@ -92,7 +92,7 @@ class ImageVectorStore:
         try:
             # Fetch all images for this KB
             cursor.execute("""
-                SELECT id, embedding, metadata
+                SELECT id, metadata
                 FROM yovo_tbl_aiva_images
                 WHERE kb_id = %s
                 ORDER BY created_at
@@ -121,13 +121,20 @@ class ImageVectorStore:
             for img in images:
                 # Parse embedding from JSON string
                 import json
-                embedding = json.loads(img['embedding'])
-                embeddings.append(embedding)
+                metadata_dict = json.loads(img['metadata']) if img['metadata'] else {}
                 
-                # Parse metadata
-                meta = json.loads(img['metadata']) if img['metadata'] else {}
-                meta['image_db_id'] = img['id']  # Store DB ID for reference
-                self.metadata.append(meta)
+                # Embedding is stored in metadata
+                if 'embedding' in metadata_dict:
+                    embedding = metadata_dict['embedding']
+                    embeddings.append(embedding)
+                    
+                    # Parse remaining metadata
+                    meta = {k: v for k, v in metadata_dict.items() if k != 'embedding'}
+                    meta['image_db_id'] = img['id']
+                    self.metadata.append(meta)
+                else:
+                    logger.warning(f"No embedding found for image {img['id']}")
+                
             
             # Add to FAISS index
             embeddings_array = np.array(embeddings, dtype=np.float32)
@@ -200,26 +207,41 @@ class ImageVectorStore:
             k_search = min(k * 2, len(self.metadata))  # Get more candidates for filtering
             distances, indices = self.index.search(query_array, k_search)
             
-            # Build results
+            # Process results
             results = []
-            for i, idx in enumerate(indices[0]):
-                if idx == -1 or idx >= len(self.metadata):
+            for idx, i in enumerate(indices[0]):
+                if i == -1:  # FAISS returns -1 for empty slots
                     continue
                 
-                meta = self.metadata[idx]
-                score = float(distances[0][i])
+                # Get metadata for this result
+                meta = self.metadata[i]
+                
+                # Extract image_id - try multiple sources
+                image_id = (
+                    meta.get('image_id') or 
+                    meta.get('image_db_id') or 
+                    meta.get('id')
+                )
                 
                 # Apply filters if provided
-                if filters and not self._matches_filters(meta, filters):
-                    continue
+                if filters:
+                    skip = False
+                    for key, value in filters.items():
+                        if meta.get(key) != value:
+                            skip = True
+                            break
+                    if skip:
+                        continue
                 
-                results.append({
-                    "image_id": meta.get('image_id'),
-                    "score": score,
-                    "similarity": score,
-                    "metadata": meta
-                })
+                result = {
+                    'image_id': image_id,  # ✅ Now properly extracted
+                    'score': float(distances[0][idx]),
+                    'similarity': float(distances[0][idx]),
+                    'metadata': meta
+                }
+                results.append(result)
                 
+                # Stop when we have enough results
                 if len(results) >= k:
                     break
             
@@ -227,7 +249,7 @@ class ImageVectorStore:
             
         except Exception as e:
             logger.error(f"Error searching vector store: {e}")
-            return []
+            raise
     
     def _matches_filters(self, metadata: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         """Check if metadata matches filters"""

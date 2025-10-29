@@ -2,7 +2,7 @@
 Search and embedding routes
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from typing import List
 
 from app.models.requests import SearchRequest, EmbeddingRequest, BatchSearchRequest
@@ -125,4 +125,49 @@ async def get_kb_stats(kb_id: str):
         stats = await vector_store.get_kb_stats(kb_id)
         return stats
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+@router.get("/cache/stats")
+async def get_cache_stats(
+    kb_id: str = Query(None, description="Knowledge base ID (optional)")
+):
+    """
+    Get semantic cache statistics
+    """
+    try:
+        from app.services.semantic_cache import SemanticCache
+        
+        cache = SemanticCache()
+        stats = await cache.get_cache_stats(kb_id)
+        
+        return {
+            "status": "success",
+            "data": stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/cache/clear")
+async def clear_cache(
+    kb_id: str = Query(None, description="Knowledge base ID (if None, clears all)")
+):
+    """
+    Clear semantic cache
+    """
+    try:
+        from app.services.semantic_cache import SemanticCache
+        
+        cache = SemanticCache()
+        await cache.clear_cache(kb_id)
+        
+        return {
+            "status": "success",
+            "message": f"Cache cleared for {'KB: ' + kb_id if kb_id else 'all KBs'}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))

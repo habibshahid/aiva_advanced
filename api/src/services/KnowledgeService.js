@@ -710,18 +710,18 @@ class KnowledgeService {
       // Deduct credits for search
       if (result.cost && result.cost > 0) {
         try {
-          await CreditService.deductCredits({
+          await CreditService.deductCredits(
             tenantId,
-            amount: result.cost,
-            operationType: 'image_search',
-            referenceId: `search-${Date.now()}`,
-            operationDetails: {
+            result.cost,
+            'image_search',
+            {
               query,
               search_type: searchType,
               results_count: result.returned,
               kb_id: kbId
-            }
-          });
+            },
+            `search-${Date.now()}`
+          );
         } catch (creditError) {
           console.error('Error deducting credits for image search:', creditError);
           // Don't fail the search if credit deduction fails
@@ -779,6 +779,21 @@ class KnowledgeService {
       throw error;
     }
   }
-}
 
+  /**
+   * Get image file for viewing
+   * @param {string} kbId - Knowledge base ID
+   * @param {string} imageId - Image ID
+   * @returns {Promise<Object>} Image data
+   */
+  async getImageFile(kbId, imageId) {
+    try {
+      return await PythonServiceClient.getImageFile(kbId, imageId);
+    } catch (error) {
+      console.error('Error getting image file:', error);
+      throw error;
+    }
+  }
+}
+ 
 module.exports = new KnowledgeService();

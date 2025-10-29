@@ -68,7 +68,20 @@ async def upload_image(
         image_metadata['original_filename'] = file.filename
         
         # Generate storage URL (you may need to adjust this based on your setup)
-        storage_url = f"/uploads/images/{kb_id}/{image_id}_{file.filename}"
+        
+        storage_base_path = getattr(settings, 'STORAGE_PATH', '/etc/aiva-oai/storage')
+        file_storage_path = Path(storage_base_path) / "images" / kb_id
+        file_storage_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save file to disk
+        final_file_path = file_storage_path / f"{image_id}_{file.filename}"
+        with open(final_file_path, 'wb') as f:
+            f.write(contents)
+        
+        logger.info(f"Image saved to: {final_file_path}")
+        
+        # Update storage_url to match the physical path
+        storage_url = str(final_file_path)
         
         # Store in database with EXISTING schema
         conn = mysql.connector.connect(
@@ -231,7 +244,11 @@ async def search_images(request: ImageSearchRequest):
                 score=result['score'],
                 similarity=result.get('similarity', result['score']),
                 metadata=meta,
-                search_type=result.get('search_type', request.search_type)
+                search_type=result.get('search_type', request.search_type),
+                image_url=result.get('image_url'),
+                thumbnail_url=result.get('thumbnail_url'),
+                description=result.get('description'),
+                source=result.get('source')
             ))
         
         from app.models.responses import SearchMetrics
@@ -427,6 +444,88 @@ async def list_images(
             
     except Exception as e:
         logger.error(f"Error listing images: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    
+@router.get("/images/{image_id}/file")
+async def get_image_file(
+    image_id: str,
+    kb_id: str = Query(..., description="Knowledge base ID")
+):
+    """
+    Get image file for viewing/download
+    """
+    try:
+        import mysql.connector
+        from fastapi.responses import Response
+        
+        from app.config import settings
+        
+        # Get image from database
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("""
+            SELECT 
+                storage_url, 
+                image_type,
+                file_size_bytes
+            FROM yovo_tbl_aiva_images
+            WHERE id = %s AND kb_id = %s
+        """, (image_id, kb_id))
+        
+        image = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        # Read image file
+        import os
+        storage_path = image['storage_url']
+        
+        if not os.path.exists(storage_path):
+            raise HTTPException(status_code=404, detail="Image file not found on disk")
+        
+        with open(storage_path, 'rb') as f:
+            image_data = f.read()
+        
+        # Determine content type from image_type or default
+        content_type = 'image/png'
+        if image['image_type']:
+            type_lower = image['image_type'].lower()
+            if type_lower in ['jpg', 'jpeg']:
+                content_type = 'image/jpeg'
+            elif type_lower == 'png':
+                content_type = 'image/png'
+            elif type_lower == 'gif':
+                content_type = 'image/gif'
+            elif type_lower == 'webp':
+                content_type = 'image/webp'
+        
+        # Return image
+        return Response(
+            content=image_data,
+            media_type=content_type,
+            headers={
+                'Content-Length': str(len(image_data)),
+                'Cache-Control': 'public, max-age=86400'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting image file: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

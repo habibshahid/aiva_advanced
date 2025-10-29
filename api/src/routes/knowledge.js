@@ -423,86 +423,114 @@ router.delete('/:kbId/documents/:documentId', verifyToken, async (req, res) => {
 
 /**
  * @route POST /api/knowledge/search
- * @desc Search knowledge base
+ * @desc Search knowledge base (auto-routes to image or text search)
  * @access Private
  */
 router.post('/search', verifyToken, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
-    const errors = validateSearchQuery(req.body);
-    if (errors.length > 0) {
-      return res.status(422).json(ResponseBuilder.validationError(errors));
-    }
+    const { kb_id, query, image_base64, search_type, top_k, filters } = req.body;
 
-    const { kb_id, query, image, top_k, search_type, filters } = req.body;
-
-    // Get KB to check ownership
+    // Validate KB exists
     const kb = await KnowledgeService.getKnowledgeBase(kb_id);
-
     if (!kb) {
-      return res.status(404).json(
-        ResponseBuilder.notFound('Knowledge base')
-      );
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
     }
 
     // Check ownership
-    if (kb.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
-      return res.status(403).json(
-        ResponseBuilder.forbidden()
-      );
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
     }
 
     // Check credits
-    const tenantId = req.user.tenant_id || req.user.id;
     const balance = await CreditService.getBalance(tenantId);
-
     if (balance < 0.001) {
-      return res.status(402).json(
-        ResponseBuilder.insufficientCredits(balance)
-      );
+      return res.status(402).json(ResponseBuilder.insufficientCredits(balance));
     }
 
-    // Perform search
-    const result = await KnowledgeService.search({
-      kbId: kb_id,
-      query: query,
-      image: image,
-      topK: top_k || 5,
-      searchType: search_type || 'hybrid',
-      filters: filters || {}
-    });
+    // ROUTE TO APPROPRIATE SERVICE
+    let result;
+    const isImageSearch = image_base64 || search_type === 'image' || search_type === 'hybrid';
+    
+    if (isImageSearch) {
+      console.log('Routing to IMAGE search service...');
+      result = await KnowledgeService.searchImages({
+        kbId: kb_id,
+        tenantId,
+        query: query || '',
+        imageBase64: image_base64,
+        searchType: search_type || 'image',
+        topK: top_k || 5,
+        filters: filters || {}
+      });
+      
+      // Normalize image search response structure
+      if (result.results) {
+        result = {
+          total_found: result.total_found || 0,
+          returned: result.returned || 0,
+          search_type: search_type || 'image',
+          text_results: [],
+          image_results: result.results || [],
+          product_results: [],
+          query_tokens: result.metrics?.query_tokens,
+          embedding_model: result.metrics?.embedding_model,
+          processing_time_ms: result.metrics?.processing_time_ms,
+          chunks_searched: result.metrics?.chunks_searched || 0,
+          cost: result.cost
+        };
+      }
+    } else {
+      console.log('Routing to TEXT search service...');
+      result = await KnowledgeService.search({
+        kbId: kb_id,
+        tenantId,
+        query,
+        topK: top_k || 5,
+        searchType: 'text',
+        filters: filters || {}
+      });
+    }
 
-    // Deduct credits
-    await CreditService.deductCredits(
-      tenantId,
-      result.cost,
-      'knowledge_search',
-      {
-        kb_id: kb_id,
-        query: query,
-        results_count: result.results?.total_found || 0
-      },
-      null
-    );
-
-    // Get new balance
+    // Get updated balance
     const newBalance = await CreditService.getBalance(tenantId);
 
-    // Build credits info
-    const creditsInfo = rb.buildCreditsInfo(
-      'knowledge_search',
-      result.cost,
-      newBalance,
-      result.cost_breakdown
-    );
+    // Build response with credits info
+    const response = rb.success(result, 'Search completed successfully');
+    response.credits = {
+      operation: isImageSearch ? 'image_search' : 'knowledge_search',
+      cost: result.cost || 0.0005,
+      remaining_balance: newBalance,
+      breakdown: {
+        base_cost: result.cost || 0.0005,
+        profit_amount: (result.cost || 0.0005) * 0.2,
+        final_cost: result.cost || 0.0005,
+        operations: [
+          {
+            operation: isImageSearch ? 'image_search' : 'knowledge_search',
+            quantity: 1,
+            unit_cost: result.cost || 0.0005,
+            total_cost: result.cost || 0.0005,
+            details: {
+              search_type: search_type || 'text',
+              results_returned: result.returned || 0,
+              query_tokens: result.query_tokens || 0,
+              embedding_model: result.embedding_model || 'unknown',
+              processing_time_ms: result.processing_time_ms || 0
+            }
+          }
+        ]
+      }
+    };
 
-    res.json(rb.success(result.results, creditsInfo));
+    res.json(response);
 
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json(
-      ResponseBuilder.serverError(error.message)
+      ResponseBuilder.serverError(error.message || 'Knowledge search failed')
     );
   }
 });
@@ -1141,6 +1169,74 @@ router.delete('/:kb_id/images/:image_id', verifyToken, async (req, res) => {
     res.status(500).json(
       ResponseBuilder.serverError(error.message || 'Failed to delete image')
     );
+  }
+});
+
+/**
+ * @route GET /api/knowledge/cache/stats
+ * @desc Get semantic cache statistics
+ * @access Private
+ */
+router.get('/cache/stats', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.query;
+    
+    const stats = await PythonServiceClient.getCacheStats(kb_id);
+
+    res.json(rb.success(stats));
+
+  } catch (error) {
+    console.error('Get cache stats error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route DELETE /api/knowledge/cache/clear
+ * @desc Clear semantic cache
+ * @access Private
+ */
+router.delete('/cache/clear', verifyToken, checkPermission('agents.manage'), async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.query;
+    
+    const result = await PythonServiceClient.clearCache(kb_id);
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Clear cache error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route GET /api/knowledge/:kb_id/images/:image_id/view
+ * @desc View/download image
+ * @access Private
+ */
+router.get('/:kb_id/images/:image_id/view', verifyToken, async (req, res) => {
+  try {
+    const { kb_id, image_id } = req.params;
+    
+    // Get image from Python service
+    const imageData = await KnowledgeService.getImageFile(kb_id, image_id);
+    
+    // Set appropriate headers
+    res.set('Content-Type', imageData.content_type || 'image/png');
+    res.set('Content-Length', imageData.file_size);
+    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+    
+    // Send image buffer
+    res.send(imageData.buffer);
+    
+  } catch (error) {
+    console.error('Get image error:', error);
+    res.status(404).json(ResponseBuilder.notFound('Image'));
   }
 });
 

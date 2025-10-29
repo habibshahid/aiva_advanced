@@ -12,6 +12,7 @@ import mysql.connector
 
 from app.config import settings
 from app.services.embeddings import EmbeddingService
+from app.services.semantic_cache import SemanticCache 
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ class VectorStore:
         
         self.embedding_service = EmbeddingService()
         self.prefix = settings.REDIS_VECTOR_PREFIX
+        
+        self.semantic_cache = SemanticCache()
+        self.enable_cache = getattr(settings, 'ENABLE_SEMANTIC_CACHE', True)
     
     def _get_mysql_connection(self):
         """Get MySQL connection"""
@@ -157,13 +161,77 @@ class VectorStore:
         filters: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Search vectors using cosine similarity
+        Search vectors using cosine similarity with semantic caching
+        
+        Args:
+            kb_id: Knowledge base ID
+            query: Search query
+            image: Optional image for hybrid/image search
+            top_k: Number of results to return
+            search_type: Type of search (text/image/hybrid)
+            filters: Optional metadata filters
+            
+        Returns:
+            Search results dictionary
         """
+        import time
+        search_start = time.time()
+        
         # Generate query embedding
         query_embedding_result = await self.embedding_service.generate_embedding(query)
         query_embedding = np.array(query_embedding_result["embedding"])
         query_tokens = query_embedding_result["tokens"]
         
+        # CHECK SEMANTIC CACHE FIRST (if enabled)
+        if self.enable_cache and search_type == "text":
+            cached_result = await self.semantic_cache.get_cached_result(
+                kb_id=kb_id,
+                query=query,
+                query_embedding=query_embedding.tolist(),
+                search_type=search_type
+            )
+            
+            if cached_result:
+                search_time = int((time.time() - search_start) * 1000)
+                
+                # Convert cached dict results back to TextResult models
+                from app.models.responses import TextResult
+                
+                text_results = []
+                for r in cached_result['results'].get('text_results', []):
+                    if isinstance(r, dict):
+                        # Convert dict back to TextResult
+                        text_results.append(TextResult(
+                            result_id=r.get('result_id', ''),
+                            type=r.get('type', 'text'),
+                            content=r.get('content', ''),
+                            source=r.get('source', {}),
+                            score=r.get('score', 0.0),
+                            scoring_details=r.get('scoring_details', {}),
+                            highlight=r.get('highlight')
+                        ))
+                    else:
+                        # Already a TextResult
+                        text_results.append(r)
+                
+                return {
+                    "total_found": cached_result['results'].get('total_found', 0),
+                    "returned": cached_result['results'].get('returned', 0),
+                    "text_results": text_results,
+                    "image_results": cached_result['results'].get('image_results', []),
+                    "product_results": cached_result['results'].get('product_results', []),
+                    "query_tokens": cached_result['results'].get('query_tokens', query_tokens),
+                    "embedding_model": cached_result['results'].get('embedding_model', ''),
+                    "chunks_searched": cached_result['results'].get('chunks_searched', 0),
+                    'cached': True,
+                    'cache_similarity': cached_result['cache_similarity'],
+                    'original_cached_query': cached_result['original_query'],
+                    'cache_age_seconds': cached_result['cache_age_seconds'],
+                    'cache_access_count': cached_result['access_count'],
+                    'search_time_ms': search_time
+                }
+        
+        # CACHE MISS - Perform actual search
         # Get all vectors for this KB from Redis
         pattern = f"{self.prefix}{kb_id}:*"
         keys = self.redis_client.keys(pattern)
@@ -177,7 +245,8 @@ class VectorStore:
                 "product_results": [],
                 "query_tokens": query_tokens,
                 "embedding_model": query_embedding_result["model"],
-                "chunks_searched": 0
+                "chunks_searched": 0,
+                "cached": False
             }
         
         # Calculate similarities
@@ -213,16 +282,60 @@ class VectorStore:
         # Get full chunk details from MySQL
         text_results = await self._enrich_results(top_results)
         
-        return {
+        search_time = int((time.time() - search_start) * 1000)
+        
+        # Build results
+        search_results = {
             "total_found": len(similarities),
             "returned": len(text_results),
             "text_results": text_results,
-            "image_results": [],  # TODO: Implement image search
-            "product_results": [],  # TODO: Implement product search
+            "image_results": [],
+            "product_results": [],
             "query_tokens": query_tokens,
             "embedding_model": query_embedding_result["model"],
-            "chunks_searched": len(keys)
+            "chunks_searched": len(keys),
+            "search_time_ms": search_time,
+            "cached": False
         }
+        
+        # CACHE THE RESULTS (if enabled and text search)
+        if self.enable_cache and search_type == "text" and len(text_results) > 0:
+            # Convert results to JSON-serializable format
+            cacheable_results = {
+                "total_found": search_results["total_found"],
+                "returned": search_results["returned"],
+                "text_results": [
+                    {
+                        "chunk_id": r.get("chunk_id") if isinstance(r, dict) else getattr(r, "chunk_id", None),
+                        "document_id": r.get("document_id") if isinstance(r, dict) else getattr(r, "document_id", None),
+                        "content": r.get("content") if isinstance(r, dict) else getattr(r, "content", ""),
+                        "score": r.get("score") if isinstance(r, dict) else getattr(r, "score", 0.0),
+                        "chunk_type": r.get("chunk_type") if isinstance(r, dict) else getattr(r, "chunk_type", "text"),
+                        "metadata": r.get("metadata") if isinstance(r, dict) else getattr(r, "metadata", {}),
+                        "source": r.get("source") if isinstance(r, dict) else getattr(r, "source", {})
+                    } for r in text_results
+                ],
+                "image_results": search_results.get("image_results", []),
+                "product_results": search_results.get("product_results", []),
+                "query_tokens": search_results["query_tokens"],
+                "embedding_model": search_results["embedding_model"],
+                "chunks_searched": search_results["chunks_searched"],
+                "search_time_ms": search_results["search_time_ms"]
+            }
+            
+            await self.semantic_cache.cache_result(
+                kb_id=kb_id,
+                query=query,
+                query_embedding=query_embedding.tolist(),
+                results=cacheable_results,
+                search_type=search_type,
+                metadata={
+                    'top_k': top_k,
+                    'filters': filters
+                }
+            )
+        
+        return search_results
     
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Calculate cosine similarity between two vectors"""

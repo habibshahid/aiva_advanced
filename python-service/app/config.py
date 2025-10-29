@@ -24,8 +24,13 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "127.0.0.1"
     REDIS_PORT: int = 6379
     REDIS_PASSWORD: Optional[str] = None
-    REDIS_DB: int = 1
+    REDIS_DB: int = 5
     REDIS_VECTOR_PREFIX: str = "vector:"
+
+    # ADD THESE LINES - Semantic Caching Configuration
+    SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds (1 hour)
+    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95  # 95% similarity required
+    ENABLE_SEMANTIC_CACHE: bool = True  # Enable/disable caching
     
     # OpenAI
     OPENAI_API_KEY: str
@@ -48,6 +53,8 @@ class Settings(BaseSettings):
     # File Limits
     MAX_FILE_SIZE_MB: int = 50
     MAX_PAGES_PER_DOCUMENT: int = 1000
+    
+    STORAGE_PATH: str = "/etc/aiva-oai/storage"
     
     # Logging
     LOG_LEVEL: str = "INFO"
