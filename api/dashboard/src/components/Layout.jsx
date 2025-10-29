@@ -10,7 +10,8 @@ import {
   X,
   Activity,
   Mic,
-  BookOpen
+  BookOpen,
+  MessageSquare
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -26,7 +27,8 @@ const Layout = () => {
     { name: 'Live Monitor', href: '/monitor', icon: Activity }, // Added
     { name: 'Credits', href: '/credits', icon: DollarSign },
     { name: 'Calls', href: '/calls', icon: Phone },
-	{ name: 'Test Agent', href: '/test', icon: Mic },
+	{ name: 'Test Call', href: '/test', icon: Mic },
+	{ name: 'Test Chat', href: '/agent-test', icon: MessageSquare },
   ];
 
   const isActive = (href) => {

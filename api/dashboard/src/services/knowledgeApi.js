@@ -131,3 +131,33 @@ export const deleteImage = async (kbId, imageId) => {
     throw error;
   }
 };
+
+// ADD THESE NEW FUNCTIONS
+
+/**
+ * Get semantic cache statistics
+ * @param {string} kbId - Knowledge base ID (optional)
+ * @returns {Promise} Cache statistics
+ */
+export const getCacheStats = async (kbId = null) => {
+  const url = kbId 
+    ? `/knowledge/cache/stats?kb_id=${kbId}`
+    : '/knowledge/cache/stats';
+  
+  const response = await api.get(url);
+  return response.data;
+};
+
+/**
+ * Clear semantic cache
+ * @param {string} kbId - Knowledge base ID (optional, clears all if null)
+ * @returns {Promise} Success message
+ */
+export const clearCache = async (kbId = null) => {
+  const url = kbId 
+    ? `/knowledge/cache/clear?kb_id=${kbId}`
+    : '/knowledge/cache/clear';
+  
+  const response = await api.delete(url);
+  return response.data;
+};

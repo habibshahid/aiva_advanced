@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Image as ImageIcon, Trash2, Download, Search, Loader2 } from 'lucide-react';
+import { Image as ImageIcon, Trash2, Download, Search, Loader2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { listImages, deleteImage } from '../../services/knowledgeApi';
 

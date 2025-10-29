@@ -304,7 +304,6 @@ router.post('/message', verifyToken, async (req, res) => {
     await CreditService.deductCredits(
       tenantId,
       result.cost,
-      result.session_id,
       'chat_message',
       {
         session_id: result.session_id,
@@ -312,7 +311,8 @@ router.post('/message', verifyToken, async (req, res) => {
         agent_id: agent_id,
         message_length: message.length,
         response_length: result.response.text.length
-      }
+      },
+      result.session_id,
     );
 
     // Get new balance

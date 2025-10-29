@@ -19,6 +19,7 @@ const DynamicAgentLoader = require('./integration/dynamic-loader');
 const CreditManager = require('./integration/credit-manager');
 const CallLogger = require('./integration/call-logger');
 const TranscriptionService = require('./services/transcription-service');
+const KBSearchHandler = require('./functions/kb-search-handler');
 
 class AsteriskOpenAIBridge {
     constructor() {
@@ -44,6 +45,8 @@ class AsteriskOpenAIBridge {
 			dynamicMode: process.env.DYNAMIC_MODE !== 'false'
         };
         
+		this.kbSearchHandler = new KBSearchHandler();
+		
         if (!this.config.openaiApiKey) {
             throw new Error('OPENAI_API_KEY is required');
         }
@@ -575,6 +578,12 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 		// Always register the transfer function
 		this.functionExecutor.registerFunction('transfer_to_agent', async (args, context) => {
 			return await this.transferHandler.transferCall(args, context);
+		});
+		
+		// Register KB search function
+		logger.info('Registering built-in search_knowledge function...');
+		this.functionExecutor.registerFunction('search_knowledge', async (args, context) => {
+			return await this.kbSearchHandler.searchKnowledge(args, context);
 		});
 		
 		logger.info('Built-in transfer_to_agent function registered');

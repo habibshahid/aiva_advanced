@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader, Bot, User, Trash2, 
-  RotateCcw, Copy, Check 
+  RotateCcw, Copy, Check, Image as ImageIcon, X 
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getKnowledgeBase, searchKnowledge } from '../../services/knowledgeApi';
@@ -19,7 +19,10 @@ const KnowledgeChat = () => {
   const [sending, setSending] = useState(false);
   const [sessionId] = useState(`test-${Date.now()}`);
   const [copiedIndex, setCopiedIndex] = useState(null);
-
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const fileInputRef = useRef(null);
+  
   useEffect(() => {
     loadKB();
   }, [id]);
@@ -52,68 +55,127 @@ const KnowledgeChat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Validate image type
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      toast.error('Invalid image type. Only JPG, PNG, GIF, and WEBP are supported.');
+      return;
+    }
+
+    // Validate size (10MB max)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Image too large. Maximum size is 10MB.');
+      return;
+    }
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setSelectedImage(file);
+      setImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }; 
+  
   const handleSend = async (e) => {
     e.preventDefault();
     
-    if (!input.trim() || sending) return;
+    if ((!input.trim() && !selectedImage) || sending) return;
 
     const userMessage = {
       role: 'user',
-      content: input.trim(),
-      timestamp: new Date().toISOString()
+      content: input.trim() || '[Image Query]',
+      timestamp: new Date().toISOString(),
+      hasImage: !!selectedImage
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = input.trim();
+    const currentImage = selectedImage;
+    const currentImagePreview = imagePreview;
+    
     setInput('');
+    removeImage();
     setSending(true);
 
     try {
-      // Search knowledge base
-      const searchResponse = await searchKnowledge({
+      // Prepare search request
+      const searchRequest = {
         kb_id: id,
-        query: input.trim(),
-        top_k: 3,
-        search_type: 'text'
-      });
+        query: currentInput || 'Show me similar images',
+        top_k: 5,
+        search_type: currentImage ? (currentInput ? 'hybrid' : 'image') : 'text'
+      };
 
-      const results = searchResponse.data.data.text_results || [];
+      // Add image if present
+      if (currentImage) {
+        searchRequest.image_base64 = currentImagePreview.split(',')[1]; // Remove data:image/...;base64, prefix
+      }
+
+      // Search knowledge base
+      const searchResponse = await searchKnowledge(searchRequest);
+
+      const textResults = searchResponse.data.data.text_results || [];
+      const imageResults = searchResponse.data.data.image_results || [];
       
       let assistantContent = '';
       
-      if (results.length === 0) {
-        assistantContent = "I couldn't find any relevant information in the knowledge base for that question. Could you try rephrasing or asking something else?";
+      if (textResults.length === 0 && imageResults.length === 0) {
+        assistantContent = "I couldn't find any relevant information or images in the knowledge base for that query. Could you try rephrasing or asking something else?";
       } else {
-        // Build context from search results
-        const context = results.map((r, i) => 
-          `[${i + 1}] ${r.content}`
-        ).join('\n\n');
-        
-        // Simple response generation (you can enhance this with GPT later)
-        assistantContent = `Based on the knowledge base:\n\n${results[0].content}\n\n`;
-        
-        if (results.length > 1) {
-          assistantContent += `\n**Additional relevant information:**\n`;
-          results.slice(1, 3).forEach((r, i) => {
-            assistantContent += `\n${i + 2}. ${r.content.substring(0, 200)}...`;
+        // Handle text results
+        if (textResults.length > 0) {
+          assistantContent = `Based on the knowledge base:\n\n${textResults[0].content}\n\n`;
+          
+          if (textResults.length > 1) {
+            assistantContent += `\n**Additional relevant information:**\n`;
+            textResults.slice(1, 3).forEach((r, i) => {
+              assistantContent += `\n${i + 2}. ${r.content.substring(0, 200)}...`;
+            });
+          }
+          
+          // Add text sources
+          assistantContent += `\n\n**Text Sources:**\n`;
+          textResults.forEach((r, i) => {
+            assistantContent += `- ${r.source.document_name} (relevance: ${(r.score * 100).toFixed(0)}%)\n`;
           });
         }
-        
-        // Add sources
-        assistantContent += `\n\n**Sources:**\n`;
-        results.forEach((r, i) => {
-          assistantContent += `- ${r.source.document_name} (relevance: ${(r.score * 100).toFixed(0)}%)\n`;
-        });
+
+        // Handle image results
+        if (imageResults.length > 0) {
+          if (textResults.length > 0) assistantContent += '\n\n';
+          assistantContent += `**Found ${imageResults.length} relevant image${imageResults.length > 1 ? 's' : ''}:**\n\n`;
+          imageResults.forEach((img, i) => {
+            assistantContent += `${i + 1}. ${img.filename || 'Image'} (similarity: ${(img.score * 100).toFixed(0)}%)\n`;
+            if (img.metadata?.description) {
+              assistantContent += `   Description: ${img.metadata.description}\n`;
+            }
+          });
+        }
       }
 
       const assistantMessage = {
         role: 'assistant',
         content: assistantContent,
         timestamp: new Date().toISOString(),
-        sources: results.map(r => ({
+        sources: textResults.map(r => ({
           document: r.source.document_name,
           score: r.score,
           chunk_index: r.source.chunk_index
-        }))
+        })),
+        imageResults: imageResults
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -305,18 +367,65 @@ const KnowledgeChat = () => {
       {/* Input */}
       <div className="bg-white border-t border-gray-200 px-6 py-4">
         <form onSubmit={handleSend} className="max-w-4xl mx-auto">
+          {/* Image Preview */}
+          {imagePreview && (
+            <div className="mb-3 flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <img 
+                src={imagePreview} 
+                alt="Selected" 
+                className="w-20 h-20 object-cover rounded"
+              />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900">
+                  {selectedImage?.name}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {selectedImage && (selectedImage.size / 1024).toFixed(1)} KB
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={removeImage}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          )}
+
           <div className="flex gap-3">
+            {/* Image Upload Button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+              onChange={handleImageSelect}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sending}
+              className="inline-flex items-center p-2 border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Add image to search"
+            >
+              <ImageIcon className="w-5 h-5 text-gray-600" />
+            </button>
+
+            {/* Text Input */}
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask a question about the knowledge base..."
+              placeholder={selectedImage ? "Describe what you're looking for (optional)..." : "Ask a question about the knowledge base..."}
               disabled={sending}
               className="flex-1 rounded-lg border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 disabled:opacity-50"
             />
+
+            {/* Send Button */}
             <button
               type="submit"
-              disabled={sending || !input.trim()}
+              disabled={sending || (!input.trim() && !selectedImage)}
               className="inline-flex items-center px-6 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {sending ? (

@@ -21,6 +21,7 @@ import KnowledgeDocuments from './pages/Knowledge/KnowledgeDocuments';
 import KnowledgeSearch from './pages/Knowledge/KnowledgeSearch';
 import KnowledgeStats from './pages/Knowledge/KnowledgeStats';
 import KnowledgeChat from './pages/Knowledge/KnowledgeChat';
+import AgentTestChat from './pages/AgentTestChat';
 
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
@@ -71,6 +72,7 @@ function App() {
             <Route path="knowledge/:id/search" element={<KnowledgeSearch />} />
             <Route path="knowledge/:id/stats" element={<KnowledgeStats />} />
 			<Route path="knowledge/:id/chat" element={<KnowledgeChat />} />
+			<Route path="agent-test" element={<AgentTestChat />} />
           </Route>
         </Routes>
         

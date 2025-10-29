@@ -7,7 +7,7 @@ const logger = require('../utils/logger');
 
 class DynamicAgentLoader {
     constructor(apiUrl, apiKey) {
-        this.apiUrl = apiUrl || process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api';
+        this.apiUrl = apiUrl || process.env.MANAGEMENT_API_URL || 'http://localhost:62001/api';
         this.apiKey = apiKey || process.env.MANAGEMENT_API_KEY;
         this.cache = new Map();
         this.cacheTimeout = 300000; // 5 minutes
@@ -100,6 +100,27 @@ class DynamicAgentLoader {
 			}
 		};
 		
+		const builtInKBSearchTool = agent.kb_id ? {
+			type: "function",
+			name: "search_knowledge",
+			description: "Search the knowledge base to find relevant information to answer customer questions. Use this when you need specific information about products, policies, procedures, or any other documented information.",
+			parameters: {
+				type: "object",
+				properties: {
+					query: {
+						type: "string",
+						description: "The search query. Be specific about what information you're looking for."
+					},
+					top_k: {
+						type: "number",
+						description: "Number of results to return (default: 3, max: 5)",
+						default: 3
+					}
+				},
+				required: ["query"]
+			}
+		} : null;
+		
 		const openAITools = [
 			builtInTransferTool, // Always include transfer tool first
 			...(agent.functions || [])
@@ -111,6 +132,11 @@ class DynamicAgentLoader {
 					parameters: func.parameters
 				}))
 		];
+		
+		if (builtInKBSearchTool) {
+			openAITools.push(builtInKBSearchTool);
+			logger.debug(`Added KB search tool for agent ${agent.id} (KB: ${agent.kb_id})`);
+		}
 		
 		const builtInTransferFunction = {
 			id: 'builtin_transfer_to_agent',
