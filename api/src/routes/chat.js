@@ -300,19 +300,53 @@ router.post('/message', verifyToken, async (req, res) => {
       userId: req.user.id
     });
 
-    // Deduct credits
+    if (result.cost_breakdown && result.cost_breakdown.operations) {
+      const kbOperation = result.cost_breakdown.operations.find(
+        op => op.operation === 'knowledge_search' || 
+              op.operation === 'knowledge_retrieval' ||
+              op.operation === 'embedding'
+      );
+      
+      if (kbOperation && kbOperation.total_cost > 0) {
+        await CreditService.deductCredits(
+          tenantId,
+          kbOperation.total_cost,
+          'knowledge_search',
+          {
+            session_id: result.session_id,
+            message_id: result.message_id,
+            query: message.substring(0, 100),
+            kb_id: result.kb_id || 'unknown',
+            chunks_retrieved: result.context_used?.knowledge_base_chunks || 0,
+            search_type: 'text'
+          },
+          result.session_id
+        );
+      }
+    }
+    
+    // 2. Deduct LLM generation cost
+    const llmOperation = result.cost_breakdown?.operations?.find(
+      op => op.operation === 'llm_generation' || op.operation === 'chat_completion'
+    );
+    
+    const llmCost = llmOperation?.total_cost || result.cost;
+    
     await CreditService.deductCredits(
       tenantId,
-      result.cost,
+      llmCost,
       'chat_message',
       {
         session_id: result.session_id,
         message_id: result.message_id,
         agent_id: agent_id,
+        model: result.agent_metadata?.model || 'gpt-4o-mini',
         message_length: message.length,
-        response_length: result.response.text.length
+        response_length: result.response.text.length,
+        input_tokens: result.agent_metadata?.input_tokens || 0,
+        output_tokens: result.agent_metadata?.output_tokens || 0
       },
-      result.session_id,
+      result.session_id
     );
 
     // Get new balance

@@ -398,27 +398,52 @@ const AgentTestChat = () => {
                           )}
 
                           {/* Cost Info */}
-                          {message.cost !== undefined && (
-                            <div className="mt-2 pt-2 border-t border-gray-200">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-gray-500">
-                                  {message.context_used && (
-                                    <>
-                                      {message.context_used.knowledge_base_chunks > 0 && (
-                                        <span className="mr-2">📚 {message.context_used.knowledge_base_chunks} chunks</span>
-                                      )}
-                                      <span className="mr-2">💬 {message.context_used.conversation_history_messages} history</span>
-                                      <span>🔤 {message.context_used.total_context_tokens} tokens</span>
-                                    </>
-                                  )}
-                                </span>
-                                <span className="font-medium text-gray-700">
-                                  <DollarSign className="w-3 h-3 inline mr-0.5" />
-                                  {formatCost(message.cost)}
-                                </span>
-                              </div>
-                            </div>
-                          )}
+						  {message.cost !== undefined && (
+							<div className="mt-2 pt-2 border-t border-gray-200">
+							  <div className="flex items-center justify-between text-xs">
+								<span className="text-gray-500">
+								  {message.context_used && (
+									<>
+									  {message.context_used.knowledge_base_chunks > 0 && (
+										<span className="mr-2">📚 {message.context_used.knowledge_base_chunks} chunks</span>
+									  )}
+									  <span className="mr-2">💬 {message.context_used.conversation_history_messages} history</span>
+									  <span>🔤 {message.context_used.total_context_tokens} tokens</span>
+									</>
+								  )}
+								</span>
+								<span className="font-medium text-gray-700">
+								  <DollarSign className="w-3 h-3 inline mr-0.5" />
+								  {formatCost(message.cost)}
+								</span>
+							  </div>
+							  
+							  {/* Cost Breakdown Details */}
+							  {message.cost_breakdown && message.cost_breakdown.operations && (
+								<div className="mt-1 space-y-1">
+								  {message.cost_breakdown.operations.map((op, idx) => (
+									<div key={idx} className="text-xs text-gray-600 flex items-center justify-between">
+									  <span className="capitalize">
+										{op.operation.replace(/_/g, ' ')}
+										{op.details && op.details.model && (
+										  <span className="text-gray-400 ml-1">({op.details.model})</span>
+										)}
+									  </span>
+									  <span className="text-gray-500">
+										{formatCost(op.total_cost)}
+									  </span>
+									</div>
+								  ))}
+								  {message.cost_breakdown.operations.length > 1 && (
+									<div className="text-xs font-medium text-gray-700 flex items-center justify-between pt-1 border-t border-gray-100">
+									  <span>Total</span>
+									  <span>{formatCost(message.cost_breakdown.final_cost)}</span>
+									</div>
+								  )}
+								</div>
+							  )}
+							</div>
+						  )}
                         </div>
 
                         <div className="flex items-center mt-1 space-x-2">
