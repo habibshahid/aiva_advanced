@@ -12,44 +12,83 @@ class CostCalculator {
 
     // OpenAI Chat Pricing (per 1M tokens)
     this.pricing = {
-      openai: {
-        'gpt-4o-mini': {
-          input: parseFloat(process.env.OPENAI_GPT4O_MINI_INPUT_COST || 0.150),
-          output: parseFloat(process.env.OPENAI_GPT4O_MINI_OUTPUT_COST || 0.600),
-          cached_input: parseFloat(process.env.OPENAI_GPT4O_MINI_CACHED_INPUT_COST || 0.075)
-        },
-        'gpt-4o': {
-          input: parseFloat(process.env.OPENAI_GPT4O_INPUT_COST || 2.50),
-          output: parseFloat(process.env.OPENAI_GPT4O_OUTPUT_COST || 10.00),
-          cached_input: parseFloat(process.env.OPENAI_GPT4O_CACHED_INPUT_COST || 1.25)
-        },
-        // Realtime Audio (per 1M tokens)
-        'gpt-4o-mini-realtime': {
-          audio_input: parseFloat(process.env.OPENAI_REALTIME_AUDIO_INPUT_COST || 100.00),
-          audio_output: parseFloat(process.env.OPENAI_REALTIME_AUDIO_OUTPUT_COST || 200.00),
-          text_input: parseFloat(process.env.OPENAI_REALTIME_TEXT_INPUT_COST || 5.00),
-          text_output: parseFloat(process.env.OPENAI_REALTIME_TEXT_OUTPUT_COST || 20.00)
-        },
-        // Embeddings (per 1M tokens)
-        'text-embedding-3-small': {
-          input: parseFloat(process.env.OPENAI_EMBEDDING_SMALL_COST || 0.020)
-        },
-        'text-embedding-3-large': {
-          input: parseFloat(process.env.OPENAI_EMBEDDING_LARGE_COST || 0.130)
-        }
-      },
-      deepgram: {
-        'nova-2': parseFloat(process.env.DEEPGRAM_NOVA_2_COST || 0.0043), // per minute
-        'nova-3': parseFloat(process.env.DEEPGRAM_NOVA_3_COST || 0.0059), // per minute
-        'whisper': parseFloat(process.env.DEEPGRAM_WHISPER_COST || 0.0048), // per minute
-        'aura-tts': parseFloat(process.env.DEEPGRAM_TTS_AURA_COST || 0.015) // per minute
-      },
-      operations: {
-        document_processing: parseFloat(process.env.DOCUMENT_PROCESSING_BASE_COST || 0.01),
-        image_processing_clip: parseFloat(process.env.IMAGE_PROCESSING_CLIP_COST || 0.002),
-        storage_per_gb: parseFloat(process.env.STORAGE_COST_PER_GB || 0.023)
-      }
-    };
+	  openai: {
+		// ===== CHAT MODELS =====
+		'gpt-4o-mini': {
+		  input: parseFloat(process.env.OPENAI_GPT4O_MINI_INPUT_COST || 0.150),
+		  output: parseFloat(process.env.OPENAI_GPT4O_MINI_OUTPUT_COST || 0.600),
+		  cached_input: parseFloat(process.env.OPENAI_GPT4O_MINI_CACHED_INPUT_COST || 0.075)
+		},
+		'gpt-4o': {
+		  input: parseFloat(process.env.OPENAI_GPT4O_INPUT_COST || 2.50),
+		  output: parseFloat(process.env.OPENAI_GPT4O_OUTPUT_COST || 10.00),
+		  cached_input: parseFloat(process.env.OPENAI_GPT4O_CACHED_INPUT_COST || 1.25)
+		},
+		'gpt-4-turbo': {
+		  input: parseFloat(process.env.OPENAI_GPT4_TURBO_INPUT_COST || 10.00),
+		  output: parseFloat(process.env.OPENAI_GPT4_TURBO_OUTPUT_COST || 30.00)
+		},
+		'gpt-4-turbo-preview': {
+		  input: parseFloat(process.env.OPENAI_GPT4_TURBO_INPUT_COST || 10.00),
+		  output: parseFloat(process.env.OPENAI_GPT4_TURBO_OUTPUT_COST || 30.00)
+		},
+		'gpt-4': {
+		  input: parseFloat(process.env.OPENAI_GPT4_INPUT_COST || 30.00),
+		  output: parseFloat(process.env.OPENAI_GPT4_OUTPUT_COST || 60.00)
+		},
+		'gpt-3.5-turbo': {
+		  input: parseFloat(process.env.OPENAI_GPT35_TURBO_INPUT_COST || 0.50),
+		  output: parseFloat(process.env.OPENAI_GPT35_TURBO_OUTPUT_COST || 1.50)
+		},
+		'o1': {
+		  input: parseFloat(process.env.OPENAI_O1_INPUT_COST || 15.00),
+		  output: parseFloat(process.env.OPENAI_O1_OUTPUT_COST || 60.00)
+		},
+		'o1-mini': {
+		  input: parseFloat(process.env.OPENAI_O1_MINI_INPUT_COST || 3.00),
+		  output: parseFloat(process.env.OPENAI_O1_MINI_OUTPUT_COST || 12.00)
+		},
+		
+		// ===== REALTIME/VOICE MODELS =====
+		'gpt-4o-mini-realtime': {
+		  audio_input: parseFloat(process.env.OPENAI_REALTIME_AUDIO_INPUT_COST || 100.00),
+		  audio_output: parseFloat(process.env.OPENAI_REALTIME_AUDIO_OUTPUT_COST || 200.00),
+		  text_input: parseFloat(process.env.OPENAI_REALTIME_TEXT_INPUT_COST || 5.00),
+		  text_output: parseFloat(process.env.OPENAI_REALTIME_TEXT_OUTPUT_COST || 20.00)
+		},
+		'gpt-4o-mini-realtime-preview': {
+		  audio_input: parseFloat(process.env.OPENAI_REALTIME_AUDIO_INPUT_COST || 100.00),
+		  audio_output: parseFloat(process.env.OPENAI_REALTIME_AUDIO_OUTPUT_COST || 200.00),
+		  text_input: parseFloat(process.env.OPENAI_REALTIME_TEXT_INPUT_COST || 5.00),
+		  text_output: parseFloat(process.env.OPENAI_REALTIME_TEXT_OUTPUT_COST || 20.00)
+		},
+		'gpt-4o-mini-realtime-preview-2024-12-17': {
+		  audio_input: parseFloat(process.env.OPENAI_REALTIME_AUDIO_INPUT_COST || 100.00),
+		  audio_output: parseFloat(process.env.OPENAI_REALTIME_AUDIO_OUTPUT_COST || 200.00),
+		  text_input: parseFloat(process.env.OPENAI_REALTIME_TEXT_INPUT_COST || 5.00),
+		  text_output: parseFloat(process.env.OPENAI_REALTIME_TEXT_OUTPUT_COST || 20.00)
+		},
+		
+		// ===== EMBEDDINGS =====
+		'text-embedding-3-small': {
+		  input: parseFloat(process.env.OPENAI_EMBEDDING_SMALL_COST || 0.020)
+		},
+		'text-embedding-3-large': {
+		  input: parseFloat(process.env.OPENAI_EMBEDDING_LARGE_COST || 0.130)
+		}
+	  },
+	  deepgram: {
+		'nova-2': parseFloat(process.env.DEEPGRAM_NOVA_2_COST || 0.0043),
+		'nova-3': parseFloat(process.env.DEEPGRAM_NOVA_3_COST || 0.0059),
+		'whisper': parseFloat(process.env.DEEPGRAM_WHISPER_COST || 0.0048),
+		'aura-tts': parseFloat(process.env.DEEPGRAM_TTS_AURA_COST || 0.015)
+	  },
+	  operations: {
+		document_processing: parseFloat(process.env.DOCUMENT_PROCESSING_BASE_COST || 0.01),
+		image_processing_clip: parseFloat(process.env.IMAGE_PROCESSING_CLIP_COST || 0.002),
+		storage_per_gb: parseFloat(process.env.STORAGE_COST_PER_GB || 0.023)
+	  }
+	};
   }
 
   /**

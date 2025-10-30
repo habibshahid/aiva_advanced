@@ -88,21 +88,43 @@ export const getProducts = (params = {}) =>
   api.get('/shopify/products', { params });
 
 /**
- * Get product details
- * @param {string} productId - Product ID
- * @returns {Promise<Object>} Product details
+ * Get single product details
  */
-export const getProduct = (productId) => 
-  api.get(`/shopify/products/${productId}`);
+export const getProduct = async (productId) => {
+  try {
+    const response = await api.get(`/shopify/products/${productId}`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Get product error:', error);
+    throw error;
+  }
+};
 
 /**
- * Refresh single product
- * @param {string} productId - Product ID
- * @returns {Promise<Object>} Updated product
+ * Refresh single product from Shopify
  */
-export const refreshProduct = (productId) => 
-  api.post(`/shopify/products/${productId}/refresh`);
+export const refreshProduct = async (productId) => {
+  try {
+    const response = await api.post(`/shopify/products/${productId}/refresh`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Refresh product error:', error);
+    throw error;
+  }
+};
 
+/**
+ * Delete product from knowledge base
+ */
+export const deleteProduct = async (productId) => {
+  try {
+    const response = await api.delete(`/shopify/products/${productId}`);
+    return response.data.data || response.data;
+  } catch (error) {
+    console.error('Delete product error:', error);
+    throw error;
+  }
+};
 /**
  * Get statistics
  * @param {Object} params - Query parameters

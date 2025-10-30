@@ -236,64 +236,67 @@ class VectorStore:
         pattern = f"{self.prefix}{kb_id}:*"
         keys = self.redis_client.keys(pattern)
         
-        if not keys:
-            return {
-                "total_found": 0,
-                "returned": 0,
-                "text_results": [],
-                "image_results": [],
-                "product_results": [],
-                "query_tokens": query_tokens,
-                "embedding_model": query_embedding_result["model"],
-                "chunks_searched": 0,
-                "cached": False
-            }
+        # Filter out product keys - only get document chunks
+        document_keys = [k for k in keys if b':product:' not in k]
+    
+        if not document_keys:
+            text_results = []
+            chunks_searched = 0
+        else:
+            # Calculate similarities for documents (existing code)
+            similarities = []
+            
+            for key in document_keys:
+                try:
+                    vector_data = json.loads(self.redis_client.get(key))
+                    stored_embedding = np.array(vector_data["embedding"])
+                    
+                    similarity = self._cosine_similarity(query_embedding, stored_embedding)
+                    
+                    similarities.append({
+                        "chunk_id": vector_data["chunk_id"],
+                        "document_id": vector_data["document_id"],
+                        "content": vector_data.get("content", ""),
+                        "chunk_type": vector_data.get("chunk_type", "text"),
+                        "metadata": vector_data.get("metadata", {}),
+                        "score": float(similarity)
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing vector {key}: {e}")
+                    continue
+            
+            similarities.sort(key=lambda x: x["score"], reverse=True)
+            top_results = similarities[:top_k]
+            text_results = await self._enrich_results(top_results)
+            chunks_searched = len(document_keys)
         
-        # Calculate similarities
-        similarities = []
-        
-        for key in keys:
-            try:
-                vector_data = json.loads(self.redis_client.get(key))
-                stored_embedding = np.array(vector_data["embedding"])
-                
-                # Cosine similarity
-                similarity = self._cosine_similarity(query_embedding, stored_embedding)
-                
-                similarities.append({
-                    "chunk_id": vector_data["chunk_id"],
-                    "document_id": vector_data["document_id"],
-                    "content": vector_data.get("content", ""),
-                    "chunk_type": vector_data.get("chunk_type", "text"),
-                    "metadata": vector_data.get("metadata", {}),
-                    "score": float(similarity)
-                })
-                
-            except Exception as e:
-                logger.error(f"Error processing vector {key}: {e}")
-                continue
-        
-        # Sort by similarity
-        similarities.sort(key=lambda x: x["score"], reverse=True)
-        
-        # Get top K
-        top_results = similarities[:top_k]
-        
-        # Get full chunk details from MySQL
-        text_results = await self._enrich_results(top_results)
+        # ✅ 2. Search products (NEW!)
+        try:
+            from app.services.product_search import product_search_service
+            product_results = await product_search_service.search_products(
+                kb_id=kb_id,
+                query_embedding=query_embedding,
+                top_k=top_k,
+                filters=filters
+            )
+            logger.info(f"Found {len(product_results)} matching products")
+        except Exception as e:
+            logger.error(f"Product search failed: {e}")
+            product_results = []
         
         search_time = int((time.time() - search_start) * 1000)
         
         # Build results
         search_results = {
-            "total_found": len(similarities),
+            "total_found": len(text_results) + len(product_results),
             "returned": len(text_results),
             "text_results": text_results,
             "image_results": [],
-            "product_results": [],
+            "product_results": product_results,  # ✅ NOW WITH SEMANTIC RESULTS!
             "query_tokens": query_tokens,
             "embedding_model": query_embedding_result["model"],
-            "chunks_searched": len(keys),
+            "chunks_searched": chunks_searched,
             "search_time_ms": search_time,
             "cached": False
         }

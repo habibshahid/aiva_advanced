@@ -67,18 +67,33 @@ class ImageResult(BaseModel):
 
 
 class ProductResult(BaseModel):
-    result_id: str
-    type: str
-    product_id: str
+    product_id: str  # Required from product_search
+    shopify_product_id: Optional[int] = None  # From Shopify integration
     name: str
+    title: Optional[str] = None  # Product title
     description: Optional[str] = None
+    price: Optional[float] = None  # Single price field (not dict)
+    compare_at_price: Optional[float] = None
     image_url: Optional[str] = None
-    price: Optional[Dict[str, Any]] = None
-    availability: Optional[Dict[str, Any]] = None
+    vendor: Optional[str] = None
+    product_type: Optional[str] = None
+    tags: List[str] = []
+    status: Optional[str] = None
     score: float
-    scoring_details: Any
-    metadata: Dict[str, Any]
+    similarity_score: Optional[float] = None  # Same as score
     url: Optional[str] = None
+    availability: Optional[str] = None  # String like "in_stock" not dict
+    metadata: Dict[str, Any] = {}
+    match_reason: Optional[str] = None
+    scoring_details: Optional[Dict[str, Any]] = None
+    
+    # Backward compatibility - make these optional since old code may expect them
+    result_id: Optional[str] = None  # Will be product_id if not provided
+    type: Optional[str] = "product"  # Default type
+    
+    class Config:
+        # Allow extra fields in case product_search adds more
+        extra = "allow"
 
 
 class SearchResults(BaseModel):

@@ -45,7 +45,7 @@ async def search_knowledge(request: SearchRequest):
         )
         
         from app.models.responses import SearchResults, SearchMetrics
-        
+        print(f"{results}")
         return SearchResponse(
             results=SearchResults(
                 total_found=results["total_found"],

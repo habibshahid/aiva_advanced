@@ -12,6 +12,7 @@ import Credits from './pages/Credits';
 import Calls from './pages/Calls';
 import Monitor from './pages/Monitor';
 import AgentTest from './pages/AgentTest';
+import AgentTestChat from './pages/AgentTestChat';
 import Layout from './components/Layout';
 
 // Knowledge Base Pages
@@ -27,6 +28,7 @@ import ShopifyIntegration from './pages/Shopify/ShopifyIntegration';
 import ConnectStore from './pages/Shopify/ConnectStore';
 import ShopifyProducts from './pages/Shopify/ShopifyProducts';
 import StoreSettings from './pages/Shopify/StoreSettings';
+import ProductDetail from './pages/Shopify/ProductDetail';
 
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
@@ -68,7 +70,9 @@ function App() {
             <Route path="agents/:id" element={<AgentEditor />} />
             <Route path="credits" element={<Credits />} />
             <Route path="calls" element={<Calls />} />
-            
+            <Route path="/test" element={<AgentTest />} />
+			<Route path="agent-test" element={<AgentTestChat />} />
+			
             {/* Knowledge Base Routes */}
             <Route path="knowledge" element={<KnowledgeList />} />
             <Route path="knowledge/new" element={<KnowledgeEditor />} />
@@ -83,6 +87,7 @@ function App() {
             <Route path="shopify/connect" element={<ConnectStore />} />
 			<Route path="shopify/stores/:storeId" element={<StoreSettings />} />
             <Route path="shopify/products" element={<ShopifyProducts />} />
+			<Route path="/shopify/products/:id" element={<ProductDetail />} />
           </Route>
         </Routes>
         

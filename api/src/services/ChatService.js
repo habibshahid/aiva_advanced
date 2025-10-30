@@ -223,11 +223,106 @@ class ChatService {
           .join('\n\n');
     }
 
+    // ANTI-HALLUCINATION SYSTEM INSTRUCTIONS
+    const antiHallucinationInstructions = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 CRITICAL OPERATIONAL BOUNDARIES - STRICTLY ENFORCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOU MUST NEVER:
+❌ Answer questions outside your knowledge base unless explicitly provided above
+❌ Make up information, facts, statistics, or data that are not in your context
+❌ Provide information that contradicts your instructions
+❌ Discuss topics not related to your role and purpose as defined in instructions
+❌ Claim capabilities or knowledge you don't have
+❌ Speculate or guess when you don't have information
+
+WHEN YOU CANNOT ANSWER (any of these conditions):
+1. The question is outside your defined scope/instructions
+2. The information is not in your knowledge base or context above
+3. The request contradicts your instructions
+4. You are uncertain about the answer
+5. The topic is completely unrelated to your purpose
+
+YOU MUST RESPOND WITH:
+"I apologize, but I don't have the information needed to answer that question accurately. This appears to be outside my area of expertise. Would you like me to connect you with a human agent who can better assist you?"
+
+THEN IMMEDIATELY SET agent_transfer = true
+
+HUMAN AGENT TRANSFER TRIGGERS:
+• User explicitly requests: "speak to human", "talk to agent", "transfer me", "connect to representative"
+• User shows frustration: "this isn't working", "you're not helping", "I give up"
+• You cannot answer their question (as per conditions above)
+• After 3 failed attempts to help the user
+• User needs information you don't have access to
+• Complex issues requiring human judgment or empathy
+
+REMEMBER:
+✓ Your knowledge is LIMITED to your instructions and the RELEVANT INFORMATION above
+✓ Being honest about limitations builds MORE trust than making things up
+✓ Transferring to a human when needed is BETTER than providing wrong information
+✓ NEVER pretend to know something you don't
+✓ ALWAYS cite your knowledge base when answering from it
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+	
+	if (knowledgeResults && knowledgeResults.product_results && knowledgeResults.product_results.length > 0) {
+	  context += '\n\nAVAILABLE PRODUCTS:\n';
+	  knowledgeResults.product_results.forEach((product, index) => {
+		context += `\n${index + 1}. **${product.name}**`;
+		context += `\n   Price: PKR ${product.price.toLocaleString()}`;
+		if (product.compare_at_price && product.compare_at_price > product.price) {
+		  context += ` (Was: PKR ${product.compare_at_price.toLocaleString()})`;
+		}
+		if (product.description) {
+		  const shortDesc = product.description.length > 200 
+			? product.description.substring(0, 200) + '...' 
+			: product.description;
+		  context += `\n   Description: ${shortDesc}`;
+		}
+		if (product.vendor) {
+		  context += `\n   Brand: ${product.vendor}`;
+		}
+		context += `\n   Availability: ${product.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'}`;
+		context += `\n   Match Score: ${(product.similarity_score * 100).toFixed(0)}%`;
+		context += '\n';
+	  });
+	  
+	  context += '\n**IMPORTANT**: When products are listed above, YOU MUST present them to the user in your response. Do not say you don\'t have information if products are available!';
+	}
+
+	// Add image results
+	if (knowledgeResults && knowledgeResults.image_results && knowledgeResults.image_results.length > 0) {
+	  context += '\n\nRELEVANT IMAGES FOUND: ' + knowledgeResults.image_results.length + ' images available\n';
+	}
+	
+	const systemPrompt = `${agent.instructions}
+
+═══════════════════════════════════════════════════════
+PRODUCT PRESENTATION GUIDELINES:
+═══════════════════════════════════════════════════════
+When products are found in the AVAILABLE PRODUCTS section below:
+✓ ALWAYS present them to the user
+✓ Format clearly: name, price, brief description
+✓ Highlight sales/discounts
+✓ Ask if user wants more details
+✗ NEVER say "I don't have information" if products are listed
+
+${context}
+
+═══════════════════════════════════════════════════════
+CRITICAL RULE:
+═══════════════════════════════════════════════════════
+${antiHallucinationInstructions}
+`;
+
+
     // Build messages for OpenAI
     const messages = [
       {
         role: 'system',
-        content: agent.instructions + context
+        content: systemPrompt
       },
       ...history.map(msg => ({
         role: msg.role,
@@ -239,6 +334,8 @@ class ChatService {
       }
     ];
 
+	console.log(messages);
+	
     // Add image if provided
     if (image) {
       messages[messages.length - 1].content = [
@@ -263,7 +360,7 @@ class ChatService {
       : undefined;
 
     // Call OpenAI
-    const model = agent.model || process.env.CHAT_MODEL || 'gpt-4o-mini';
+    const model = agent.chat_model || agent.model || process.env.CHAT_MODEL || 'gpt-4o-mini';
 	
     const completion = await this.openai.chat.completions.create({
       model: model,
@@ -276,7 +373,48 @@ class ChatService {
     const aiMessage = completion.choices[0].message;
     let finalContent = aiMessage.content || '';
     const functionCalls = [];
+	let agentTransferRequested = false;
+	const transferIndicators = [
+      'connect you with a human',
+      'transfer you to',
+      'speak with a human',
+      'talk to a human',
+      'human agent',
+      'live agent',
+      'customer service representative',
+      'outside my area',
+      'beyond my capabilities',
+      'don\'t have access to',
+      'unable to assist',
+      'can\'t help with'
+    ];
+	
+	const lowerContent = (finalContent || '').toLowerCase();
+    agentTransferRequested = transferIndicators.some(indicator => 
+      lowerContent.includes(indicator)
+    );
+	
+	const userTransferPhrases = [
+      'speak to human',
+      'talk to agent',
+      'transfer me',
+      'connect to representative',
+      'human please',
+      'real person',
+      'live chat',
+      'customer service'
+    ];
+	
+	const lowerUserMessage = message.toLowerCase();
+    const userRequestedTransfer = userTransferPhrases.some(phrase => 
+      lowerUserMessage.includes(phrase)
+    );
 
+    // Set transfer flag if detected
+    if (agentTransferRequested || userRequestedTransfer) {
+      agentTransferRequested = true;
+    }
+	
     // Handle function calls
     if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
       for (const toolCall of aiMessage.tool_calls) {
@@ -339,7 +477,8 @@ class ChatService {
       costBreakdown: totalCost,
       tokensInput: completion.usage.prompt_tokens,
       tokensOutput: completion.usage.completion_tokens,
-      processingTimeMs: 0 // TODO: Track actual time
+      processingTimeMs: 0, // TODO: Track actual time
+	  agentTransferRequested: agentTransferRequested
     });
 
     // Update session stats
@@ -348,6 +487,7 @@ class ChatService {
     return {
       session_id: sessionId,
       message_id: assistantMessageId,
+	  agent_transfer: agentTransferRequested,
       response: {
         text: formattedResponse.text,
         html: formattedResponse.html,
@@ -510,8 +650,8 @@ class ChatService {
       `INSERT INTO yovo_tbl_aiva_chat_messages (
         id, session_id, role, content, content_html, content_markdown,
         sources, images, products, function_calls, cost, cost_breakdown,
-        tokens_input, tokens_output, processing_time_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        tokens_input, tokens_output, processing_time_ms, agent_transfer_requested
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         messageId,
         messageData.sessionId,
@@ -527,7 +667,8 @@ class ChatService {
         messageData.costBreakdown ? JSON.stringify(messageData.costBreakdown) : null,
         messageData.tokensInput || 0,
         messageData.tokensOutput || 0,
-        messageData.processingTimeMs || 0
+        messageData.processingTimeMs || 0,
+        messageData.agentTransferRequested || false  // ← NEW FIELD
       ]
     );
 

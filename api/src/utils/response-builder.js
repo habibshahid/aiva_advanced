@@ -231,6 +231,16 @@ class ResponseBuilder {
       503
     );
   }
+ 
+  static conflict(message = 'Service') {
+    const rb = new ResponseBuilder();
+    return rb.error(
+      'SERVICE_UNAVAILABLE',
+      `${message}`,
+      null,
+      401
+    );
+  }
 }
 
 module.exports = ResponseBuilder;

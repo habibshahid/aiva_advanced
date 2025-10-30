@@ -51,7 +51,7 @@ const ShopifyIntegration = () => {
   const handleSync = async (storeId) => {
     try {
       const response = await shopifyApi.triggerSync(storeId);
-      alert(`Sync started! Job ID: ${response.data.job_id}`);
+      alert(`Sync started! Job ID: ${response.data.data.job_id}`);
       loadData();
     } catch (err) {
       alert(`Sync failed: ${err.message}`);

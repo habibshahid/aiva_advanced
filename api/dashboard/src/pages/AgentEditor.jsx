@@ -14,6 +14,16 @@ import {
 } from '../services/api';
 import { getKnowledgeBases } from '../services/knowledgeApi';
 
+const chatModels = [
+  { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast & Cheap)', cost: '$0.15 / $0.60 per 1M tokens' },
+  { value: 'gpt-4o', label: 'GPT-4o (Most Capable)', cost: '$2.50 / $10.00 per 1M tokens' },
+  { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', cost: '$10.00 / $30.00 per 1M tokens' },
+  { value: 'gpt-4', label: 'GPT-4', cost: '$30.00 / $60.00 per 1M tokens' },
+  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Legacy)', cost: '$0.50 / $1.50 per 1M tokens' },
+  { value: 'o1-mini', label: 'o1 Mini (Reasoning)', cost: '$3.00 / $12.00 per 1M tokens' },
+  { value: 'o1', label: 'o1 (Advanced Reasoning)', cost: '$15.00 / $60.00 per 1M tokens' }
+];
+
 const AgentEditor = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -29,6 +39,7 @@ const AgentEditor = () => {
 	  voice: 'shimmer',
 	  language: 'ur',
 	  model: 'gpt-4o-mini-realtime-preview-2024-12-17',
+	  model: 'gpt-4o-mini',
 	  provider: 'openai',  // ADD THIS
 	  deepgram_model: 'nova-2',  // ADD THIS
 	  deepgram_voice: 'aura-asteria-en',  // ADD THIS
@@ -155,6 +166,7 @@ const AgentEditor = () => {
 			...loadedAgent,
 			voice: loadedAgent.voice || 'shimmer',
 			model: loadedAgent.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
 			language: loadedAgent.language || 'en',
 			kb_id: loadedAgent.kb_id || null
 		  });
@@ -164,6 +176,7 @@ const AgentEditor = () => {
 			deepgram_model: loadedAgent.deepgram_model || 'nova-2',
 			deepgram_voice: loadedAgent.deepgram_voice || 'shimmer',
 			deepgram_language: loadedAgent.deepgram_language || 'en',
+			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
 			kb_id: loadedAgent.kb_id || null
 		  });
 		} else {
@@ -172,6 +185,7 @@ const AgentEditor = () => {
 			...loadedAgent,
 			provider: 'openai',
 			voice: loadedAgent.voice || 'shimmer',
+			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
 			model: loadedAgent.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
 			language: loadedAgent.language || 'en',
 			kb_id: loadedAgent.kb_id || null
@@ -992,7 +1006,38 @@ const AgentEditor = () => {
               </select>
             </div>
           </div>
-
+		  
+		  <div className="mt-6 pt-6 border-t border-gray-200">
+            <h4 className="text-sm font-medium text-gray-900 mb-4">
+              Chat Model Configuration
+            </h4>
+            <p className="text-sm text-gray-600 mb-4">
+              This model is used for text-based chat conversations in the dashboard. 
+              Voice calls use the realtime model configured above.
+            </p>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Chat Model
+              </label>
+              <select
+                value={agent.chat_model || 'gpt-4o-mini'}
+                onChange={(e) => setAgent({ ...agent, chat_model: e.target.value })}
+                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              >
+                {chatModels.map(model => (
+                  <option key={model.value} value={model.value}>
+                    {model.label} - {model.cost}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-sm text-gray-500">
+                💡 <strong>Recommendation:</strong> Use GPT-4o Mini for most cases - it's 99% cheaper than realtime models 
+                and perfect for text chat. Upgrade to GPT-4o for complex reasoning tasks.
+              </p>
+            </div>
+          </div>
+		  
           <div>
 			  <div className="flex items-center justify-between mb-2">
 				<label className="block text-sm font-medium text-gray-700">Instructions</label>

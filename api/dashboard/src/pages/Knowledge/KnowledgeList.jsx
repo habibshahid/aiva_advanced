@@ -157,16 +157,29 @@ const KnowledgeList = () => {
                 </p>
 
                 {/* Stats */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="flex items-center text-sm text-gray-500">
-                    <FileText className="w-4 h-4 mr-2" />
-                    <span>{kb.stats?.document_count || 0} docs</span>
-                  </div>
-                  <div className="flex items-center text-sm text-gray-500">
-                    <Database className="w-4 h-4 mr-2" />
-                    <span>{kb.stats?.chunk_count || 0} chunks</span>
-                  </div>
-                </div>
+                <div className="bg-white rounded-lg shadow p-6">
+				  <h3>{kb.name}</h3>
+				  
+				  <div className="grid grid-cols-2 gap-4 mt-4">
+					<div>
+					  <p className="text-gray-600">Documents</p>
+					  <p className="text-2xl font-bold">{kb.stats?.document_count || 0}</p>
+					</div>
+					<div>
+					  <p className="text-gray-600">Chunks</p>
+					  <p className="text-2xl font-bold">{kb.stats?.chunk_count || 0}</p>
+					</div>
+					<div>
+					  <p className="text-gray-600">Images</p>
+					  <p className="text-2xl font-bold">{kb.stats?.image_count || 0}</p>
+					</div>
+					{/* ✅ NEW: Show product count */}
+					<div>
+					  <p className="text-gray-600">Products</p>
+					  <p className="text-2xl font-bold">{kb.stats?.product_count || 0}</p>
+					</div>
+				  </div>
+				</div>
 
                 <div className="flex items-center text-xs text-gray-400 mb-4">
                   <Clock className="w-3 h-3 mr-1" />

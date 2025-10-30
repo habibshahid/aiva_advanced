@@ -23,6 +23,7 @@ class AgentService {
 				agentData.voice || 'shimmer',
 				agentData.language || 'ur',
 				agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+				agentData.chat_model || 'gpt-4o-mini',
 				agentData.provider || 'openai',  // NEW
 				agentData.deepgram_model || null,  // NEW
 				agentData.deepgram_voice || null,  // NEW
@@ -130,7 +131,7 @@ class AgentService {
         const values = [];
         
         const allowedFields = [
-            'name', 'instructions', 'voice', 'language', 'model',
+            'name', 'instructions', 'voice', 'language', 'model', 'chat_model',
 			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
 			'silence_duration_ms', 'greeting', 'is_active', 'kb_id' 

@@ -214,7 +214,7 @@ router.post('/sync/:store_id', verifyToken, async (req, res) => {
     const existingJob = await SyncJobService.getActiveJob(store_id);
     if (existingJob) {
       return res.status(409).json(
-        rb.conflict('Sync already in progress', {
+        ResponseBuilder.conflict('Sync already in progress', {
           job_id: existingJob.id,
           status: existingJob.status,
           progress: {

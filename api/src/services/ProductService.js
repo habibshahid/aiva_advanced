@@ -336,7 +336,7 @@ class ProductService {
       if (img.metadata && typeof img.metadata === 'string') {
         img.metadata = JSON.parse(img.metadata);
       }
-	  console.log(process.env.STORAGE_PATH_PREFIX)
+	  
       // Add API URL for viewing the image
       img.url = `${process.env.STORAGE_PATH_PREFIX}/api/knowledge/${img.kb_id}/images/${img.image_id}/view`;
       img.thumbnail_url = img.url; // Same endpoint for now

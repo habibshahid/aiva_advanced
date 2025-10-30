@@ -203,39 +203,66 @@ class ProductSyncService {
    * @private
    */
   async generateProductEmbeddings(product, kbId, tenantId) {
-    try {
-      // Create text content for embedding
-      const textContent = this.buildProductText(product);
-      
-      // Generate embedding via Python service
-      const embeddingResult = await this.pythonClient.generateEmbedding({
-        text: textContent,
-        kb_id: kbId,
-        tenant_id: tenantId,
-        metadata: {
-          source: 'shopify',
-          product_id: product.id,
-          shopify_product_id: product.shopify_product_id,
-          title: product.title,
-          type: 'product'
-        }
-      });
-      
-      // Update product with vector_chunk_id
-      const db = require('../config/database');
-      await db.query(
-        'UPDATE yovo_tbl_aiva_products SET vector_chunk_id = ? WHERE id = ?',
-        [embeddingResult.chunk_id, product.id]
-      );
-      
-      return embeddingResult;
-      
-    } catch (error) {
-      console.error(`Error generating embeddings for product ${product.id}:`, error.message);
-      // Don't throw - embeddings are nice-to-have, not critical
-      return null;
-    }
-  }
+	  try {
+		const textContent = this.buildProductText(product);
+		
+		// Generate embedding
+		const embeddingResult = await this.pythonClient.generateEmbedding({
+		  text: textContent,
+		  model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+		});
+		
+		// ✅ NEW: Store product vector directly in Redis (not document chunks)
+		const redis = require('../config/redis');
+		const vectorKey = `vector:${kbId}:product:${product.id}`;
+		console.log('###################', vectorKey)
+		const vectorData = {
+		  product_id: product.id,
+		  kb_id: kbId,
+		  tenant_id: tenantId,
+		  type: 'product',
+		  shopify_product_id: product.shopify_product_id,
+		  title: product.title,
+		  description: product.description,
+		  vendor: product.vendor,
+		  product_type: product.product_type,
+		  price: product.price,
+		  tags: product.tags,
+		  embedding: embeddingResult.embedding,
+		  tokens: embeddingResult.tokens,
+		  created_at: new Date().toISOString()
+		};
+		
+		await redis.set(vectorKey, JSON.stringify(vectorData));
+		
+		console.log(`✅ Stored product embedding: ${product.title} (${vectorKey})`);
+		
+		// Update product record with embedding status
+		const db = require('../config/database');
+		await db.query(
+		  'UPDATE yovo_tbl_aiva_products SET embedding_status = ?, embedding_generated_at = NOW() WHERE id = ?',
+		  ['completed', product.id]
+		);
+		
+		return {
+		  product_id: product.id,
+		  tokens: embeddingResult.tokens,
+		  vector_key: vectorKey
+		};
+		
+	  } catch (error) {
+		console.error(`Error generating embeddings for product ${product.id}:`, error.message);
+		
+		// Mark as failed
+		const db = require('../config/database');
+		await db.query(
+		  'UPDATE yovo_tbl_aiva_products SET embedding_status = ? WHERE id = ?',
+		  ['failed', product.id]
+		);
+		
+		return null;
+	  }
+	}
   
   /**
    * Build searchable text content from product

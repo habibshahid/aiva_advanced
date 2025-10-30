@@ -426,7 +426,7 @@ class KnowledgeService {
       search_type: searchType,
       filters
     });
-
+	  
     // Calculate search cost
     const costBreakdown = {
       base_cost: 0.0005, // Base search cost
@@ -500,6 +500,11 @@ class KnowledgeService {
       [kbId]
     );
 
+	 const [productCount] = await db.query(
+		'SELECT COUNT(*) as count FROM yovo_tbl_aiva_products WHERE kb_id = ? AND status = "active"',
+		[kbId]
+	);
+	  
     // Calculate total size
     const [sizeResult] = await db.query(
       'SELECT SUM(file_size_bytes) as total_bytes FROM yovo_tbl_aiva_documents WHERE kb_id = ?',
@@ -512,6 +517,7 @@ class KnowledgeService {
       document_count: docCount[0].count,
       chunk_count: chunkCount[0].count,
       image_count: imageCount[0].count,
+	  product_count: productCount[0].count,
       total_size_mb: parseFloat(totalSizeMB.toFixed(2))
     };
 
@@ -619,6 +625,17 @@ class KnowledgeService {
       [kbId]
     );
   
+	const [imageCount] = await db.query(
+		'SELECT COUNT(*) as total FROM yovo_tbl_aiva_images WHERE kb_id = ?',
+		[kbId]
+	);
+
+	// ✅ NEW: Get product count
+	const [productCount] = await db.query(
+		'SELECT COUNT(*) as total FROM yovo_tbl_aiva_products WHERE kb_id = ? AND status = "active"',
+		[kbId]
+	);
+	  
     // Get KB settings
     const kb = await this.getKnowledgeBase(kbId);
   
@@ -626,6 +643,8 @@ class KnowledgeService {
       kb_id: kbId,
       total_documents: docCount[0]?.total || 0,
       total_chunks: chunkCount[0]?.total || 0,
+	  total_image_count: imageCount[0].total || 0,
+	  total_product_count: productCount[0].total || 0,
       total_size_bytes: sizeData[0]?.total_bytes || 0,
       embedding_model: kb?.settings?.embedding_model || 'text-embedding-3-small',
       vector_dimension: 1536,
