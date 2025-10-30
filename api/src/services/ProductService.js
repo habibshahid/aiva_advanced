@@ -206,7 +206,10 @@ class ProductService {
    */
   async getProduct(productId) {
     const [products] = await db.query(
-      'SELECT * FROM yovo_tbl_aiva_products WHERE id = ?',
+      `SELECT p.*, s.shop_domain 
+       FROM yovo_tbl_aiva_products p
+       LEFT JOIN yovo_tbl_aiva_shopify_stores s ON p.shopify_store_id = s.id
+       WHERE p.id = ?`,
       [productId]
     );
     
@@ -226,6 +229,9 @@ class ProductService {
     
     // Get variants
     product.variants = await this.getVariants(productId);
+    
+    // Get images
+    product.images = await this.getProductImages(productId);
     
     return product;
   }
@@ -308,7 +314,15 @@ class ProductService {
         pi.alt_text,
         pi.shopify_image_id,
         pi.variant_ids,
-        i.*
+        i.id as image_id,
+        i.kb_id,
+        i.filename,
+        i.image_type as content_type,
+        i.width,
+        i.height,
+        i.file_size_bytes,
+        i.description,
+        i.metadata
       FROM yovo_tbl_aiva_product_images pi
       JOIN yovo_tbl_aiva_images i ON pi.image_id = i.id
       WHERE pi.product_id = ?
@@ -319,6 +333,13 @@ class ProductService {
       if (img.variant_ids && typeof img.variant_ids === 'string') {
         img.variant_ids = JSON.parse(img.variant_ids);
       }
+      if (img.metadata && typeof img.metadata === 'string') {
+        img.metadata = JSON.parse(img.metadata);
+      }
+	  console.log(process.env.STORAGE_PATH_PREFIX)
+      // Add API URL for viewing the image
+      img.url = `${process.env.STORAGE_PATH_PREFIX}/api/knowledge/${img.kb_id}/images/${img.image_id}/view`;
+      img.thumbnail_url = img.url; // Same endpoint for now
       return img;
     });
   }
@@ -359,20 +380,34 @@ class ProductService {
    * @returns {Promise<Array>} Products
    */
   async listProducts(kbId, filters = {}) {
-    let query = 'SELECT * FROM yovo_tbl_aiva_products WHERE kb_id = ?';
+    let query = `
+      SELECT 
+        p.*,
+        s.shop_domain,
+        (
+          SELECT pi.image_id
+          FROM yovo_tbl_aiva_product_images pi
+          WHERE pi.product_id = p.id
+          ORDER BY pi.position ASC
+          LIMIT 1
+        ) as primary_image_id
+      FROM yovo_tbl_aiva_products p
+      LEFT JOIN yovo_tbl_aiva_shopify_stores s ON p.shopify_store_id = s.id
+      WHERE p.kb_id = ?
+    `;
     const params = [kbId];
     
     if (filters.status) {
-      query += ' AND status = ?';
+      query += ' AND p.status = ?';
       params.push(filters.status);
     }
     
     if (filters.search) {
-      query += ' AND (title LIKE ? OR description LIKE ?)';
+      query += ' AND (p.title LIKE ? OR p.description LIKE ?)';
       params.push(`%${filters.search}%`, `%${filters.search}%`);
     }
     
-    query += ' ORDER BY created_at DESC LIMIT ?';
+    query += ' ORDER BY p.created_at DESC LIMIT ?';
     params.push(filters.limit || 100);
     
     const [products] = await db.query(query, params);
@@ -381,6 +416,14 @@ class ProductService {
       if (p.tags && typeof p.tags === 'string') {
         p.tags = JSON.parse(p.tags);
       }
+      if (p.shopify_metadata && typeof p.shopify_metadata === 'string') {
+        p.shopify_metadata = JSON.parse(p.shopify_metadata);
+      }
+      // Convert image_id to API URL
+      if (p.primary_image_id) {
+        p.image_url = `${process.env.STORAGE_PATH_PREFIX}/api/knowledge/${p.kb_id}/images/${p.primary_image_id}/view`;
+      }
+      delete p.primary_image_id; // Remove internal field
       return p;
     });
   }

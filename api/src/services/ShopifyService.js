@@ -646,6 +646,16 @@ class ShopifyService {
       stats.products.total = productStats[0].total;
       stats.products.active = productStats[0].active;
       stats.products.out_of_stock = productStats[0].out_of_stock;
+      
+      // Images stats (all tenant images)
+      const [imageStats] = await db.query(`
+        SELECT COUNT(DISTINCT pi.image_id) as total
+        FROM yovo_tbl_aiva_product_images pi
+        JOIN yovo_tbl_aiva_products p ON pi.product_id = p.id
+        WHERE p.tenant_id = ?
+      `, [tenantId]);
+      
+      stats.images.total = imageStats[0].total;
     }
     
     // Sync jobs stats

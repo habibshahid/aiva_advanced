@@ -418,8 +418,9 @@ async def list_images(
             """, (kb_id,))
             
             total = cursor.fetchone()['total']
-            
-            # Parse metadata
+            storage_base_path_prefix = getattr(settings, 'STORAGE_PATH_PREFIX', '/aiva')
+
+            # Parse metadata and convert URLs
             for img in images:
                 if img['metadata']:
                     try:
@@ -428,6 +429,14 @@ async def list_images(
                         img['metadata'] = {}
                 # Map to frontend expected format
                 img['content_type'] = img.pop('image_type', 'image/jpeg')
+                
+                # Convert storage_url to API URL
+                img['url'] = f"/aiva/api/knowledge/{kb_id}/images/{img['id']}/view"
+                img['thumbnail_url'] = img['url']
+                
+                # Remove storage_url (don't expose server paths)
+                if 'storage_url' in img:
+                    del img['storage_url']
             
             return {
                 "kb_id": kb_id,

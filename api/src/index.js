@@ -17,7 +17,7 @@ const knowledgeRoutes = require('./routes/knowledge');
 const shopifyRoutes = require('./routes/shopify');
 
 const app = express();
-const PORT = process.env.API_PORT || 4000;
+const PORT = process.env.API_PORT || 62001;
 
 // Security middleware
 app.use(helmet());

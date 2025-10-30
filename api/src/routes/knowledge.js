@@ -22,6 +22,7 @@ const {
   validatePagination 
 } = require('../utils/validators');
 const PythonServiceClient = require('../services/PythonServiceClient');
+
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -95,6 +96,48 @@ router.get('/', authenticate, async (req, res) => {
     res.status(500).json(
       ResponseBuilder.serverError(error.message)
     );
+  }
+});
+
+/**
+ * @route GET /api/knowledge/cache/stats
+ * @desc Get semantic cache statistics
+ * @access Private
+ */
+router.get('/cache/stats', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.query;
+    
+    const stats = await PythonServiceClient.getCacheStats(kb_id);
+
+    res.json(rb.success(stats));
+
+  } catch (error) {
+    console.error('Get cache stats error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route DELETE /api/knowledge/cache/clear
+ * @desc Clear semantic cache
+ * @access Private
+ */
+router.delete('/cache/clear', authenticate, checkPermission('agents.manage'), async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.query;
+    
+    const result = await PythonServiceClient.clearCache(kb_id);
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Clear cache error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
   }
 });
 
@@ -1199,70 +1242,79 @@ router.delete('/:kb_id/images/:image_id', authenticate, async (req, res) => {
 });
 
 /**
- * @route GET /api/knowledge/cache/stats
- * @desc Get semantic cache statistics
- * @access Private
- */
-router.get('/cache/stats', authenticate, async (req, res) => {
-  const rb = new ResponseBuilder();
-
-  try {
-    const { kb_id } = req.query;
-    
-    const stats = await PythonServiceClient.getCacheStats(kb_id);
-
-    res.json(rb.success(stats));
-
-  } catch (error) {
-    console.error('Get cache stats error:', error);
-    res.status(500).json(ResponseBuilder.serverError(error.message));
-  }
-});
-
-/**
- * @route DELETE /api/knowledge/cache/clear
- * @desc Clear semantic cache
- * @access Private
- */
-router.delete('/cache/clear', authenticate, checkPermission('agents.manage'), async (req, res) => {
-  const rb = new ResponseBuilder();
-
-  try {
-    const { kb_id } = req.query;
-    
-    const result = await PythonServiceClient.clearCache(kb_id);
-
-    res.json(rb.success(result));
-
-  } catch (error) {
-    console.error('Clear cache error:', error);
-    res.status(500).json(ResponseBuilder.serverError(error.message));
-  }
-});
-
-/**
  * @route GET /api/knowledge/:kb_id/images/:image_id/view
- * @desc View/download image
+ * @desc View/download image - Serves images from /etc/aiva-oai/storage/images/
  * @access Private
  */
-router.get('/:kb_id/images/:image_id/view', authenticate, async (req, res) => {
+router.get('/:kb_id/images/:image_id/view', async (req, res) => {
   try {
     const { kb_id, image_id } = req.params;
+    const db = require('../config/database');
+    const fs = require('fs');
     
-    // Get image from Python service
-    const imageData = await KnowledgeService.getImageFile(kb_id, image_id);
+    // Get image info from database
+    const [images] = await db.query(
+      `SELECT storage_url, image_type, file_size_bytes, filename 
+       FROM yovo_tbl_aiva_images 
+       WHERE id = ? AND kb_id = ?`,
+      [image_id, kb_id]
+    );
     
-    // Set appropriate headers
-    res.set('Content-Type', imageData.content_type || 'image/png');
-    res.set('Content-Length', imageData.file_size);
-    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+    if (images.length === 0) {
+      console.error(`Image not found: ${image_id}`);
+      return res.status(404).json({ error: 'Image not found' });
+    }
     
-    // Send image buffer
-    res.send(imageData.buffer);
+    const image = images[0];
+    const imagePath = image.storage_url;
+    
+    // Check if file exists
+    if (!fs.existsSync(imagePath)) {
+      console.error(`File not found: ${imagePath}`);
+      return res.status(404).json({ error: 'Image file not found' });
+    }
+    
+    // Determine content type
+    let contentType = 'image/png';
+    const imageType = (image.image_type || '').toLowerCase();
+    
+    if (imageType.includes('jpeg') || imageType.includes('jpg')) {
+      contentType = 'image/jpeg';
+    } else if (imageType.includes('png')) {
+      contentType = 'image/png';
+    } else if (imageType.includes('gif')) {
+      contentType = 'image/gif';
+    } else if (imageType.includes('webp')) {
+      contentType = 'image/webp';
+    } else if (imageType.includes('svg')) {
+      contentType = 'image/svg+xml';
+    }
+    
+    // Set headers
+    res.set({
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Disposition': `inline; filename="${image.filename}"`,
+      'Content-Length': image.file_size_bytes
+    });
+    
+    // Stream file
+    const fileStream = fs.createReadStream(imagePath);
+    
+    fileStream.on('error', (error) => {
+      console.error('Stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Error streaming image' });
+      }
+    });
+    
+    fileStream.pipe(res);
     
   } catch (error) {
     console.error('Get image error:', error);
-    res.status(404).json(ResponseBuilder.notFound('Image'));
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
   }
 });
 

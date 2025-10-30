@@ -88,9 +88,23 @@ const ImageGallery = ({ kbId, refreshTrigger }) => {
             className="group relative bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
             onClick={() => setSelectedImage(image)}
           >
-            {/* Placeholder for image preview */}
-            <div className="aspect-square bg-gray-100 flex items-center justify-center">
-              <ImageIcon className="w-12 h-12 text-gray-400" />
+            {/* ✅ FIXED: Show actual image instead of placeholder */}
+            <div className="aspect-square bg-gray-100 flex items-center justify-center overflow-hidden">
+              {image.url || image.thumbnail_url ? (
+                <img
+                  src={image.url || image.thumbnail_url}
+                  alt={image.filename}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    // Fallback to icon if image fails to load
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'flex';
+                  }}
+                />
+              ) : null}
+              <div className="hidden w-full h-full items-center justify-center">
+                <ImageIcon className="w-12 h-12 text-gray-400" />
+              </div>
             </div>
 
             {/* Image Info */}
@@ -155,7 +169,7 @@ const ImageGallery = ({ kbId, refreshTrigger }) => {
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="bg-white rounded-lg max-w-2xl w-full p-6"
+            className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-start mb-4">
@@ -168,9 +182,24 @@ const ImageGallery = ({ kbId, refreshTrigger }) => {
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div className="aspect-video bg-gray-100 rounded flex items-center justify-center">
-                <ImageIcon className="w-16 h-16 text-gray-400" />
+            <div className="space-y-4">
+              {/* ✅ FIXED: Show actual full-size image */}
+              <div className="w-full bg-gray-100 rounded flex items-center justify-center overflow-hidden">
+                {selectedImage.url ? (
+                  <img
+                    src={selectedImage.url}
+                    alt={selectedImage.filename}
+                    className="max-w-full max-h-[60vh] object-contain"
+                    onError={(e) => {
+                      // Fallback to icon if image fails to load
+                      e.target.style.display = 'none';
+                      e.target.nextSibling.style.display = 'flex';
+                    }}
+                  />
+                ) : null}
+                <div className="hidden w-full h-64 items-center justify-center">
+                  <ImageIcon className="w-16 h-16 text-gray-400" />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4 text-sm">
@@ -184,6 +213,14 @@ const ImageGallery = ({ kbId, refreshTrigger }) => {
                   <span className="text-gray-600">Type:</span>
                   <span className="ml-2 font-medium">{selectedImage.content_type}</span>
                 </div>
+                {selectedImage.width && selectedImage.height && (
+                  <div>
+                    <span className="text-gray-600">Dimensions:</span>
+                    <span className="ml-2 font-medium">
+                      {selectedImage.width} × {selectedImage.height}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-gray-600">Uploaded:</span>
                   <span className="ml-2 font-medium">
@@ -214,6 +251,19 @@ const ImageGallery = ({ kbId, refreshTrigger }) => {
                   </div>
                 </div>
               )}
+
+              {/* Download Button */}
+              <div className="flex justify-end">
+                <a
+                  href={selectedImage.url}
+                  download={selectedImage.filename}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </a>
+              </div>
             </div>
           </div>
         </div>
