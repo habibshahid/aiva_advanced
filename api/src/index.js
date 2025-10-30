@@ -14,6 +14,7 @@ const realtimeRoutes = require('./routes/realtime');
 const aiAssistRoutes = require('./routes/ai-assist');
 const chatRoutes = require('./routes/chat');
 const knowledgeRoutes = require('./routes/knowledge');
+const shopifyRoutes = require('./routes/shopify');
 
 const app = express();
 const PORT = process.env.API_PORT || 4000;
@@ -56,6 +57,7 @@ app.use('/api/realtime', realtimeRoutes);
 app.use('/api/ai-assist', aiAssistRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
+app.use('/api/shopify', shopifyRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -21,7 +21,12 @@ import KnowledgeDocuments from './pages/Knowledge/KnowledgeDocuments';
 import KnowledgeSearch from './pages/Knowledge/KnowledgeSearch';
 import KnowledgeStats from './pages/Knowledge/KnowledgeStats';
 import KnowledgeChat from './pages/Knowledge/KnowledgeChat';
-import AgentTestChat from './pages/AgentTestChat';
+
+// Shopify Pages
+import ShopifyIntegration from './pages/Shopify/ShopifyIntegration';
+import ConnectStore from './pages/Shopify/ConnectStore';
+import ShopifyProducts from './pages/Shopify/ShopifyProducts';
+import StoreSettings from './pages/Shopify/StoreSettings';
 
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
@@ -55,10 +60,10 @@ function App() {
               <Layout />
             </PrivateRoute>
           }>
-            <Route path="/monitor" element={<Monitor />} />
             <Route index element={<Dashboard />} />
+            <Route path="monitor" element={<Monitor />} />
             <Route path="agents" element={<Agents />} />
-            <Route path="/test" element={<AgentTest />} />
+            <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
             <Route path="agents/:id" element={<AgentEditor />} />
             <Route path="credits" element={<Credits />} />
@@ -71,8 +76,13 @@ function App() {
             <Route path="knowledge/:id/documents" element={<KnowledgeDocuments />} />
             <Route path="knowledge/:id/search" element={<KnowledgeSearch />} />
             <Route path="knowledge/:id/stats" element={<KnowledgeStats />} />
-			<Route path="knowledge/:id/chat" element={<KnowledgeChat />} />
-			<Route path="agent-test" element={<AgentTestChat />} />
+            <Route path="knowledge/:id/chat" element={<KnowledgeChat />} />
+            
+            {/* Shopify Routes */}
+            <Route path="shopify" element={<ShopifyIntegration />} />
+            <Route path="shopify/connect" element={<ConnectStore />} />
+			<Route path="shopify/stores/:storeId" element={<StoreSettings />} />
+            <Route path="shopify/products" element={<ShopifyProducts />} />
           </Route>
         </Routes>
         

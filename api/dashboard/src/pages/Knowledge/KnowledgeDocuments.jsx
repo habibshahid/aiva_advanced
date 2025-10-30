@@ -10,7 +10,9 @@ import {
   getKnowledgeBase, 
   getDocuments, 
   deleteDocument,
-  getKBStats
+  getKBStats,
+  getCacheStats,
+  clearCache   
 } from '../../services/knowledgeApi';
 import DocumentUploader from '../../components/Knowledge/DocumentUploader';
 import WebScraper from '../../components/Knowledge/WebScraper';
@@ -25,6 +27,7 @@ const KnowledgeDocuments = () => {
   const [kb, setKb] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [stats, setStats] = useState(null);
+  const [cacheStats, setCacheStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('documents');
   const [refreshImages, setRefreshImages] = useState(0);
@@ -47,6 +50,7 @@ const KnowledgeDocuments = () => {
       setKb(kbResponse.data.data);
       setDocuments(docsResponse.data.data.items || []);
       setStats(statsResponse.data.data);
+	  await loadCacheStats();
     } catch (error) {
       toast.error('Failed to load documents');
       console.error(error);
@@ -80,6 +84,30 @@ const KnowledgeDocuments = () => {
     toast.success('Scraping completed!');
     loadData();
     setActiveTab('documents');
+  };
+
+  const loadCacheStats = async () => {
+    try {
+      const response = await getCacheStats(id);
+      setCacheStats(response.data.data);
+    } catch (error) {
+      console.error('Failed to load cache stats:', error);
+    }
+  };
+
+  const handleClearCache = async () => {
+    if (!window.confirm('Clear semantic cache for this knowledge base? This will force fresh searches but may increase API costs temporarily.')) {
+      return;
+    }
+
+    try {
+      await clearCache(id);
+      toast.success('Cache cleared successfully');
+      await loadCacheStats(); // Reload stats
+    } catch (error) {
+      toast.error('Failed to clear cache');
+      console.error(error);
+    }
   };
 
   const filteredDocuments = documents.filter(doc => {
@@ -233,6 +261,39 @@ const KnowledgeDocuments = () => {
               </div>
             </div>
           </div>
+		  
+		  <div className="bg-white overflow-hidden shadow rounded-lg">
+			  <div className="p-5">
+				<div className="flex items-center justify-between">
+				  <div className="flex items-center flex-1">
+					<div className="flex-shrink-0">
+					  <Database className="h-6 w-6 text-blue-400" />
+					</div>
+					<div className="ml-5">
+					  <dl>
+						<dt className="text-sm font-medium text-gray-500 truncate">Cache</dt>
+						<dd className="text-lg font-medium text-gray-900">
+						  {cacheStats?.total_cached_queries || 0} queries
+						</dd>
+						{cacheStats && (
+						  <dd className="text-xs text-gray-500 mt-1">
+							{cacheStats.total_cache_hits} hits • {cacheStats.cache_hit_rate} avg
+						  </dd>
+						)}
+					  </dl>
+					</div>
+				  </div>
+				  <button
+					onClick={handleClearCache}
+					className="ml-3 inline-flex items-center px-3 py-1.5 border border-red-300 text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50"
+					title="Clear semantic cache"
+				  >
+					<Trash2 className="w-3 h-3 mr-1" />
+					Clear
+				  </button>
+				</div>
+			  </div>
+			</div>
         </div>
       )}
 

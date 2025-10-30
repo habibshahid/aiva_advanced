@@ -7,7 +7,7 @@ require('dotenv').config();
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const KnowledgeService = require('../services/KnowledgeService');
 const CreditService = require('../services/CreditService');
@@ -30,12 +30,24 @@ const upload = multer({
   }
 });
 
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        // Use API key authentication
+        return verifyApiKey(req, res, next);
+    } else {
+        // Use JWT token authentication
+        return verifyToken(req, res, next);
+    }
+};
+
 /**
  * @route POST /api/knowledge
  * @desc Create knowledge base
  * @access Private
  */
-router.post('/', verifyToken, checkPermission('agents.create'), async (req, res) => {
+router.post('/', authenticate, checkPermission('agents.create'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -64,7 +76,7 @@ router.post('/', verifyToken, checkPermission('agents.create'), async (req, res)
  * @desc List knowledge bases
  * @access Private
  */
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -91,7 +103,7 @@ router.get('/', verifyToken, async (req, res) => {
  * @desc Get knowledge base details
  * @access Private
  */
-router.get('/:kbId', verifyToken, async (req, res) => {
+router.get('/:kbId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -125,7 +137,7 @@ router.get('/:kbId', verifyToken, async (req, res) => {
  * @desc Update knowledge base
  * @access Private
  */
-router.put('/:kbId', verifyToken, checkPermission('agents.update'), async (req, res) => {
+router.put('/:kbId', authenticate, checkPermission('agents.update'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -166,7 +178,7 @@ router.put('/:kbId', verifyToken, checkPermission('agents.update'), async (req, 
  * @desc Delete knowledge base
  * @access Private
  */
-router.delete('/:kbId', verifyToken, checkPermission('agents.delete'), async (req, res) => {
+router.delete('/:kbId', authenticate, checkPermission('agents.delete'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -202,7 +214,7 @@ router.delete('/:kbId', verifyToken, checkPermission('agents.delete'), async (re
  * @desc Get KB analytics
  * @access Private
  */
-router.get('/:kbId/analytics', verifyToken, async (req, res) => {
+router.get('/:kbId/analytics', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -239,7 +251,7 @@ router.get('/:kbId/analytics', verifyToken, async (req, res) => {
  * @desc Upload document to knowledge base
  * @access Private
  */
-router.post('/:kbId/documents', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/:kbId/documents', authenticate, upload.single('file'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -299,7 +311,7 @@ router.post('/:kbId/documents', verifyToken, upload.single('file'), async (req, 
  * @desc List documents in knowledge base
  * @access Private
  */
-router.get('/:kbId/documents', verifyToken, async (req, res) => {
+router.get('/:kbId/documents', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -348,7 +360,7 @@ router.get('/:kbId/documents', verifyToken, async (req, res) => {
  * @desc Get document details
  * @access Private
  */
-router.get('/:kbId/documents/:documentId', verifyToken, async (req, res) => {
+router.get('/:kbId/documents/:documentId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -390,7 +402,7 @@ router.get('/:kbId/documents/:documentId', verifyToken, async (req, res) => {
  * @desc Delete document
  * @access Private
  */
-router.delete('/:kbId/documents/:documentId', verifyToken, async (req, res) => {
+router.delete('/:kbId/documents/:documentId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -426,7 +438,7 @@ router.delete('/:kbId/documents/:documentId', verifyToken, async (req, res) => {
  * @desc Search knowledge base (auto-routes to image or text search)
  * @access Private
  */
-router.post('/search', verifyToken, async (req, res) => {
+router.post('/search', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -492,6 +504,20 @@ router.post('/search', verifyToken, async (req, res) => {
         searchType: 'text',
         filters: filters || {}
       });
+	  
+	  result = {
+		total_found: result.results?.total_found || 0,
+		returned: result.results?.returned || 0,
+		search_type: 'text',
+		text_results: result.results?.text_results || [],
+		image_results: [],
+		product_results: [],
+		query_tokens: result.results?.query_tokens,
+		embedding_model: result.results?.embedding_model,
+		processing_time_ms: result.results?.processing_time_ms,
+		chunks_searched: result.results?.chunks_searched || 0,
+        cost: result.cost
+  	  };
     }
 
     // Get updated balance
@@ -536,7 +562,7 @@ router.post('/search', verifyToken, async (req, res) => {
 });
 
 // Get KB statistics
-router.get('/:id/stats', verifyToken, async (req, res) => {
+router.get('/:id/stats', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
   
   try {
@@ -545,7 +571,7 @@ router.get('/:id/stats', verifyToken, async (req, res) => {
     // Verify KB ownership
     const kb = await KnowledgeService.getKnowledgeBase(id);
     if (!kb || kb.tenant_id !== req.user.id) {
-      return res.status(404).json(ResponseBuilder(null, 'Knowledge base not found', 404));
+      return res.status(404).json(ResponseBuilder.notFound(null, 'Knowledge base not found', 404));
     }
     
     const stats = await KnowledgeService.getKBStats(id);
@@ -553,12 +579,12 @@ router.get('/:id/stats', verifyToken, async (req, res) => {
     res.json(rb.success(stats));
   } catch (error) {
     console.error('Get KB stats error:', error);
-    res.status(500).json(ResponseBuilder(null, error.message, 500));
+    res.status(500).json(rb.error(null, error.message, 500));
   }
 });
 
 // Get search history
-router.get('/:id/searches', verifyToken, async (req, res) => {
+router.get('/:id/searches', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
   
   try {
@@ -568,7 +594,7 @@ router.get('/:id/searches', verifyToken, async (req, res) => {
     // Verify KB ownership
     const kb = await KnowledgeService.getKnowledgeBase(id);
     if (!kb || kb.tenant_id !== req.user.id) {
-      return res.status(404).json(ResponseBuilder(null, 'Knowledge base not found', 404));
+      return res.status(404).json(rb.error(null, 'Knowledge base not found', 404));
     }
     
     // Get search history from database
@@ -588,15 +614,15 @@ router.get('/:id/searches', verifyToken, async (req, res) => {
       LIMIT ?
     `, [id, parseInt(limit)]);
     
-    res.json(ResponseBuilder(searches));
+    res.json(rb.success(searches));
   } catch (error) {
     console.error('Get search history error:', error);
-    res.status(500).json(ResponseBuilder(null, error.message, 500));
+    res.status(500).json(rb.error(null, error.message, 500));
   }
 });
 
 // Test URL - send JSON
-router.post('/test-url', verifyToken, async (req, res) => {
+router.post('/test-url', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
   
   try {
@@ -633,7 +659,7 @@ router.post('/test-url', verifyToken, async (req, res) => {
 });
 
 // Scrape URL - send JSON
-router.post('/:kbId/scrape-url', verifyToken, async (req, res) => {
+router.post('/:kbId/scrape-url', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
   
   try {
@@ -708,7 +734,7 @@ router.post('/:kbId/scrape-url', verifyToken, async (req, res) => {
 });
 
 // Scrape Sitemap - send JSON
-router.post('/:kbId/scrape-sitemap', verifyToken, async (req, res) => {
+router.post('/:kbId/scrape-sitemap', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
   
   try {
@@ -786,7 +812,7 @@ router.post('/:kbId/scrape-sitemap', verifyToken, async (req, res) => {
  * @desc Upload image to knowledge base
  * @access Private
  */
-router.post('/:kbId/images', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/:kbId/images', authenticate, upload.single('file'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -811,7 +837,7 @@ router.post('/:kbId/images', verifyToken, upload.single('file'), async (req, res
     // Check if it's an image
     const imageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
     if (!imageTypes.includes(req.file.mimetype)) {
-      return res.status(422).json(ResponseBuilder.badRequest('File must be an image (JPG, PNG, GIF, or WEBP)'));
+      return res.status(422).json(rb.badRequest('File must be an image (JPG, PNG, GIF, or WEBP)'));
     }
 
     // Check credits
@@ -867,14 +893,14 @@ router.post('/:kbId/images', verifyToken, upload.single('file'), async (req, res
  * @desc Search images by text query
  * @access Private
  */
-router.post('/:kbId/images/search', verifyToken, async (req, res) => {
+router.post('/:kbId/images/search', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
     const { query, limit } = req.body;
 
     if (!query) {
-      return res.status(422).json(ResponseBuilder.badRequest('Query is required'));
+      return res.status(422).json(rb.badRequest('Query is required'));
     }
 
     const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
@@ -935,7 +961,7 @@ router.post('/:kbId/images/search', verifyToken, async (req, res) => {
  * @desc List images in knowledge base
  * @access Private
  */
-router.get('/:kbId/images', verifyToken, async (req, res) => {
+router.get('/:kbId/images', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -968,7 +994,7 @@ router.get('/:kbId/images', verifyToken, async (req, res) => {
  * @desc Delete image
  * @access Private
  */
-router.delete('/:kbId/images/:imageId', verifyToken, async (req, res) => {
+router.delete('/:kbId/images/:imageId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -998,7 +1024,7 @@ router.delete('/:kbId/images/:imageId', verifyToken, async (req, res) => {
  * @desc Upload image to knowledge base
  * @access Private
  */
-router.post('/:kb_id/images/upload', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/:kb_id/images/upload', authenticate, upload.single('file'), async (req, res) => {
   try {
     const { kb_id } = req.params;
     const { metadata } = req.body;
@@ -1007,7 +1033,7 @@ router.post('/:kb_id/images/upload', verifyToken, upload.single('file'), async (
     // Validate file
     if (!req.file) {
       return res.status(400).json(
-        ResponseBuilder.badRequest('No image file provided')
+        rb.badRequest('No image file provided')
       );
     }
 
@@ -1015,14 +1041,14 @@ router.post('/:kb_id/images/upload', verifyToken, upload.single('file'), async (
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
     if (!validTypes.includes(req.file.mimetype)) {
       return res.status(400).json(
-        ResponseBuilder.badRequest('Invalid image type. Only JPG, PNG, GIF, and WEBP are supported.')
+        rb.badRequest('Invalid image type. Only JPG, PNG, GIF, and WEBP are supported.')
       );
     }
 
     // Validate file size (10MB max)
     if (req.file.size > 10 * 1024 * 1024) {
       return res.status(400).json(
-        ResponseBuilder.badRequest('Image file too large. Maximum size is 10MB.')
+        rb.badRequest('Image file too large. Maximum size is 10MB.')
       );
     }
 
@@ -1058,7 +1084,7 @@ router.post('/:kb_id/images/upload', verifyToken, upload.single('file'), async (
  * @desc Search images in knowledge base
  * @access Private
  */
-router.post('/:kb_id/images/search', verifyToken, async (req, res) => {
+router.post('/:kb_id/images/search', authenticate, async (req, res) => {
   try {
     const { kb_id } = req.params;
     const { query, image_base64, search_type, top_k, filters } = req.body;
@@ -1068,20 +1094,20 @@ router.post('/:kb_id/images/search', verifyToken, async (req, res) => {
     const validTypes = ['text', 'image', 'hybrid'];
     if (search_type && !validTypes.includes(search_type)) {
       return res.status(400).json(
-        ResponseBuilder.badRequest(`Invalid search_type. Must be one of: ${validTypes.join(', ')}`)
+        rb.badRequest(`Invalid search_type. Must be one of: ${validTypes.join(', ')}`)
       );
     }
 
     // Validate required fields based on search type
     if (search_type === 'image' && !image_base64) {
       return res.status(400).json(
-        ResponseBuilder.badRequest('image_base64 is required for image search')
+        rb.badRequest('image_base64 is required for image search')
       );
     }
 
     if (search_type === 'hybrid' && (!query || !image_base64)) {
       return res.status(400).json(
-        ResponseBuilder.badRequest('Both query and image_base64 are required for hybrid search')
+        rb.badRequest('Both query and image_base64 are required for hybrid search')
       );
     }
 
@@ -1109,7 +1135,7 @@ router.post('/:kb_id/images/search', verifyToken, async (req, res) => {
  * @desc Get image statistics for knowledge base
  * @access Private
  */
-router.get('/:kb_id/images/stats', verifyToken, async (req, res) => {
+router.get('/:kb_id/images/stats', authenticate, async (req, res) => {
   try {
     const { kb_id } = req.params;
 	const rb = new ResponseBuilder();
@@ -1130,7 +1156,7 @@ router.get('/:kb_id/images/stats', verifyToken, async (req, res) => {
  * @desc List images in knowledge base
  * @access Private
  */
-router.get('/:kb_id/images/list', verifyToken, async (req, res) => {
+router.get('/:kb_id/images/list', authenticate, async (req, res) => {
   try {
     const { kb_id } = req.params;
     const { page = 1, limit = 20 } = req.query;
@@ -1156,7 +1182,7 @@ router.get('/:kb_id/images/list', verifyToken, async (req, res) => {
  * @desc Delete image from knowledge base
  * @access Private
  */
-router.delete('/:kb_id/images/:image_id', verifyToken, async (req, res) => {
+router.delete('/:kb_id/images/:image_id', authenticate, async (req, res) => {
   try {
     const { kb_id, image_id } = req.params;
 	const rb = new ResponseBuilder();
@@ -1177,7 +1203,7 @@ router.delete('/:kb_id/images/:image_id', verifyToken, async (req, res) => {
  * @desc Get semantic cache statistics
  * @access Private
  */
-router.get('/cache/stats', verifyToken, async (req, res) => {
+router.get('/cache/stats', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -1198,7 +1224,7 @@ router.get('/cache/stats', verifyToken, async (req, res) => {
  * @desc Clear semantic cache
  * @access Private
  */
-router.delete('/cache/clear', verifyToken, checkPermission('agents.manage'), async (req, res) => {
+router.delete('/cache/clear', authenticate, checkPermission('agents.manage'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -1219,7 +1245,7 @@ router.delete('/cache/clear', verifyToken, checkPermission('agents.manage'), asy
  * @desc View/download image
  * @access Private
  */
-router.get('/:kb_id/images/:image_id/view', verifyToken, async (req, res) => {
+router.get('/:kb_id/images/:image_id/view', authenticate, async (req, res) => {
   try {
     const { kb_id, image_id } = req.params;
     

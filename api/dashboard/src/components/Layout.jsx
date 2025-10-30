@@ -11,7 +11,8 @@ import {
   Activity,
   Mic,
   BookOpen,
-  MessageSquare
+  MessageSquare,
+  Store
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -24,6 +25,7 @@ const Layout = () => {
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Agents', href: '/agents', icon: Bot },
 	{ name: 'Knowledge Base', href: '/knowledge', icon: BookOpen },
+	{ name: 'Shopify', href: '/shopify', icon: Store },
     { name: 'Live Monitor', href: '/monitor', icon: Activity }, // Added
     { name: 'Credits', href: '/credits', icon: DollarSign },
     { name: 'Calls', href: '/calls', icon: Phone },

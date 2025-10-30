@@ -10,7 +10,7 @@ const logger = require('../utils/logger');
 
 class KBSearchHandler {
     constructor() {
-        this.managementApiUrl = process.env.MANAGEMENT_API_URL || 'http://localhost:4000/api';
+        this.managementApiUrl = process.env.MANAGEMENT_API_URL || 'http://localhost:62002/api';
         this.managementApiKey = process.env.MANAGEMENT_API_KEY;
         this.cache = new Map();
         this.cacheTimeout = 60000; // 1 minute cache
@@ -116,7 +116,7 @@ class KBSearchHandler {
                 }
             );
 
-            return response.data.data;
+            return response.data.agent;
         } catch (error) {
             logger.error('[KB-SEARCH] Failed to get agent:', error.message);
             return null;
@@ -129,6 +129,7 @@ class KBSearchHandler {
      */
     async performSearch({ kb_id, query, top_k }) {
         try {
+
             const response = await axios.post(
                 `${this.managementApiUrl}/knowledge/search`,
                 {
@@ -145,7 +146,7 @@ class KBSearchHandler {
                     timeout: 10000
                 }
             );
-
+			
             return response.data.data;
         } catch (error) {
             logger.error('[KB-SEARCH] Search API error:', error.message);

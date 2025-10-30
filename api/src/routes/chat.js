@@ -6,19 +6,31 @@ require('dotenv').config();
 
 const express = require('express');
 const router = express.Router();
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const ChatService = require('../services/ChatService');
 const CreditService = require('../services/CreditService');
 const ResponseBuilder = require('../utils/response-builder');
 const { validate, validateChatMessage, validatePagination } = require('../utils/validators');
 
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    
+    if (apiKey) {
+        // Use API key authentication
+        return verifyApiKey(req, res, next);
+    } else {
+        // Use JWT token authentication
+        return verifyToken(req, res, next);
+    }
+};
+
 /**
  * @route POST /api/chat/sessions
  * @desc Create new chat session
  * @access Private
  */
-router.post('/sessions', verifyToken, async (req, res) => {
+router.post('/sessions', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -55,7 +67,7 @@ router.post('/sessions', verifyToken, async (req, res) => {
  * @desc List chat sessions
  * @access Private
  */
-router.get('/sessions', verifyToken, async (req, res) => {
+router.get('/sessions', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -90,7 +102,7 @@ router.get('/sessions', verifyToken, async (req, res) => {
  * @desc Get chat session details
  * @access Private
  */
-router.get('/sessions/:sessionId', verifyToken, async (req, res) => {
+router.get('/sessions/:sessionId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -124,7 +136,7 @@ router.get('/sessions/:sessionId', verifyToken, async (req, res) => {
  * @desc Get conversation history
  * @access Private
  */
-router.get('/sessions/:sessionId/history', verifyToken, async (req, res) => {
+router.get('/sessions/:sessionId/history', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -161,7 +173,7 @@ router.get('/sessions/:sessionId/history', verifyToken, async (req, res) => {
  * @desc Get session statistics
  * @access Private
  */
-router.get('/sessions/:sessionId/stats', verifyToken, async (req, res) => {
+router.get('/sessions/:sessionId/stats', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -197,7 +209,7 @@ router.get('/sessions/:sessionId/stats', verifyToken, async (req, res) => {
  * @desc End chat session
  * @access Private
  */
-router.post('/sessions/:sessionId/end', verifyToken, async (req, res) => {
+router.post('/sessions/:sessionId/end', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -233,7 +245,7 @@ router.post('/sessions/:sessionId/end', verifyToken, async (req, res) => {
  * @desc Delete chat session
  * @access Private
  */
-router.delete('/sessions/:sessionId', verifyToken, async (req, res) => {
+router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -269,7 +281,7 @@ router.delete('/sessions/:sessionId', verifyToken, async (req, res) => {
  * @desc Send message and get AI response
  * @access Private
  */
-router.post('/message', verifyToken, async (req, res) => {
+router.post('/message', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -375,7 +387,7 @@ router.post('/message', verifyToken, async (req, res) => {
  * @desc Get message details
  * @access Private
  */
-router.get('/messages/:messageId', verifyToken, async (req, res) => {
+router.get('/messages/:messageId', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
