@@ -5,7 +5,8 @@ Semantic search for Shopify products using embeddings
 
 import json
 import logging
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 import numpy as np
 import redis
 import mysql.connector
@@ -19,7 +20,9 @@ logger = logging.getLogger(__name__)
 class ProductSearchService:
     """Search products using vector similarity"""
     
-    def __init__(self):
+    def __init__(self, kb_id: str = None):
+        self.kb_id = kb_id  # ← ADD THIS
+        self._shop_domain_cache = None  # ← ADD THIS
         self.redis_client = redis.Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
@@ -60,6 +63,8 @@ class ProductSearchService:
             List of product results with similarity scores
         """
         try:
+            self.kb_id = kb_id
+            
             # Get all product vectors for this KB
             pattern = f"{self.prefix}{kb_id}:product:*"
             product_keys = self.redis_client.keys(pattern)
@@ -151,6 +156,81 @@ class ProductSearchService:
         
         return filtered
     
+    def _get_shop_domain(self) -> Optional[str]:
+        """
+        Get Shopify store domain for this knowledge base
+        
+        Returns:
+            Shop domain or None
+        """
+        # Return cached value if available
+        if self._shop_domain_cache is not None:
+            return self._shop_domain_cache
+        
+        try:
+            conn = self._get_mysql_connection()
+            cursor = conn.cursor(dictionary=True)
+            
+            try:
+                cursor.execute(
+                    "SELECT shop_domain FROM yovo_tbl_aiva_shopify_stores WHERE kb_id = %s LIMIT 1",
+                    (self.kb_id,)
+                )
+                
+                result = cursor.fetchone()
+                
+                if result and result.get('shop_domain'):
+                    self._shop_domain_cache = result['shop_domain']
+                    logger.info(f"Found shop domain for KB {self.kb_id}: {self._shop_domain_cache}")
+                    return self._shop_domain_cache
+                
+                logger.warning(f"No shop domain found for KB {self.kb_id}")
+                return None
+                
+            finally:
+                cursor.close()
+                conn.close()
+                
+        except Exception as e:
+            logger.error(f"Error fetching shop domain: {e}")
+            return None
+    
+    def _generate_purchase_url(self, product: Dict[str, Any], shop_domain: Optional[str]) -> Optional[str]:
+        """
+        Generate Shopify purchase URL for a product
+        
+        Args:
+            product: Product dict with name and metadata
+            shop_domain: Shop domain (e.g., 'your-store.myshopify.com')
+            
+        Returns:
+            Purchase URL or None
+        """
+        if not shop_domain:
+            return None
+        
+        # Try to get product_handle from metadata
+        metadata = product.get('metadata', {})
+        product_handle = metadata.get('product_handle')
+        
+        if product_handle:
+            return f"https://{shop_domain}/products/{product_handle}"
+        
+        # Generate handle from product name
+        product_name = product.get('title')
+        if product_name:
+            # Convert to Shopify-style handle
+            handle = product_name.lower()
+            handle = re.sub(r'[^a-z0-9\s-]', '', handle)  # Remove special chars
+            handle = re.sub(r'\s+', '-', handle)           # Replace spaces with hyphens
+            handle = re.sub(r'-+', '-', handle)            # Remove multiple hyphens
+            handle = handle.strip('-')                     # Remove leading/trailing hyphens
+            
+            if handle:
+                return f"https://{shop_domain}/products/{handle}"
+        
+        return None
+        
     async def _enrich_products(
         self,
         results: List[Dict[str, Any]]
@@ -185,6 +265,8 @@ class ProductSearchService:
             cursor.execute(query, product_ids)
             db_products = {str(p["id"]): p for p in cursor.fetchall()}
             
+            shop_domain = self._get_shop_domain()
+            
             # Enrich results
             enriched = []
             for result in results:
@@ -198,6 +280,8 @@ class ProductSearchService:
                 image_url = None
                 if db_product.get("primary_image_id"):
                     image_url = f"/aiva/api/knowledge/{db_product['kb_id']}/images/{db_product['primary_image_id']}/view"
+                
+                purchase_url = self._generate_purchase_url(db_product, shop_domain)
                 
                 enriched.append({
                     "product_id": product_id,
@@ -215,6 +299,7 @@ class ProductSearchService:
                     "score": result["score"],
                     "similarity_score": result["score"],
                     "url": f"/shopify/products/{product_id}",
+                    "purchase_url": purchase_url,
                     "availability": "in_stock" if db_product["total_inventory"] > 0 else "out_of_stock",
                     "metadata": {
                         "vendor": db_product["vendor"],

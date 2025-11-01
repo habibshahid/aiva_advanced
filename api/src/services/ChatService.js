@@ -524,7 +524,8 @@ ${antiHallucinationInstructions}
         similarity_score: p.score,
         match_reason: p.scoring_details,
         metadata: p.metadata,
-        url: p.url
+        url: p.url,
+		purchase_url: p.purchase_url || null
       })) || [],
       function_calls: functionCalls,
       context_used: {

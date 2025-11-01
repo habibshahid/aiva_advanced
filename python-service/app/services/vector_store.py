@@ -5,6 +5,7 @@ Store and search vectors in Redis
 
 import json
 import logging
+import re
 from typing import List, Dict, Any, Optional
 import numpy as np
 import redis
