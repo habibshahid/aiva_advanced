@@ -82,6 +82,7 @@ class ProductResult(BaseModel):
     score: float
     similarity_score: Optional[float] = None  # Same as score
     url: Optional[str] = None
+    purchase_url: Optional[str] = None
     availability: Optional[str] = None  # String like "in_stock" not dict
     metadata: Dict[str, Any] = {}
     match_reason: Optional[str] = None

@@ -67,6 +67,7 @@ async def upload_image(
         image_metadata['tenant_id'] = tenant_id
         image_metadata['original_filename'] = file.filename
         
+        print(f"{image_metadata}")
         # Generate storage URL (you may need to adjust this based on your setup)
         
         storage_base_path = getattr(settings, 'STORAGE_PATH', '/etc/aiva-oai/storage')
@@ -538,3 +539,79 @@ async def get_image_file(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+        
+
+@router.get("/images/queue/stats")
+async def get_queue_stats():
+    """
+    Get image processing queue statistics
+    """
+    try:
+        queue = get_image_queue()
+        stats = queue.get_stats()
+        
+        return {
+            "success": True,
+            "stats": stats,
+            "recommendations": _get_recommendations(stats)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting queue stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_recommendations(stats: dict) -> dict:
+    """Generate recommendations based on stats"""
+    recommendations = {
+        "concurrency": "optimal",
+        "message": "Queue is performing well"
+    }
+    
+    # High wait times
+    if stats['avg_wait_time_ms'] > 5000:
+        recommendations['concurrency'] = "increase"
+        recommendations['message'] = "Consider increasing IMAGE_PROCESSING_CONCURRENCY if you have more RAM"
+    
+    # Low throughput
+    if stats['throughput_per_minute'] < 5 and stats['total_processed'] > 10:
+        recommendations['concurrency'] = "check_resources"
+        recommendations['message'] = "Low throughput detected. Check server resources (RAM/CPU)"
+    
+    # Very high concurrency usage
+    if stats['peak_concurrent'] == stats['max_concurrent'] and stats['avg_wait_time_ms'] > 2000:
+        recommendations['concurrency'] = "bottleneck"
+        recommendations['message'] = "Queue is bottlenecked. Add more RAM to increase concurrency"
+    
+    return recommendations
+
+
+@router.post("/images/queue/concurrency")
+async def update_queue_concurrency(max_concurrent: int = 1):
+    """
+    Update queue concurrency (requires restart to take full effect)
+    """
+    try:
+        from app.services.image_queue import set_queue_concurrency
+        
+        if max_concurrent < 1 or max_concurrent > 10:
+            raise HTTPException(
+                status_code=400, 
+                detail="max_concurrent must be between 1 and 10"
+            )
+        
+        set_queue_concurrency(max_concurrent)
+        
+        return {
+            "success": True,
+            "message": f"Queue concurrency set to {max_concurrent}",
+            "note": "Restart service for full effect"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating concurrency: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+

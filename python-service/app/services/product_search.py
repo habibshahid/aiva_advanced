@@ -278,8 +278,23 @@ class ProductSearchService:
                 
                 # Get image URL
                 image_url = None
+                
+                
                 if db_product.get("primary_image_id"):
-                    image_url = f"/aiva/api/knowledge/{db_product['kb_id']}/images/{db_product['primary_image_id']}/view"
+                    # Fetch image metadata to get Shopify URL
+                    cursor.execute(
+                        "SELECT metadata FROM yovo_tbl_aiva_images WHERE id = %s",
+                        (db_product["primary_image_id"],)
+                    )
+                    img_row = cursor.fetchone()
+                    
+                    shopify_url = None
+                    if img_row and img_row['metadata']:
+                        img_meta = json.loads(img_row['metadata']) if isinstance(img_row['metadata'], str) else img_row['metadata']
+                        shopify_url = img_meta.get('shopify_image_src')  # ← GET ORIGINAL URL
+                    
+                    # Use Shopify CDN URL if available, otherwise internal
+                    image_url = shopify_url or f"/aiva/api/knowledge/{db_product['kb_id']}/images/{db_product['primary_image_id']}/view"                   
                 
                 purchase_url = self._generate_purchase_url(db_product, shop_domain)
                 
