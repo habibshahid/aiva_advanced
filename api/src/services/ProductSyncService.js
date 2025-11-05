@@ -1,6 +1,6 @@
 /**
- * Product Sync Service
- * Orchestrates product syncing: download images, generate embeddings, store in DB
+ * OPTIMIZED Product Sync Service
+ * Prevents duplicate images by checking if they already exist
  */
 
 const ProductService = require('./ProductService');
@@ -8,11 +8,11 @@ const PythonServiceClient = require('./PythonServiceClient');
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const db = require('../config/database');
 
 class ProductSyncService {
   
   constructor() {
-    // PythonServiceClient is already a singleton instance
     this.pythonClient = PythonServiceClient;
     this.imageTimeout = parseInt(process.env.SYNC_IMAGE_TIMEOUT_MS) || 10000;
     this.productTimeout = parseInt(process.env.SYNC_PRODUCT_TIMEOUT_MS) || 30000;
@@ -20,12 +20,6 @@ class ProductSyncService {
   
   /**
    * Process a single product: store data, download images, generate embeddings
-   * @param {Object} productData - Product data from Shopify
-   * @param {string} kbId - Knowledge base ID
-   * @param {string} tenantId - Tenant ID
-   * @param {string} storeId - Store ID
-   * @param {Function} onProgress - Progress callback
-   * @returns {Promise<Object>} Processing result
    */
   async processProduct(productData, kbId, tenantId, storeId, onProgress = null) {
     const startTime = Date.now();
@@ -34,6 +28,7 @@ class ProductSyncService {
       shopify_product_id: productData.id,
       success: false,
       images_processed: 0,
+      images_skipped: 0,
       images_failed: 0,
       embeddings_generated: false,
       error: null,
@@ -53,14 +48,14 @@ class ProductSyncService {
       
       result.product_id = product.id;
       
-      // Step 2: Process images
+      // Step 2: Process images (WITH DEDUPLICATION)
       if (productData.images && productData.images.length > 0) {
         if (onProgress) onProgress({ 
           step: 'processing_images', 
           total: productData.images.length 
         });
         
-        const imageResults = await this.processImages(
+        const imageResults = await this.processImagesWithDedup(
           product.id,
           productData.images,
           kbId,
@@ -68,6 +63,7 @@ class ProductSyncService {
         );
         
         result.images_processed = imageResults.success;
+        result.images_skipped = imageResults.skipped;
         result.images_failed = imageResults.failed;
       }
       
@@ -91,33 +87,34 @@ class ProductSyncService {
   }
   
   /**
-   * Process product images: download, upload to Python service, generate CLIP embeddings
-   * @param {string} productId - Product ID
-   * @param {Array} images - Shopify image objects
-   * @param {string} kbId - Knowledge base ID
-   * @param {string} tenantId - Tenant ID
-   * @returns {Promise<Object>} Processing results
+   * Process images WITH DEDUPLICATION
+   * Checks if image already exists before downloading/processing
    */
-  async processImages(productId, images, kbId, tenantId) {
+  async processImagesWithDedup(productId, images, kbId, tenantId) {
     const results = {
       success: 0,
+      skipped: 0,
       failed: 0,
       errors: []
     };
     
     // Process images with limited concurrency
-    const concurrency = parseInt(process.env.SYNC_IMAGE_CONCURRENCY) || 3;
+    const concurrency = parseInt(process.env.SYNC_IMAGE_CONCURRENCY) || 1;
     
     for (let i = 0; i < images.length; i += concurrency) {
       const batch = images.slice(i, i + concurrency);
       
       const batchResults = await Promise.allSettled(
-        batch.map(img => this.processImage(img, productId, kbId, tenantId))
+        batch.map(img => this.processImageWithDedup(img, productId, kbId, tenantId))
       );
       
       batchResults.forEach((result, idx) => {
         if (result.status === 'fulfilled') {
-          results.success++;
+          if (result.value.skipped) {
+            results.skipped++;
+          } else {
+            results.success++;
+          }
         } else {
           results.failed++;
           results.errors.push({
@@ -132,16 +129,34 @@ class ProductSyncService {
   }
   
   /**
-   * Process single image
+   * Process single image WITH DEDUPLICATION CHECK
    * @private
    */
-  async processImage(imageData, productId, kbId, tenantId) {
+  async processImageWithDedup(imageData, productId, kbId, tenantId) {
     try {
-      // Step 1: Download image from Shopify
+      // ✅ STEP 1: Check if this image already exists
+      const existingImage = await this.checkImageExists(imageData.id, kbId);
+      
+      if (existingImage) {
+        console.log(`✓ Image ${imageData.id} already exists, skipping download`);
+        
+        // Just link to product if not already linked
+        await this.ensureImageLinked(productId, existingImage.id, imageData);
+        
+        return { 
+          image_id: existingImage.id, 
+          skipped: true,
+          reason: 'already_exists'
+        };
+      }
+      
+      // ✅ STEP 2: Image doesn't exist, process it
+      console.log(`⬇ Downloading new image ${imageData.id}`);
+      
+      // Download image from Shopify
       const imageBuffer = await this.downloadImage(imageData.src);
       
-      // Step 2: Create FormData for upload
-      const FormData = require('form-data');
+      // Create FormData for upload
       const formData = new FormData();
       
       formData.append('file', imageBuffer, {
@@ -153,15 +168,18 @@ class ProductSyncService {
       formData.append('metadata', JSON.stringify({
         source: 'shopify',
         shopify_image_id: imageData.id,
+        shopify_image_src: imageData.src,  // ← Store original URL
         alt_text: imageData.alt || null,
         position: imageData.position,
-        product_id: productId
+        product_id: productId,
+        width: imageData.width || null,
+        height: imageData.height || null
       }));
       
-      // Step 3: Upload to Python service for processing
+      // Upload to Python service for processing
       const imageResult = await this.pythonClient.uploadImage(formData);
       
-      // Step 4: Link image to product
+      // Link image to product
       await ProductService.linkImage(
         productId,
         imageResult.image_id,
@@ -171,11 +189,66 @@ class ProductSyncService {
         imageData.variant_ids || []
       );
       
-      return imageResult;
+      return { ...imageResult, skipped: false };
       
     } catch (error) {
       console.error(`Error processing image ${imageData.id}:`, error.message);
       throw error;
+    }
+  }
+  
+  /**
+   * Check if image already exists in database
+   * @private
+   */
+  async checkImageExists(shopifyImageId, kbId) {
+    try {
+      const [images] = await db.query(`
+        SELECT i.id, i.kb_id, i.filename, i.storage_url
+        FROM yovo_tbl_aiva_images i
+        WHERE i.kb_id = ?
+        AND JSON_EXTRACT(i.metadata, '$.shopify_image_id') = ?
+        LIMIT 1
+      `, [kbId, shopifyImageId]);
+      
+      return images.length > 0 ? images[0] : null;
+      
+    } catch (error) {
+      console.error('Error checking image existence:', error);
+      return null; // On error, assume doesn't exist and re-process
+    }
+  }
+  
+  /**
+   * Ensure image is linked to product
+   * @private
+   */
+  async ensureImageLinked(productId, imageId, imageData) {
+    try {
+      // Check if link already exists
+      const [existing] = await db.query(
+        'SELECT id FROM yovo_tbl_aiva_product_images WHERE product_id = ? AND image_id = ?',
+        [productId, imageId]
+      );
+      
+      if (existing.length === 0) {
+        // Link doesn't exist, create it
+        await ProductService.linkImage(
+          productId,
+          imageId,
+          imageData.id,
+          imageData.position,
+          imageData.alt,
+          imageData.variant_ids || []
+        );
+        console.log(`✓ Linked existing image ${imageId} to product ${productId}`);
+      } else {
+        console.log(`✓ Image ${imageId} already linked to product ${productId}`);
+      }
+      
+    } catch (error) {
+      console.error('Error ensuring image link:', error);
+      // Non-critical, continue
     }
   }
   
@@ -203,66 +276,63 @@ class ProductSyncService {
    * @private
    */
   async generateProductEmbeddings(product, kbId, tenantId) {
-	  try {
-		const textContent = this.buildProductText(product);
-		
-		// Generate embedding
-		const embeddingResult = await this.pythonClient.generateEmbedding({
-		  text: textContent,
-		  model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
-		});
-		
-		// ✅ NEW: Store product vector directly in Redis (not document chunks)
-		const redis = require('../config/redis');
-		const vectorKey = `vector:${kbId}:product:${product.id}`;
-		console.log('###################', vectorKey)
-		const vectorData = {
-		  product_id: product.id,
-		  kb_id: kbId,
-		  tenant_id: tenantId,
-		  type: 'product',
-		  shopify_product_id: product.shopify_product_id,
-		  title: product.title,
-		  description: product.description,
-		  vendor: product.vendor,
-		  product_type: product.product_type,
-		  price: product.price,
-		  tags: product.tags,
-		  embedding: embeddingResult.embedding,
-		  tokens: embeddingResult.tokens,
-		  created_at: new Date().toISOString()
-		};
-		
-		await redis.set(vectorKey, JSON.stringify(vectorData));
-		
-		console.log(`✅ Stored product embedding: ${product.title} (${vectorKey})`);
-		
-		// Update product record with embedding status
-		const db = require('../config/database');
-		await db.query(
-		  'UPDATE yovo_tbl_aiva_products SET embedding_status = ?, embedding_generated_at = NOW() WHERE id = ?',
-		  ['completed', product.id]
-		);
-		
-		return {
-		  product_id: product.id,
-		  tokens: embeddingResult.tokens,
-		  vector_key: vectorKey
-		};
-		
-	  } catch (error) {
-		console.error(`Error generating embeddings for product ${product.id}:`, error.message);
-		
-		// Mark as failed
-		const db = require('../config/database');
-		await db.query(
-		  'UPDATE yovo_tbl_aiva_products SET embedding_status = ? WHERE id = ?',
-		  ['failed', product.id]
-		);
-		
-		return null;
-	  }
-	}
+    try {
+      const textContent = this.buildProductText(product);
+      
+      // Generate embedding
+      const embeddingResult = await this.pythonClient.generateEmbedding({
+        text: textContent,
+        model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+      });
+      
+      // Store product vector in Redis
+      const redis = require('../config/redis');
+      const vectorKey = `vector:${kbId}:product:${product.id}`;
+      
+      const vectorData = {
+        product_id: product.id,
+        kb_id: kbId,
+        tenant_id: tenantId,
+        type: 'product',
+        shopify_product_id: product.shopify_product_id,
+        title: product.title,
+        description: product.description,
+        vendor: product.vendor,
+        product_type: product.product_type,
+        price: product.price,
+        tags: product.tags,
+        embedding: embeddingResult.embedding,
+        tokens: embeddingResult.tokens,
+        created_at: new Date().toISOString()
+      };
+      
+      await redis.set(vectorKey, JSON.stringify(vectorData));
+      
+      console.log(`✅ Stored product embedding: ${product.title}`);
+      
+      // Update product record
+      await db.query(
+        'UPDATE yovo_tbl_aiva_products SET embedding_status = ?, embedding_generated_at = NOW() WHERE id = ?',
+        ['completed', product.id]
+      );
+      
+      return {
+        product_id: product.id,
+        tokens: embeddingResult.tokens,
+        vector_key: vectorKey
+      };
+      
+    } catch (error) {
+      console.error(`Error generating embeddings for product ${product.id}:`, error.message);
+      
+      await db.query(
+        'UPDATE yovo_tbl_aiva_products SET embedding_status = ? WHERE id = ?',
+        ['failed', product.id]
+      );
+      
+      return null;
+    }
+  }
   
   /**
    * Build searchable text content from product
@@ -271,56 +341,30 @@ class ProductSyncService {
   buildProductText(product) {
     const parts = [];
     
-    // Title (most important)
-    if (product.title) {
-      parts.push(`Product: ${product.title}`);
-    }
+    if (product.title) parts.push(`Product: ${product.title}`);
+    if (product.vendor) parts.push(`Brand: ${product.vendor}`);
+    if (product.product_type) parts.push(`Category: ${product.product_type}`);
+    if (product.description) parts.push(`Description: ${product.description}`);
+    if (product.price) parts.push(`Price: PKR ${product.price}`);
     
-    // Vendor and type
-    if (product.vendor) {
-      parts.push(`Brand: ${product.vendor}`);
-    }
-    if (product.product_type) {
-      parts.push(`Category: ${product.product_type}`);
-    }
-    
-    // Description
-    if (product.description) {
-      parts.push(`Description: ${product.description}`);
-    }
-    
-    // Price
-    if (product.price) {
-      parts.push(`Price: PKR ${product.price}`);
-    }
-    
-    // Variants info
     if (product.variants && product.variants.length > 0) {
       const variantInfo = product.variants
         .map(v => {
           const info = [];
-          if (v.title && v.title !== 'Default Title') {
-            info.push(v.title);
-          }
-          if (v.sku) {
-            info.push(`SKU: ${v.sku}`);
-          }
+          if (v.title && v.title !== 'Default Title') info.push(v.title);
+          if (v.sku) info.push(`SKU: ${v.sku}`);
           return info.join(' - ');
         })
         .filter(v => v)
         .join(', ');
       
-      if (variantInfo) {
-        parts.push(`Variants: ${variantInfo}`);
-      }
+      if (variantInfo) parts.push(`Variants: ${variantInfo}`);
     }
     
-    // Tags
     if (product.tags && product.tags.length > 0) {
       parts.push(`Tags: ${product.tags.join(', ')}`);
     }
     
-    // Inventory status
     if (product.total_inventory > 0) {
       parts.push(`In Stock: ${product.total_inventory} available`);
     } else {
@@ -347,18 +391,13 @@ class ProductSyncService {
   
   /**
    * Batch process products
-   * @param {Array} products - Array of Shopify products
-   * @param {string} kbId - Knowledge base ID
-   * @param {string} tenantId - Tenant ID
-   * @param {string} storeId - Store ID
-   * @param {Function} onProgress - Progress callback
-   * @returns {Promise<Object>} Batch processing results
    */
   async batchProcessProducts(products, kbId, tenantId, storeId, onProgress = null) {
     const results = {
       total: products.length,
       success: 0,
       failed: 0,
+      images_skipped: 0,
       errors: []
     };
     
@@ -366,7 +405,7 @@ class ProductSyncService {
       const product = products[i];
       
       try {
-        await this.processProduct(product, kbId, tenantId, storeId, (progress) => {
+        const result = await this.processProduct(product, kbId, tenantId, storeId, (progress) => {
           if (onProgress) {
             onProgress({
               ...progress,
@@ -378,6 +417,7 @@ class ProductSyncService {
         });
         
         results.success++;
+        results.images_skipped += result.images_skipped || 0;
         
       } catch (error) {
         results.failed++;
@@ -394,13 +434,10 @@ class ProductSyncService {
   
   /**
    * Delete product and all related data
-   * @param {string} productId - Product ID
    */
   async deleteProduct(productId) {
-    // Get product images to delete from Python service
     const images = await ProductService.getProductImages(productId);
     
-    // Delete images from Python service
     for (const image of images) {
       try {
         await this.pythonClient.deleteImage(image.id);
@@ -409,8 +446,45 @@ class ProductSyncService {
       }
     }
     
-    // Delete product (cascade will delete variants, image links)
     await ProductService.deleteProduct(productId);
+  }
+  
+  /**
+   * Clean orphaned images (images not linked to any product)
+   */
+  async cleanOrphanedImages(kbId) {
+    try {
+      const [orphanedImages] = await db.query(`
+        SELECT i.id, i.filename
+        FROM yovo_tbl_aiva_images i
+        WHERE i.kb_id = ?
+        AND JSON_EXTRACT(i.metadata, '$.source') = 'shopify'
+        AND NOT EXISTS (
+          SELECT 1 FROM yovo_tbl_aiva_product_images pi
+          WHERE pi.image_id = i.id
+        )
+      `, [kbId]);
+      
+      console.log(`Found ${orphanedImages.length} orphaned images`);
+      
+      for (const image of orphanedImages) {
+        try {
+          await this.pythonClient.deleteImage(image.id, kbId);
+          console.log(`✓ Deleted orphaned image: ${image.filename}`);
+        } catch (error) {
+          console.error(`Error deleting orphaned image ${image.id}:`, error.message);
+        }
+      }
+      
+      return {
+        found: orphanedImages.length,
+        deleted: orphanedImages.length
+      };
+      
+    } catch (error) {
+      console.error('Error cleaning orphaned images:', error);
+      throw error;
+    }
   }
 }
 

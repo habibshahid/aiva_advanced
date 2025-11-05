@@ -30,6 +30,8 @@ import ShopifyProducts from './pages/Shopify/ShopifyProducts';
 import StoreSettings from './pages/Shopify/StoreSettings';
 import ProductDetail from './pages/Shopify/ProductDetail';
 
+import ConversationStrategy from './pages/ConversationStrategy';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -68,6 +70,7 @@ function App() {
             <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
             <Route path="agents/:id" element={<AgentEditor />} />
+			<Route path="/agents/:id/conversation-strategy" element={<ConversationStrategy />} />
             <Route path="credits" element={<Credits />} />
             <Route path="calls" element={<Calls />} />
             <Route path="/test" element={<AgentTest />} />
@@ -88,6 +91,7 @@ function App() {
 			<Route path="shopify/stores/:storeId" element={<StoreSettings />} />
             <Route path="shopify/products" element={<ShopifyProducts />} />
 			<Route path="/shopify/products/:id" element={<ProductDetail />} />
+			
           </Route>
         </Routes>
         

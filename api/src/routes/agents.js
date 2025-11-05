@@ -19,7 +19,53 @@ const authenticate = (req, res, next) => {
     }
 };
 
-// List agents
+/**
+ * @swagger
+ * /api/agents:
+ *   get:
+ *     summary: List all agents
+ *     tags: [Agents]
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive]
+ *     responses:
+ *       200:
+ *         description: List of agents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     agents:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Agent'
+ *                     total:
+ *                       type: integer
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
 router.get('/', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
         const agents = await AgentService.listAgents(req.user.id, req.query);
@@ -30,7 +76,28 @@ router.get('/', authenticate, checkPermission('agents.view'), async (req, res) =
     }
 });
 
-// Get agent
+/**
+ * @swagger
+ * /api/agents/{id}:
+ *   get:
+ *     summary: Get agent by ID
+ *     tags: [Agents]
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Agent details
+ *       404:
+ *         $ref: '#/components/responses/NotFoundError'
+ */
 router.get('/:id', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
         const agent = await AgentService.getAgent(req.params.id);

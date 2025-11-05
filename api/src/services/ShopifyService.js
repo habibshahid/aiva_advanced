@@ -63,7 +63,10 @@ class ShopifyService {
       
       const response = await axios(config);
       
-      return response.data;
+      return {
+	    data: response.data,
+	    headers: response.headers
+	  };
       
     } catch (error) {
       if (error.response) {
@@ -271,15 +274,9 @@ class ShopifyService {
       endpoint += `&updated_at_min=${updated_at_min}`;
     }
     
-    const data = await this._makeRequest(shopDomain, accessToken, endpoint);
-    
-    // Extract pagination info from Link header
-    const pageInfo = this._parsePageInfo(data);
-    
-    return {
-      products: data.products || [],
-      pageInfo
-    };
+    const response = await this._makeRequest(shopDomain, accessToken, endpoint);
+    const pageInfo = this._parsePageInfo(response);
+    return { products: response.data.products || [], pageInfo };
   }
   
   /**
@@ -337,7 +334,7 @@ class ShopifyService {
       `/products/${productId}.json`
     );
     
-    return data.product;
+    return response.data.product;
   }
   
   /**
@@ -354,7 +351,7 @@ class ShopifyService {
     
     const data = await this._makeRequest(shopDomain, accessToken, endpoint);
     
-    return data.count;
+    return data.data.count;
   }
   
   /**
@@ -366,7 +363,7 @@ class ShopifyService {
   async testConnection(shopDomain, accessToken) {
     try {
       const data = await this._makeRequest(shopDomain, accessToken, '/shop.json');
-      return data.shop;
+      return data.data.shop;
     } catch (error) {
       // Re-throw with more context
       throw new Error(`Connection test failed: ${error.message}`);
@@ -559,7 +556,7 @@ class ShopifyService {
         `/products/${productId}.json`
       );
       
-      return response.product;
+      return response.data.product;
       
     } catch (error) {
       throw new Error(`Failed to fetch product ${productId}: ${error.message}`);

@@ -128,7 +128,7 @@ class PythonServiceClient {
    * @param {Object} params.filters - Additional filters
    * @returns {Promise<Object>} Search results
    */
-  async search({ kb_id, query, image = null, top_k = 5, search_type = 'hybrid', filters = {} }) {
+  async search({ kb_id, query, image = null, top_k = 3, search_type = 'hybrid', filters = {} }) {
     try {
       const response = await this.client.post('/api/v1/search', {
         kb_id,

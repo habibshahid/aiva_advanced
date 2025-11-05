@@ -148,12 +148,7 @@ class ChatService {
       [sessionId]
     );
   }
-
-  /**
-   * Send message and get response
-   * @param {Object} params - Message parameters
-   * @returns {Promise<Object>} Response with cost
-   */
+  
   async sendMessage({ sessionId, agentId, message, image = null, userId = null }) {
     // Get or create session
     let session;
@@ -163,7 +158,6 @@ class ChatService {
         throw new Error('Session not found');
       }
     } else {
-      // Create new session
       const agent = await AgentService.getAgent(agentId);
       if (!agent) {
         throw new Error('Agent not found');
@@ -186,137 +180,22 @@ class ChatService {
       image
     });
 
-    // Get agent
+    // Get agent with conversation_strategy
     const agent = await AgentService.getAgent(session.agent_id);
 
     // Get conversation history
     const history = await this.getConversationHistory(sessionId, 10);
 
-    // Search knowledge base if agent has one
-    let knowledgeResults = null;
-    let knowledgeCost = null;
+    // ✅ CHECK IF THIS IS THE FIRST MESSAGE (for greeting)
+    const isFirstMessage = history.length === 0;
 
-    if (agent.kb_id) {
-      try {
-        const searchResult = await KnowledgeService.search({
-          kbId: agent.kb_id,
-          query: message,
-          image: image,
-          topK: 5,
-          searchType: image ? 'hybrid' : 'text'
-        });
-
-        knowledgeResults = searchResult.results;
-        knowledgeCost = searchResult.cost_breakdown;
-      } catch (error) {
-        console.error('Knowledge search failed:', error);
-        // Continue without knowledge
-      }
-    }
-
-    // Build context from knowledge
-    let context = '';
-    if (knowledgeResults && knowledgeResults.text_results && knowledgeResults.text_results.length > 0) {
-      context = '\n\nRELEVANT INFORMATION:\n' + 
-        knowledgeResults.text_results
-          .map(r => r.content)
-          .join('\n\n');
-    }
-
-    // ANTI-HALLUCINATION SYSTEM INSTRUCTIONS
-    const antiHallucinationInstructions = `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚫 CRITICAL OPERATIONAL BOUNDARIES - STRICTLY ENFORCE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-YOU MUST NEVER:
-❌ Answer questions outside your knowledge base unless explicitly provided above
-❌ Make up information, facts, statistics, or data that are not in your context
-❌ Provide information that contradicts your instructions
-❌ Discuss topics not related to your role and purpose as defined in instructions
-❌ Claim capabilities or knowledge you don't have
-❌ Speculate or guess when you don't have information
-
-WHEN YOU CANNOT ANSWER (any of these conditions):
-1. The question is outside your defined scope/instructions
-2. The information is not in your knowledge base or context above
-3. The request contradicts your instructions
-4. You are uncertain about the answer
-5. The topic is completely unrelated to your purpose
-
-YOU MUST RESPOND WITH:
-"I apologize, but I don't have the information needed to answer that question accurately. This appears to be outside my area of expertise. Would you like me to connect you with a human agent who can better assist you?"
-
-THEN IMMEDIATELY SET agent_transfer = true
-
-HUMAN AGENT TRANSFER TRIGGERS:
-• User explicitly requests: "speak to human", "talk to agent", "transfer me", "connect to representative"
-• User shows frustration: "this isn't working", "you're not helping", "I give up"
-• You cannot answer their question (as per conditions above)
-• After 3 failed attempts to help the user
-• User needs information you don't have access to
-• Complex issues requiring human judgment or empathy
-
-REMEMBER:
-✓ Your knowledge is LIMITED to your instructions and the RELEVANT INFORMATION above
-✓ Being honest about limitations builds MORE trust than making things up
-✓ Transferring to a human when needed is BETTER than providing wrong information
-✓ NEVER pretend to know something you don't
-✓ ALWAYS cite your knowledge base when answering from it
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-	
-	if (knowledgeResults && knowledgeResults.product_results && knowledgeResults.product_results.length > 0) {
-	  context += '\n\nAVAILABLE PRODUCTS:\n';
-	  knowledgeResults.product_results.forEach((product, index) => {
-		context += `\n${index + 1}. **${product.name}**`;
-		context += `\n   Price: PKR ${product.price.toLocaleString()}`;
-		if (product.compare_at_price && product.compare_at_price > product.price) {
-		  context += ` (Was: PKR ${product.compare_at_price.toLocaleString()})`;
-		}
-		if (product.description) {
-		  const shortDesc = product.description.length > 200 
-			? product.description.substring(0, 200) + '...' 
-			: product.description;
-		  context += `\n   Description: ${shortDesc}`;
-		}
-		if (product.vendor) {
-		  context += `\n   Brand: ${product.vendor}`;
-		}
-		context += `\n   Availability: ${product.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'}`;
-		context += `\n   Match Score: ${(product.similarity_score * 100).toFixed(0)}%`;
-		context += '\n';
-	  });
-	  
-	  context += '\n**IMPORTANT**: When products are listed above, YOU MUST present them to the user in your response. Do not say you don\'t have information if products are available!';
-	}
-
-	// Add image results
-	if (knowledgeResults && knowledgeResults.image_results && knowledgeResults.image_results.length > 0) {
-	  context += '\n\nRELEVANT IMAGES FOUND: ' + knowledgeResults.image_results.length + ' images available\n';
-	}
-	
-	const systemPrompt = `${agent.instructions}
-
-═══════════════════════════════════════════════════════
-PRODUCT PRESENTATION GUIDELINES:
-═══════════════════════════════════════════════════════
-When products are found in the AVAILABLE PRODUCTS section below:
-✓ ALWAYS present them to the user
-✓ Format clearly: name, price, brief description
-✓ Highlight sales/discounts
-✓ Ask if user wants more details
-✗ NEVER say "I don't have information" if products are listed
-
-${context}
-
-═══════════════════════════════════════════════════════
-CRITICAL RULE:
-═══════════════════════════════════════════════════════
-${antiHallucinationInstructions}
-`;
-
+    // ✅ BUILD ENHANCED SYSTEM PROMPT WITH STRATEGY
+    const systemPrompt = this._buildSystemPromptWithStrategy(
+      agent.instructions,
+      agent.conversation_strategy,
+      agent.greeting,
+      isFirstMessage // ✅ Pass flag to indicate if this is first message
+    );
 
     // Build messages for OpenAI
     const messages = [
@@ -334,8 +213,6 @@ ${antiHallucinationInstructions}
       }
     ];
 
-	console.log(messages);
-	
     // Add image if provided
     if (image) {
       messages[messages.length - 1].content = [
@@ -359,69 +236,46 @@ ${antiHallucinationInstructions}
         }))
       : undefined;
 
-    // Call OpenAI
-    const model = agent.chat_model || agent.model || process.env.CHAT_MODEL || 'gpt-4o-mini';
-	
+    // ✅ CALL OPENAI WITH JSON MODE
+    const model = agent.chat_model || 'gpt-4o-mini';
+
     const completion = await this.openai.chat.completions.create({
       model: model,
       messages: messages,
       tools: tools,
+      response_format: { type: "json_object" }, // ✅ Force JSON response
       temperature: parseFloat(agent.temperature) || 0.7,
       max_tokens: agent.max_tokens || 4096
     });
 
     const aiMessage = completion.choices[0].message;
-    let finalContent = aiMessage.content || '';
-    const functionCalls = [];
-	let agentTransferRequested = false;
-	const transferIndicators = [
-      'connect you with a human',
-      'transfer you to',
-      'speak with a human',
-      'talk to a human',
-      'human agent',
-      'live agent',
-      'customer service representative',
-      'outside my area',
-      'beyond my capabilities',
-      'don\'t have access to',
-      'unable to assist',
-      'can\'t help with'
-    ];
-	
-	const lowerContent = (finalContent || '').toLowerCase();
-    agentTransferRequested = transferIndicators.some(indicator => 
-      lowerContent.includes(indicator)
-    );
-	
-	const userTransferPhrases = [
-      'speak to human',
-      'talk to agent',
-      'transfer me',
-      'connect to representative',
-      'human please',
-      'real person',
-      'live chat',
-      'customer service'
-    ];
-	
-	const lowerUserMessage = message.toLowerCase();
-    const userRequestedTransfer = userTransferPhrases.some(phrase => 
-      lowerUserMessage.includes(phrase)
-    );
+    let llmDecision;
 
-    // Set transfer flag if detected
-    if (agentTransferRequested || userRequestedTransfer) {
-      agentTransferRequested = true;
+    // ✅ PARSE JSON RESPONSE
+    try {
+      llmDecision = JSON.parse(aiMessage.content);
+      console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
+    } catch (error) {
+      console.error('❌ Failed to parse LLM JSON:', aiMessage.content);
+      // Fallback: treat as regular response
+      llmDecision = {
+        response: aiMessage.content,
+        product_search_needed: false,
+        knowledge_search_needed: false,
+        collecting_preferences: false,
+        preferences_collected: {},
+        ready_to_search: false,
+        agent_transfer: false
+      };
     }
-	
-    // Handle function calls
+
+    // Handle function calls (if any)
+    const functionCalls = [];
     if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
       for (const toolCall of aiMessage.tool_calls) {
         const functionName = toolCall.function.name;
         const functionArgs = JSON.parse(toolCall.function.arguments);
 
-        // Execute function (implement function execution logic)
         const functionResult = await this._executeFunction(
           agent,
           functionName,
@@ -435,14 +289,133 @@ ${antiHallucinationInstructions}
           result: functionResult,
           status: 'success'
         });
-
-        // Add function result to context if needed
-        finalContent += `\n\n[Function ${functionName} executed]`;
       }
     }
 
-    // Format response in multiple formats
-    const formattedResponse = markdown.formatResponse(finalContent);
+    // ✅ PRODUCT SEARCH - Only if LLM says ready
+    let knowledgeResults = null;
+    let knowledgeCost = null;
+
+    if (llmDecision.product_search_needed && llmDecision.ready_to_search && agent.kb_id) {
+      try {
+        const searchQuery = llmDecision.product_search_query || llmDecision.search_query || message;
+        
+        console.log(`🔍 Product Search: "${searchQuery}"`);
+        console.log(`📊 Preferences: ${JSON.stringify(llmDecision.preferences_collected || {})}`);
+        
+        const searchResult = await KnowledgeService.search({
+          kbId: agent.kb_id,
+          query: searchQuery,
+          image: image,
+          topK: 5,
+          searchType: image ? 'hybrid' : 'text'
+        });
+
+        knowledgeResults = searchResult.results;
+        knowledgeCost = searchResult.cost_breakdown;
+        
+        console.log(`✅ Found ${knowledgeResults?.product_results?.length || 0} products`);
+        
+      } catch (error) {
+        console.error('Product search failed:', error);
+      }
+    } else if (llmDecision.collecting_preferences) {
+      console.log(`💬 Collecting preferences... (${Object.keys(llmDecision.preferences_collected || {}).length} collected)`);
+    } else if (!llmDecision.product_search_needed) {
+      console.log(`⏭️ No product search needed (follow-up or general chat)`);
+    } else if (!llmDecision.ready_to_search) {
+      console.log(`⏸️ Not ready to search yet (need more preferences)`);
+    }
+
+    // ✅ KNOWLEDGE SEARCH - Only if LLM says needed
+    if (llmDecision.knowledge_search_needed && agent.kb_id && !knowledgeResults) {
+      try {
+        const searchQuery = llmDecision.knowledge_search_query || message;
+        
+        console.log(`📚 Knowledge Search: "${searchQuery}"`);
+        
+        const searchResult = await KnowledgeService.search({
+          kbId: agent.kb_id,
+          query: searchQuery,
+          image: image,
+          topK: 5,
+          searchType: 'text'
+        });
+
+        knowledgeResults = searchResult.results;
+        knowledgeCost = searchResult.cost_breakdown;
+        
+        console.log(`✅ Found ${knowledgeResults?.text_results?.length || 0} knowledge chunks`);
+        
+      } catch (error) {
+        console.error('Knowledge search failed:', error);
+      }
+    }
+
+    // ✅ ENHANCED AGENT TRANSFER DETECTION
+    let agentTransferRequested = llmDecision.agent_transfer || false;
+    
+    // Additional transfer detection from response content
+    const transferIndicators = [
+      'connect you with a human',
+      'transfer you to',
+      'speak with a human',
+      'talk to a human',
+      'human agent',
+      'live agent',
+      'customer service representative',
+      'connect you with someone',
+      'let me get someone'
+    ];
+
+    const lowerContent = (llmDecision.response || '').toLowerCase();
+    if (!agentTransferRequested) {
+      agentTransferRequested = transferIndicators.some(indicator => 
+        lowerContent.includes(indicator)
+      );
+    }
+
+    // Check user message for explicit transfer requests
+    const userTransferPhrases = [
+      'speak to human',
+      'talk to agent',
+      'transfer me',
+      'human please',
+      'real person',
+      'customer service',
+      'representative',
+      'connect me',
+      'speak to manager',
+      'talk to someone',
+      'real agent',
+      'get me a human'
+    ];
+
+    const lowerUserMessage = message.toLowerCase();
+    const userRequestedTransfer = userTransferPhrases.some(phrase => 
+      lowerUserMessage.includes(phrase)
+    );
+
+    if (userRequestedTransfer) {
+      agentTransferRequested = true;
+      
+      // If LLM didn't handle it, add transfer message
+      if (!transferIndicators.some(indicator => lowerContent.includes(indicator))) {
+        llmDecision.response = "I understand you'd like to speak with a human agent. Let me connect you right away. Please hold for a moment.";
+      }
+    }
+
+    // Log transfer decision
+    if (agentTransferRequested) {
+      console.log('🤝 Agent transfer requested:', {
+        from_llm: llmDecision.agent_transfer,
+        from_response: transferIndicators.some(i => lowerContent.includes(i)),
+        from_user: userRequestedTransfer
+      });
+    }
+
+    // Format response
+    const formattedResponse = markdown.formatResponse(llmDecision.response);
 
     // Calculate LLM cost
     const llmCost = CostCalculator.calculateChatCost(
@@ -477,8 +450,16 @@ ${antiHallucinationInstructions}
       costBreakdown: totalCost,
       tokensInput: completion.usage.prompt_tokens,
       tokensOutput: completion.usage.completion_tokens,
-      processingTimeMs: 0, // TODO: Track actual time
-	  agentTransferRequested: agentTransferRequested
+      processingTimeMs: 0,
+      agentTransferRequested: agentTransferRequested,
+      // ✅ Store LLM decision metadata
+      metadata: {
+        collecting_preferences: llmDecision.collecting_preferences,
+        preferences_collected: llmDecision.preferences_collected,
+        ready_to_search: llmDecision.ready_to_search,
+        product_search_needed: llmDecision.product_search_needed,
+        knowledge_search_needed: llmDecision.knowledge_search_needed
+      }
     });
 
     // Update session stats
@@ -487,7 +468,7 @@ ${antiHallucinationInstructions}
     return {
       session_id: sessionId,
       message_id: assistantMessageId,
-	  agent_transfer: agentTransferRequested,
+      agent_transfer: agentTransferRequested,
       response: {
         text: formattedResponse.text,
         html: formattedResponse.html,
@@ -525,11 +506,19 @@ ${antiHallucinationInstructions}
         match_reason: p.scoring_details,
         metadata: p.metadata,
         url: p.url,
-		purchase_url: p.purchase_url || null
+        purchase_url: p.purchase_url || null
       })) || [],
       function_calls: functionCalls,
+      // ✅ Expose decision to frontend
+      llm_decision: {
+        collecting_preferences: llmDecision.collecting_preferences,
+        preferences_collected: llmDecision.preferences_collected,
+        ready_to_search: llmDecision.ready_to_search,
+        product_search_needed: llmDecision.product_search_needed,
+        knowledge_search_needed: llmDecision.knowledge_search_needed
+      },
       context_used: {
-        knowledge_base_chunks: knowledgeResults?.text_results?.length || 0,
+        knowledge_base_chunks: (knowledgeResults?.text_results?.length || 0) + (knowledgeResults?.product_results?.length || 0),
         conversation_history_messages: history.length,
         total_context_tokens: completion.usage.prompt_tokens
       },
@@ -543,6 +532,383 @@ ${antiHallucinationInstructions}
       cost: totalCost.final_cost,
       cost_breakdown: totalCost
     };
+  }
+
+  /**
+   * Build system prompt with conversation strategy
+   * @private
+   */
+  _buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false) {
+    // Start with base instructions
+    let systemPrompt = baseInstructions || '';
+    
+    // ✅ ADD GREETING AT THE BEGINNING IF PROVIDED
+    if (greeting) {
+      const greetingInstructions = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GREETING MESSAGE ${isFirstMessage ? '⚠️ FIRST MESSAGE - USE GREETING NOW!' : ''}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${isFirstMessage ? `
+🚨 CRITICAL: THIS IS THE FIRST MESSAGE IN THE CONVERSATION!
+
+You MUST begin your response with this exact greeting:
+"${greeting}"
+
+Then naturally transition to helping the user based on their message.
+
+Example:
+User: "hi"
+Your Response: {
+  "response": "${greeting} How can I help you today?",
+  "product_search_needed": false,
+  "collecting_preferences": false,
+  "ready_to_search": false,
+  "agent_transfer": false
+}
+
+User: "show me dresses"
+Your Response: {
+  "response": "${greeting} I'd be happy to help you find dresses! What color would you prefer?",
+  "product_search_needed": false,
+  "collecting_preferences": true,
+  "ready_to_search": false
+}
+` : `
+GREETING: "${greeting}"
+
+This greeting should ONLY be used for the FIRST message of a NEW conversation.
+Since there are already messages in the conversation history, DO NOT repeat the greeting.
+Continue the conversation naturally.
+`}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+      systemPrompt += greetingInstructions;
+    }
+    
+    // Add JSON response format instructions
+    const jsonFormatInstructions = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL: JSON RESPONSE FORMAT (RFC 8259 COMPLIANT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You MUST ALWAYS respond with valid JSON in this EXACT structure:
+
+{
+  "response": "Your natural conversational response in user's language",
+  "product_search_needed": true/false,
+  "product_search_query": "detailed search query (if searching for products)",
+  "knowledge_search_needed": true/false,
+  "knowledge_search_query": "search query (if searching knowledge base)",
+  "collecting_preferences": true/false,
+  "preferences_collected": {
+    "preference_name": "value or null"
+  },
+  "ready_to_search": true/false,
+  "agent_transfer": true/false
+}
+
+DECISION LOGIC:
+
+SET product_search_needed = true WHEN:
+✓ User requests to see/find products
+✓ You have collected enough preferences (based on strategy below)
+✓ ready_to_search must also be true
+
+SET knowledge_search_needed = true WHEN:
+✓ User asks questions about policies, information, or documentation
+✓ You need to retrieve factual information from knowledge base
+
+SET collecting_preferences = true WHEN:
+✓ Following preference collection strategy
+✓ Still gathering required information from user
+✓ Haven't collected minimum required preferences yet
+
+SET ready_to_search = true WHEN:
+✓ All required preferences collected
+✓ OR minimum preferences threshold met
+✓ Have enough information to make meaningful search
+
+SET agent_transfer = true WHEN:
+✓ User explicitly requests human agent
+✓ User shows frustration or dissatisfaction
+✓ You cannot answer their question
+✓ Question is outside your knowledge/scope
+✓ After failed attempts to help
+
+FOLLOW-UP ACTIONS (DO NOT SEARCH AGAIN):
+
+If products were JUST shown in previous message, and user says:
+• "I want to buy this", "I'll take this one", "interested in this"
+• "Tell me more about this", "Show me details"
+• "What's the price of this?", "Is this available?"
+
+THEN:
+✓ DO NOT set product_search_needed = true
+✓ DO NOT search again
+✓ Ask which specific product (by name/number) they're referring to
+✓ OR if clear which one, provide details/transfer to complete purchase
+
+Example:
+User: "I want to buy this dress"
+BAD Response: {
+  "product_search_needed": true,  ❌ WRONG!
+  "product_search_query": "dress"
+}
+
+GOOD Response: {
+  "response": "Great choice! Which dress would you like to purchase? Please tell me the name or number of the dress you're interested in.",
+  "product_search_needed": false,  ✅ CORRECT!
+  "collecting_preferences": false,
+  "ready_to_search": false
+}
+
+`;
+
+    systemPrompt += jsonFormatInstructions;
+    
+    // Add conversation strategy if configured
+    if (conversationStrategy?.preference_collection) {
+      const pc = conversationStrategy.preference_collection;
+      const strategyInstructions = this._generatePreferenceInstructions(pc);
+      systemPrompt += strategyInstructions;
+    }
+    
+    // ✅ ADD COMPREHENSIVE ANTI-HALLUCINATION INSTRUCTIONS
+    const antiHallucinationInstructions = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 CRITICAL OPERATIONAL BOUNDARIES & ANTI-HALLUCINATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOU MUST NEVER:
+❌ Answer questions outside your knowledge base unless explicitly provided above
+❌ Make up information, facts, statistics, product details, or prices
+❌ Claim products are available without searching first
+❌ Provide information that contradicts your instructions
+❌ Discuss topics not related to your role and purpose
+❌ Claim capabilities or knowledge you don't have
+❌ Speculate or guess when you don't have information
+❌ Make up product specifications, availability, or pricing
+❌ Answer definitively about things not in your knowledge base
+
+WHEN YOU CANNOT ANSWER (any of these conditions):
+1. The question is outside your defined scope/instructions
+2. The information is not in your knowledge base or search results
+3. The request contradicts your instructions
+4. You are uncertain about the answer
+5. The topic is completely unrelated to your purpose
+6. User asks about products/info you haven't searched for yet
+
+YOU MUST RESPOND WITH:
+"I apologize, but I don't have the information needed to answer that question accurately. This appears to be outside my area of expertise. Would you like me to connect you with a human agent who can better assist you?"
+
+THEN IMMEDIATELY SET:
+{
+  "response": "I apologize, but I don't have the information needed to answer that question accurately...",
+  "agent_transfer": true,
+  "product_search_needed": false,
+  "knowledge_search_needed": false
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤝 HUMAN AGENT TRANSFER TRIGGERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+IMMEDIATELY SET agent_transfer = true WHEN:
+
+1. EXPLICIT USER REQUESTS:
+   • "speak to human", "talk to agent", "transfer me", "connect to representative"
+   • "I want to talk to a real person", "get me a human", "customer service"
+   • "speak to manager", "real agent"
+
+2. USER FRUSTRATION SIGNALS:
+   • "this isn't working", "you're not helping", "I give up"
+   • "this is useless", "waste of time"
+   • Repeated same question 3+ times
+   • User getting angry or upset
+
+3. LIMITATION SCENARIOS:
+   • You cannot answer their question
+   • Question is outside your knowledge base
+   • User needs information you don't have access to
+   • After 3 failed attempts to help the user
+   • Complex issues requiring human judgment
+   • Sensitive topics (complaints, refunds, account issues)
+
+4. TECHNICAL ISSUES:
+   • Search fails repeatedly
+   • Cannot find requested products
+   • System errors or timeouts
+
+TRANSFER RESPONSE FORMAT:
+{
+  "response": "I understand you'd like to [user's need]. Let me connect you with a human agent who can better assist you. Please hold.",
+  "agent_transfer": true,
+  "product_search_needed": false,
+  "knowledge_search_needed": false
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ BEST PRACTICES FOR TRUST & SAFETY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REMEMBER:
+✓ Your knowledge is LIMITED to your instructions and search results
+✓ Being honest about limitations builds MORE trust than making things up
+✓ Transferring to a human when needed is BETTER than providing wrong information
+✓ NEVER pretend to know something you don't
+✓ If you searched and found nothing, say so clearly
+✓ If search results don't match user's question, admit it
+✓ ALWAYS cite your knowledge base when answering from search results
+✓ When showing products, be clear they came from search
+
+WHEN IN DOUBT → TRANSFER TO HUMAN
+It's ALWAYS better to transfer than to provide incorrect information.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🧠 CONVERSATION CONTEXT AWARENESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PAY ATTENTION TO CONVERSATION HISTORY:
+
+If you JUST showed products in the previous message:
+• User saying "I want to buy this/that/one of these" = referring to shown products
+• DO NOT search again
+• Ask which specific product they mean (by name)
+• Help them complete the purchase
+
+If user asks about price/availability of "this/that":
+• They're referring to something already shown
+• DO NOT search again
+• Ask them to specify which product by name
+• Provide the information from what was already shown
+
+NEW SEARCH is needed ONLY when:
+✓ User requests completely different products
+✓ User adds new search criteria significantly different from before
+✓ User explicitly says "show me other options" or "search for something else"
+
+PURCHASE/ACTION TRIGGERS:
+When user says: "I want to buy", "I'll take this", "Can I purchase", "How do I order"
+→ Set product_search_needed = FALSE
+→ Ask which specific product (if multiple were shown)
+→ Then transfer to human agent for checkout:
+{
+  "response": "Great! To complete your purchase of [product name], let me connect you with our sales team who can process your order.",
+  "agent_transfer": true
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+
+    systemPrompt += antiHallucinationInstructions;
+    
+    return systemPrompt;
+  }
+
+  /**
+   * Generate preference collection instructions based on strategy
+   * @private
+   */
+  _generatePreferenceInstructions(preferenceConfig) {
+    const strategy = preferenceConfig.strategy || 'immediate_search';
+    
+    if (strategy === 'immediate_search') {
+      return `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCT SEARCH STRATEGY: IMMEDIATE SEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When user requests products:
+✅ Search IMMEDIATELY - set product_search_needed = true
+✅ Use user's query as search query
+✅ Do NOT ask preference questions
+✅ Show products right away
+
+Example:
+User: "show me dresses"
+Response: {
+  "response": "Here are our dress collection...",
+  "product_search_needed": true,
+  "product_search_query": "dresses",
+  "collecting_preferences": false,
+  "preferences_collected": {},
+  "ready_to_search": true
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+    }
+    
+    if (strategy === 'ask_questions' || strategy === 'minimal_questions') {
+      const preferences = preferenceConfig.preferences_to_collect || [];
+      const minPrefs = preferenceConfig.min_preferences_before_search || 2;
+      const maxQuestions = preferenceConfig.max_questions || 3;
+      
+      let instructions = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCT SEARCH STRATEGY: ${strategy === 'ask_questions' ? 'ASK QUESTIONS' : 'MINIMAL QUESTIONS'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PREFERENCES TO COLLECT:
+`;
+
+      preferences.forEach((pref, index) => {
+        instructions += `
+${index + 1}. ${pref.name} (${pref.required ? 'REQUIRED' : 'OPTIONAL'})
+   Question: "${pref.question || `What ${pref.name}?`}"
+   Type: ${pref.type || 'text'}
+${pref.options ? `   Options: ${pref.options.join(', ')}` : ''}
+`;
+      });
+
+      instructions += `
+
+COLLECTION RULES:
+✓ Ask questions ONE AT A TIME naturally
+✓ Track collected preferences in preferences_collected object
+✓ Search when you have at least ${minPrefs} preference(s)
+✓ Never ask more than ${maxQuestions} questions total
+✓ Required preferences MUST be collected
+✓ Optional preferences can be skipped if user provides enough info naturally
+
+SEARCH QUERY CONSTRUCTION:
+When ready_to_search = true, build comprehensive query including ALL collected preferences.
+Example: "pink formal dresses wedding under 5000"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+
+      return instructions;
+    }
+    
+    if (strategy === 'adaptive') {
+      return `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCT SEARCH STRATEGY: ADAPTIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use your intelligence to decide:
+- High-value items (>10,000): Ask 2-3 questions
+- Medium items (1,000-10,000): Ask 1-2 questions
+- Low-value items (<1,000): Search immediately
+- User provides detailed request: Search immediately
+- Vague request: Ask clarifying questions
+
+Adapt based on context and user behavior.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+    }
+    
+    return '';
   }
 
   /**
@@ -669,7 +1035,7 @@ ${antiHallucinationInstructions}
         messageData.tokensInput || 0,
         messageData.tokensOutput || 0,
         messageData.processingTimeMs || 0,
-        messageData.agentTransferRequested || false  // ← NEW FIELD
+        messageData.agentTransferRequested || false
       ]
     );
 

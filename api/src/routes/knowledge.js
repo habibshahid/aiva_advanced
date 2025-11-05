@@ -481,6 +481,62 @@ router.delete('/:kbId/documents/:documentId', authenticate, async (req, res) => 
  * @desc Search knowledge base (auto-routes to image or text search)
  * @access Private
  */
+ /**
+ * @swagger
+ * /api/knowledge/search:
+ *   post:
+ *     summary: Search knowledge base
+ *     tags: [Knowledge]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - kb_id
+ *               - query
+ *             properties:
+ *               kb_id:
+ *                 type: string
+ *                 format: uuid
+ *               query:
+ *                 type: string
+ *               top_k:
+ *                 type: integer
+ *                 default: 5
+ *                 minimum: 1
+ *                 maximum: 20
+ *               search_type:
+ *                 type: string
+ *                 enum: [text, image, hybrid]
+ *                 default: text
+ *     responses:
+ *       200:
+ *         description: Search results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     total_found:
+ *                       type: integer
+ *                     returned:
+ *                       type: integer
+ *                     text_results:
+ *                       type: array
+ *                     image_results:
+ *                       type: array
+ *                     product_results:
+ *                       type: array
+ */
 router.post('/search', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 

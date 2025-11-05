@@ -12,8 +12,8 @@ class AgentService {
                 id, tenant_id, name, type, instructions, voice, language, 
 				model, provider, deepgram_model, deepgram_voice, deepgram_language,
 				temperature, max_tokens, vad_threshold, 
-				silence_duration_ms, greeting, kb_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				silence_duration_ms, greeting, kb_id, conversation_strategy
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 agentId,
 				tenantId,
@@ -33,7 +33,8 @@ class AgentService {
 				agentData.vad_threshold || 0.5,
 				agentData.silence_duration_ms || 500,
 				agentData.greeting || null,
-				agentData.kb_id || null
+				agentData.kb_id || null,
+				JSON.stringify(agentData.conversation_strategy) || null
             ]
         );
         
@@ -134,13 +135,18 @@ class AgentService {
             'name', 'instructions', 'voice', 'language', 'model', 'chat_model',
 			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
-			'silence_duration_ms', 'greeting', 'is_active', 'kb_id' 
+			'silence_duration_ms', 'greeting', 'is_active', 'kb_id', 'conversation_strategy' 
         ];
         
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 fields.push(`${field} = ?`);
-                values.push(updates[field]);
+				if(field === 'conversation_strategy'){
+					values.push(JSON.stringify(updates[field]));
+				}
+				else{
+					values.push(updates[field]);
+				}
             }
         }
         

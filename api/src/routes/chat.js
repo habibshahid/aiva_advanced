@@ -15,7 +15,7 @@ const { validate, validateChatMessage, validatePagination } = require('../utils/
 
 const authenticate = (req, res, next) => {
     const apiKey = req.headers['x-api-key'];
-    
+
     if (apiKey) {
         // Use API key authentication
         return verifyApiKey(req, res, next);
@@ -29,6 +29,45 @@ const authenticate = (req, res, next) => {
  * @route POST /api/chat/sessions
  * @desc Create new chat session
  * @access Private
+ */
+ /**
+ * @swagger
+ * /chat/sessions:
+ *   post:
+ *     summary: Create new chat session
+ *     tags: [Chat]
+ *     security:
+ *       security:        
+ *       - BearerAuth: [] 
+ *       - ApiKeyAuth: [] 
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - agent_id
+ *             properties:
+ *               agent_id:
+ *                 type: string
+ *                 format: uuid
+ *               session_name:
+ *                 type: string
+ *               metadata:
+ *                 type: object
+ *     responses:
+ *       201:
+ *         description: Session created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/ChatSession'
  */
 router.post('/sessions', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
@@ -280,6 +319,86 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
  * @route POST /api/chat/message
  * @desc Send message and get AI response
  * @access Private
+ */
+ /**
+ * @swagger
+ * /chat/message:
+ *   post:
+ *     summary: Send message and get AI response
+ *     tags: [Chat]
+ *     security:          
+ *       - BearerAuth: []  
+ *       - ApiKeyAuth: []  
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - agent_id
+ *               - message
+ *             properties:
+ *               session_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Existing session ID (optional for first message)
+ *               agent_id:
+ *                 type: string
+ *                 format: uuid
+ *               message:
+ *                 type: string
+ *                 minLength: 1
+ *                 maxLength: 4000
+ *               image:
+ *                 type: string
+ *                 description: Base64 encoded image (optional)
+ *     responses:
+ *       200:
+ *         description: AI response
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     session_id:
+ *                       type: string
+ *                       format: uuid
+ *                     message_id:
+ *                       type: string
+ *                       format: uuid
+ *                     agent_transfer:
+ *                       type: boolean
+ *                       description: True if agent transfer requested
+ *                     response:
+ *                       type: object
+ *                       properties:
+ *                         text:
+ *                           type: string
+ *                         html:
+ *                           type: string
+ *                         markdown:
+ *                           type: string
+ *                     sources:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                     cost:
+ *                       type: number
+ *                 credits:
+ *                   type: object
+ *                   properties:
+ *                     cost:
+ *                       type: number
+ *                     remaining_balance:
+ *                       type: number
+ *       402:
+ *         description: Insufficient credits
  */
 router.post('/message', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();

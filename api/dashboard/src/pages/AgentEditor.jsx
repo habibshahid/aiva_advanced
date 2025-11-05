@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Save, X, Plus, Trash2, Edit2 } from 'lucide-react';
+import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
   getAgent, 
@@ -13,6 +13,13 @@ import {
   generateInstructions
 } from '../services/api';
 import { getKnowledgeBases } from '../services/knowledgeApi';
+
+import { 
+  getConversationStrategy, 
+  updateConversationStrategy,
+  getStrategyPresets,
+  applyStrategyPreset
+} from '../services/conversationStrategyApi';
 
 const chatModels = [
   { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast & Cheap)', cost: '$0.15 / $0.60 per 1M tokens' },
@@ -31,6 +38,9 @@ const AgentEditor = () => {
   const [savingAgent, setSavingAgent] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState([]);
+  const [strategyPresets, setStrategyPresets] = useState([]);
+  const [loadingPresets, setLoadingPresets] = useState(false);
+  const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   
   const [agent, setAgent] = useState({
 	  name: '',
@@ -134,6 +144,137 @@ const AgentEditor = () => {
 	  }
 	};
 	
+	useEffect(() => {
+	  loadStrategyPresets();
+	}, []);
+	
+	const loadStrategyPresets = async () => {
+	  try {
+		setLoadingPresets(true);
+		const response = await getStrategyPresets();
+		
+		if (response.success) {
+		  setStrategyPresets(response.data);
+		}
+	  } catch (error) {
+		console.error('Error loading strategy presets:', error);
+	  } finally {
+		setLoadingPresets(false);
+	  }
+	};
+
+	const applyStrategyPreset = async (presetId) => {
+	  try {
+		const preset = strategyPresets.find(p => p.id === presetId);
+		if (preset) {
+		  setAgent({
+			...agent,
+			conversation_strategy: preset.strategy
+		  });
+		  toast.success(`${preset.name} preset applied`);
+		}
+	  } catch (error) {
+		console.error('Error applying preset:', error);
+		toast.error('Failed to apply preset');
+	  }
+	};
+
+	const updateConversationStrategy = (field, value) => {
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...(agent.conversation_strategy?.preference_collection || {}),
+			[field]: value
+		  }
+		}
+	  });
+	};
+
+	const addPreference = () => {
+	  const preferences = agent.conversation_strategy?.preference_collection?.preferences_to_collect || [];
+	  const newPreferences = [...preferences, {
+		name: '',
+		label: '',
+		required: false,
+		question: '',
+		type: 'text'
+	  }];
+	  
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...agent.conversation_strategy?.preference_collection,
+			preferences_to_collect: newPreferences
+		  }
+		}
+	  });
+	};
+
+	const updatePreference = (index, field, value) => {
+	  const preferences = [...(agent.conversation_strategy?.preference_collection?.preferences_to_collect || [])];
+	  preferences[index] = {
+		...preferences[index],
+		[field]: value
+	  };
+	  
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...agent.conversation_strategy?.preference_collection,
+			preferences_to_collect: preferences
+		  }
+		}
+	  });
+	};
+
+	const removePreference = (index) => {
+	  const preferences = agent.conversation_strategy?.preference_collection?.preferences_to_collect || [];
+	  const newPreferences = preferences.filter((_, i) => i !== index);
+	  
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...agent.conversation_strategy?.preference_collection,
+			preferences_to_collect: newPreferences
+		  }
+		}
+	  });
+	};
+
+	const updateMinPreferences = (value) => {
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...agent.conversation_strategy?.preference_collection,
+			min_preferences_before_search: parseInt(value)
+		  }
+		}
+	  });
+	};
+
+	const updateMaxQuestions = (value) => {
+	  setAgent({
+		...agent,
+		conversation_strategy: {
+		  ...agent.conversation_strategy,
+		  preference_collection: {
+			...agent.conversation_strategy?.preference_collection,
+			max_questions: parseInt(value)
+		  }
+		}
+	  });
+	};
+
 	useEffect(() => {
 	  const loadKnowledgeBases = async () => {
 		try {
@@ -249,13 +390,30 @@ const AgentEditor = () => {
       return;
     }
 
+	const agentData = {
+	  ...agent,
+	  conversation_strategy: agent.conversation_strategy || {
+		preference_collection: {
+		  strategy: 'immediate_search',
+		  preferences_to_collect: [],
+		  min_preferences_before_search: 0,
+		  max_questions: 0
+		},
+		knowledge_search: {
+		  strategy: 'auto',
+		  search_threshold: 'medium',
+		  search_types: ['text', 'image', 'product']
+		}
+	  }
+	};
+
     setSavingAgent(true);
     try {
       if (id) {
-        await updateAgent(id, agent);
+        await updateAgent(id, agentData);
         toast.success('Agent updated');
       } else {
-        const response = await createAgent(agent);
+        const response = await createAgent(agentData);
         toast.success('Agent created');
         navigate(`/agents/${response.data.agent.id}`);
       }
@@ -1123,6 +1281,493 @@ const AgentEditor = () => {
 			</div>
 		  </div>
 		</div>
+		
+		
+	  {/* Conversation Strategy Section */}
+  <div className="bg-white shadow rounded-lg p-6">
+	<div className="flex items-center justify-between mb-4">
+		<div>
+			<h3 className="text-lg font-medium text-gray-900">Conversation Strategy</h3>
+			<p className="text-sm text-gray-500 mt-1">
+				Configure how your agent collects preferences before searching
+			</p>
+		</div>
+	</div>
+
+	  {/* Quick Presets */}
+	  <div className="mb-6">
+		<div className="flex items-center gap-2 mb-3">
+		  <Info size={18} className="text-blue-500" />
+		  <label className="block text-sm font-medium text-gray-700">
+			Quick Presets
+		  </label>
+		</div>
+		<p className="text-xs text-gray-500 mb-3">
+		  Apply a preset configuration based on your business type
+		</p>
+		
+		<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+		  {loadingPresets ? (
+			<div className="col-span-4 text-center py-4">
+			  <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900"></div>
+			</div>
+		  ) : (
+			strategyPresets.map(preset => {
+			  const IconComponent = {
+				shirt: Shirt,
+				laptop: Laptop,
+				couch: Sofa,
+				utensils: Utensils
+			  }[preset.icon] || Info;
+			  
+			  return (
+				<button
+				  key={preset.id}
+				  type="button"
+				  onClick={() => applyStrategyPreset(preset.id)}
+				  className="p-3 border-2 border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
+				>
+				  <div className="flex items-center gap-2 mb-2">
+					<IconComponent size={20} className="text-blue-600" />
+					<span className="font-semibold text-sm">{preset.name}</span>
+				  </div>
+				  <p className="text-xs text-gray-600 mb-2">{preset.description}</p>
+				  <span className="inline-block text-xs px-2 py-1 bg-gray-100 rounded">
+					{preset.strategy.preference_collection.max_questions === 0 
+					  ? 'No questions' 
+					  : `${preset.strategy.preference_collection.max_questions} questions`
+					}
+				  </span>
+				</button>
+			  );
+			})
+		  )}
+		</div>
+	  </div>
+
+	  {/* Strategy Selection */}
+		  <div className="space-y-3">
+			<label className="block text-sm font-medium text-gray-700 mb-2">
+			  Search Strategy
+			</label>
+			
+			{/* Immediate Search */}
+			<label className="flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+			  <input
+				type="radio"
+				name="conversation_strategy"
+				value="immediate_search"
+				checked={agent.conversation_strategy?.preference_collection?.strategy === 'immediate_search'}
+				onChange={(e) => updateConversationStrategy('strategy', e.target.value)}
+				className="mt-1"
+			  />
+			  <div className="flex-1">
+				<div className="flex items-center gap-2 mb-1">
+				  <span className="font-medium text-sm">Immediate Search</span>
+				  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Fast</span>
+				</div>
+				<p className="text-xs text-gray-600">
+				  Search as soon as user requests products. No questions asked.
+				</p>
+				<p className="text-xs text-gray-500 mt-1">
+				  Best for: Furniture, Food, Low-ticket items
+				</p>
+			  </div>
+			</label>
+			
+			{/* Ask Questions */}
+			<label className="flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+			  <input
+				type="radio"
+				name="conversation_strategy"
+				value="ask_questions"
+				checked={agent.conversation_strategy?.preference_collection?.strategy === 'ask_questions'}
+				onChange={(e) => updateConversationStrategy('strategy', e.target.value)}
+				className="mt-1"
+			  />
+			  <div className="flex-1">
+				<div className="flex items-center gap-2 mb-1">
+				  <span className="font-medium text-sm">Ask Questions First</span>
+				  <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">Personalized</span>
+				</div>
+				<p className="text-xs text-gray-600">
+				  Collect user preferences before searching for products.
+				</p>
+				<p className="text-xs text-gray-500 mt-1">
+				  Best for: Clothing, Fashion, High-value items
+				</p>
+			  </div>
+			</label>
+			
+			{/* Minimal Questions */}
+			<label className="flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+			  <input
+				type="radio"
+				name="conversation_strategy"
+				value="minimal_questions"
+				checked={agent.conversation_strategy?.preference_collection?.strategy === 'minimal_questions'}
+				onChange={(e) => updateConversationStrategy('strategy', e.target.value)}
+				className="mt-1"
+			  />
+			  <div className="flex-1">
+				<div className="flex items-center gap-2 mb-1">
+				  <span className="font-medium text-sm">Minimal Questions (1-2)</span>
+				  <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">Balanced</span>
+				</div>
+				<p className="text-xs text-gray-600">
+				  Ask only 1-2 critical questions before searching.
+				</p>
+				<p className="text-xs text-gray-500 mt-1">
+				  Best for: Electronics, Mid-range items
+				</p>
+			  </div>
+			</label>
+			
+			{/* Adaptive */}
+			<label className="flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+			  <input
+				type="radio"
+				name="conversation_strategy"
+				value="adaptive"
+				checked={agent.conversation_strategy?.preference_collection?.strategy === 'adaptive'}
+				onChange={(e) => updateConversationStrategy('strategy', e.target.value)}
+				className="mt-1"
+			  />
+			  <div className="flex-1">
+				<div className="flex items-center gap-2 mb-1">
+				  <span className="font-medium text-sm">Adaptive (Smart)</span>
+				  <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">Intelligent</span>
+				</div>
+				<p className="text-xs text-gray-600">
+				  AI decides based on product type, value, and context.
+				</p>
+				<p className="text-xs text-gray-500 mt-1">
+				  Best for: Multi-category stores
+				</p>
+			  </div>
+			</label>
+		  </div>
+
+		  {/* Current Strategy Info */}
+		  {agent.conversation_strategy?.preference_collection?.strategy && (
+			<div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3">
+			  <div className="flex items-start gap-2">
+				<CheckCircle size={18} className="text-green-600 mt-0.5 flex-shrink-0" />
+				<div>
+				  <h4 className="text-sm font-semibold text-green-900">Current Strategy</h4>
+				  <p className="text-xs text-green-700 mt-1">
+					Using <strong>{agent.conversation_strategy.preference_collection.strategy.replace('_', ' ')}</strong> strategy.
+					{agent.conversation_strategy.preference_collection.strategy === 'immediate_search' && 
+					  ' Products will be shown immediately.'}
+					{agent.conversation_strategy.preference_collection.strategy === 'ask_questions' && 
+					  ' Agent will collect preferences before searching.'}
+					{agent.conversation_strategy.preference_collection.strategy === 'minimal_questions' && 
+					  ' Agent will ask 1-2 quick questions.'}
+					{agent.conversation_strategy.preference_collection.strategy === 'adaptive' && 
+					  ' AI will decide the best approach.'}
+				  </p>
+				</div>
+			  </div>
+			</div>
+		  )}
+		</div>
+	
+	{/* Advanced Configuration - Show when ask_questions or minimal_questions selected */}
+{(agent.conversation_strategy?.preference_collection?.strategy === 'ask_questions' || 
+  agent.conversation_strategy?.preference_collection?.strategy === 'minimal_questions') && (
+  <div className="mt-6 p-4 border-2 border-blue-200 rounded-lg bg-blue-50">
+    
+    {/* Toggle Advanced Config */}
+    <button
+      type="button"
+      onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
+      className="w-full flex items-center justify-between text-left mb-4"
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-lg">⚙️</span>
+        <span className="font-semibold text-gray-900">Advanced Configuration</span>
+        {!showAdvancedConfig && (
+          <span className="text-xs text-gray-500">
+            ({(agent.conversation_strategy?.preference_collection?.preferences_to_collect || []).length} preferences configured)
+          </span>
+        )}
+      </div>
+      <span className="text-gray-600">{showAdvancedConfig ? '▼' : '▶'}</span>
+    </button>
+    
+    {showAdvancedConfig && (
+      <div className="space-y-4">
+        
+        {/* Preferences List */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Preferences to Collect
+          </label>
+          <p className="text-xs text-gray-600 mb-3">
+            Define what information to gather before searching
+          </p>
+          
+          <div className="space-y-3">
+            {(agent.conversation_strategy?.preference_collection?.preferences_to_collect || []).map((pref, index) => (
+              <div key={index} className="p-3 bg-white rounded-lg border border-gray-300 shadow-sm">
+                
+                {/* Preference Header */}
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-sm font-medium text-gray-500">#{index + 1}</span>
+                    <input
+                      type="text"
+                      placeholder="Preference name (e.g., color, size)"
+                      value={pref.name || ''}
+                      onChange={(e) => updatePreference(index, 'name', e.target.value)}
+                      className="flex-1 text-sm border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={pref.required}
+                        onChange={(e) => updatePreference(index, 'required', e.target.checked)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      Required
+                    </label>
+                    
+                    <button
+                      type="button"
+                      onClick={() => removePreference(index)}
+                      className="text-red-600 hover:text-red-700 p-1"
+                      title="Remove preference"
+                    >
+                      <span className="text-lg">🗑️</span>
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Preference Details */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Display Label
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Color Preference"
+                      value={pref.label}
+                      onChange={(e) => updatePreference(index, 'label', e.target.value)}
+                      className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Field Type
+                    </label>
+                    <select
+                      value={pref.type || 'text'}
+                      onChange={(e) => updatePreference(index, 'type', e.target.value)}
+                      className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    >
+                      <option value="text">Text (Open-ended)</option>
+                      <option value="choice">Multiple Choice</option>
+                      <option value="range">Range (e.g., budget)</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Question to Ask
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., What color would you like?"
+                    value={pref.question}
+                    onChange={(e) => updatePreference(index, 'question', e.target.value)}
+                    className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    AI will use this as guidance and may rephrase naturally
+                  </p>
+                </div>
+                
+                {/* Options for Multiple Choice */}
+                {pref.type === 'choice' && (
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Options (comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Red, Blue, Green, Pink, Black"
+                      value={pref.options?.join(', ') || ''}
+                      onChange={(e) => updatePreference(index, 'options', e.target.value.split(',').map(o => o.trim()))}
+                      className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                )}
+                
+              </div>
+            ))}
+          </div>
+          
+          {/* Add Preference Button */}
+          <button
+            type="button"
+            onClick={addPreference}
+            className="mt-3 w-full py-2 px-4 border-2 border-dashed border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+          >
+            + Add Preference
+          </button>
+        </div>
+        
+        {/* Divider */}
+        <div className="border-t border-gray-300 my-4"></div>
+        
+        {/* Search Timing Configuration */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Search Timing
+          </label>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* Min Preferences */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-2">
+                Minimum Preferences Before Search
+              </label>
+              <input
+                type="range"
+                min="0"
+                max={Math.max(5, (agent.conversation_strategy?.preference_collection?.preferences_to_collect || []).length)}
+                value={agent.conversation_strategy?.preference_collection?.min_preferences_before_search || 0}
+                onChange={(e) => updateMinPreferences(e.target.value)}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-gray-600 mt-1">
+                <span>0 (immediate)</span>
+                <span className="font-semibold">
+                  {agent.conversation_strategy?.preference_collection?.min_preferences_before_search || 0}
+                </span>
+                <span>All preferences</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Agent will search once it collects at least this many preferences
+              </p>
+            </div>
+            
+            {/* Max Questions */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-2">
+                Maximum Questions to Ask
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                value={agent.conversation_strategy?.preference_collection?.max_questions || 3}
+                onChange={(e) => updateMaxQuestions(e.target.value)}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-gray-600 mt-1">
+                <span>1</span>
+                <span className="font-semibold">
+                  {agent.conversation_strategy?.preference_collection?.max_questions || 3}
+                </span>
+                <span>10</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Limit total questions to avoid frustrating users (recommended: 2-4)
+              </p>
+            </div>
+            
+          </div>
+        </div>
+        
+        {/* Info Box */}
+        <div className="bg-white border border-blue-300 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <span className="text-blue-600 text-lg">💡</span>
+            <div className="flex-1">
+              <h4 className="text-sm font-semibold text-blue-900 mb-1">How It Works</h4>
+              <ul className="text-xs text-blue-800 space-y-1">
+                <li>• AI asks questions ONE AT A TIME naturally in conversation</li>
+                <li>• Stops asking when minimum preferences collected</li>
+                <li>• Never exceeds maximum question limit</li>
+                <li>• Required preferences are always asked</li>
+                <li>• Optional preferences may be skipped if user provides enough info</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        
+      </div>
+    )}
+    
+  </div>
+)}
+
+{/* Conversation Preview */}
+{agent.conversation_strategy?.preference_collection?.strategy === 'ask_questions' && 
+ agent.conversation_strategy?.preference_collection?.preferences_to_collect?.length > 0 && (
+  <div className="mt-6 bg-gray-50 border border-gray-300 rounded-lg p-4">
+    <div className="flex items-center gap-2 mb-3">
+      <span className="text-lg">👁️</span>
+      <h4 className="font-semibold text-gray-900">Conversation Preview</h4>
+    </div>
+    
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm">
+          👤
+        </div>
+        <div className="flex-1 bg-white rounded-lg p-2 shadow-sm">
+          <p className="text-sm">Show me dresses</p>
+        </div>
+      </div>
+      
+      {agent.conversation_strategy.preference_collection.preferences_to_collect.slice(0, 2).map((pref, index) => (
+        <React.Fragment key={index}>
+          <div className="flex items-start gap-2">
+            <div className="flex-shrink-0 w-8 h-8 bg-green-100 rounded-full flex items-center justify-center text-sm">
+              🤖
+            </div>
+            <div className="flex-1 bg-green-50 rounded-lg p-2 shadow-sm border border-green-200">
+              <p className="text-sm">{pref.question || `What ${pref.name}?`}</p>
+            </div>
+          </div>
+          
+          <div className="flex items-start gap-2">
+            <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm">
+              👤
+            </div>
+            <div className="flex-1 bg-white rounded-lg p-2 shadow-sm">
+              <p className="text-sm text-gray-400 italic">[User responds...]</p>
+            </div>
+          </div>
+        </React.Fragment>
+      ))}
+      
+      <div className="flex items-start gap-2">
+        <div className="flex-shrink-0 w-8 h-8 bg-green-100 rounded-full flex items-center justify-center text-sm">
+          🤖
+        </div>
+        <div className="flex-1 bg-green-50 rounded-lg p-2 shadow-sm border border-green-200">
+          <p className="text-sm">Perfect! Here are the products...</p>
+          <div className="flex gap-2 mt-2">
+            {[1,2,3,4,5].map(i => (
+              <div key={i} className="w-12 h-12 bg-gray-200 rounded border"></div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
       {/* Advanced Settings */}
       <div className="border-t pt-6 mt-6">
         <button
