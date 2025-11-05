@@ -5,18 +5,26 @@ const PERMISSIONS = {
         'functions.*',
         'credits.add',
         'credits.view',
-        'users.manage',
-        'calls.view'
+        'users.*', // Full user management
+        'calls.view',
+        'knowledge.*',
+        'shopify.*'
     ],
     'agent_manager': [
         'agents.create',
         'agents.update',
         'agents.view',
-        'functions.*'
+        'agents.delete',
+        'functions.*',
+        'calls.view',
+        'knowledge.view',
+        'users.view' // Can only view users
     ],
     'client': [
         'calls.view_own',
-        'credits.view_own'
+        'credits.view_own',
+        'agents.view',
+        'knowledge.view'
     ]
 };
 
@@ -42,7 +50,9 @@ exports.checkPermission = (requiredPermission) => {
         
         if (!hasPermission) {
             return res.status(403).json({ 
-                error: 'Insufficient permissions' 
+                error: 'Insufficient permissions',
+                required: requiredPermission,
+                role: userRole
             });
         }
         
@@ -54,9 +64,28 @@ exports.requireRole = (roles) => {
     return (req, res, next) => {
         if (!roles.includes(req.user.role)) {
             return res.status(403).json({ 
-                error: 'Insufficient permissions' 
+                error: 'Insufficient permissions',
+                required_roles: roles,
+                current_role: req.user.role
             });
         }
         next();
     };
+};
+
+// Helper to check if user has permission (for use in code)
+exports.hasPermission = (userRole, permission) => {
+    const userPermissions = PERMISSIONS[userRole] || [];
+    
+    if (userPermissions.includes('*')) {
+        return true;
+    }
+    
+    return userPermissions.some(perm => {
+        if (perm === permission) return true;
+        
+        const [resource, action] = permission.split('.');
+        const permPattern = `${resource}.*`;
+        return perm === permPattern;
+    });
 };

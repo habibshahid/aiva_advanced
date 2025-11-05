@@ -290,6 +290,39 @@ router.get('/:kbId/analytics', authenticate, async (req, res) => {
 });
 
 /**
+ * @route POST /api/knowledge/:kbId/update-stats
+ * @desc Manually update KB statistics
+ * @access Private
+ */
+router.post('/:kbId/update-stats', authenticate, checkPermission('agents.view'), async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+
+    // Check ownership
+    if (kb.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    await KnowledgeService.updateKBStats(req.params.kbId);
+    
+    // Get updated KB
+    const updated = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+
+    res.json(rb.success(updated, 'Statistics updated successfully'));
+
+  } catch (error) {
+    console.error('Update stats error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
  * @route POST /api/knowledge/:kbId/documents
  * @desc Upload document to knowledge base
  * @access Private

@@ -276,7 +276,7 @@ class KnowledgeService {
       );
 
       // Update KB stats
-      await this._updateKBStats(kbId);
+      await this.updateKBStats(kbId);
 
       // Store cost for later deduction
       await redisClient.setEx(
@@ -408,7 +408,7 @@ class KnowledgeService {
     await db.query('DELETE FROM yovo_tbl_aiva_documents WHERE id = ?', [documentId]);
 
     // Update KB stats
-    await this._updateKBStats(doc.kb_id);
+    await this.updateKBStats(doc.kb_id);
   }
 
   /**
@@ -478,10 +478,9 @@ class KnowledgeService {
 
   /**
    * Update KB statistics
-   * @private
    * @param {string} kbId - KB ID
    */
-  async _updateKBStats(kbId) {
+  async updateKBStats(kbId) {
     // Count documents
     const [docCount] = await db.query(
       'SELECT COUNT(*) as count FROM yovo_tbl_aiva_documents WHERE kb_id = ? AND status = "completed"',

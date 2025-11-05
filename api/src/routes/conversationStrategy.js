@@ -10,7 +10,7 @@ const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const AgentService = require('../services/AgentService');
 const { validateProvider } = require('../middleware/provider-validation');
-const ConversationStrategyService = require('../services/ConversationStrategyService');
+const ConversationStrategyService = require('../services/ConversationStrategy');
 
 const router = express.Router();
 

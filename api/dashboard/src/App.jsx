@@ -31,6 +31,10 @@ import StoreSettings from './pages/Shopify/StoreSettings';
 import ProductDetail from './pages/Shopify/ProductDetail';
 
 import ConversationStrategy from './pages/ConversationStrategy';
+import UserManagement from './pages/Users/UserManagement';
+
+import ChatIntegration from './pages/ChatIntegration';
+import ChatPage from './pages/Public/ChatPage';
 
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
@@ -59,6 +63,8 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           
+		  <Route path="/chat/:agentId" element={<ChatPage />} />
+		  
           <Route path="/" element={
             <PrivateRoute>
               <Layout />
@@ -70,6 +76,7 @@ function App() {
             <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
             <Route path="agents/:id" element={<AgentEditor />} />
+			<Route path="agents/:id/chat-integration" element={<ChatIntegration />} />
 			<Route path="/agents/:id/conversation-strategy" element={<ConversationStrategy />} />
             <Route path="credits" element={<Credits />} />
             <Route path="calls" element={<Calls />} />
@@ -91,6 +98,8 @@ function App() {
 			<Route path="shopify/stores/:storeId" element={<StoreSettings />} />
             <Route path="shopify/products" element={<ShopifyProducts />} />
 			<Route path="/shopify/products/:id" element={<ProductDetail />} />
+			
+			<Route path="users" element={<UserManagement />} />
 			
           </Route>
         </Routes>

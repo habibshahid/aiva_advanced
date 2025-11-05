@@ -4,7 +4,7 @@ Configuration settings for Python service
 
 from pydantic_settings import BaseSettings
 from typing import Optional
-
+import os
 
 class Settings(BaseSettings):
     # Service
@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     MAX_PAGES_PER_DOCUMENT: int = 1000
     
     STORAGE_PATH: str = "/etc/aiva-oai/storage"
+    
+    IMAGE_PROCESSING_CONCURRENCY: int = int(os.getenv('IMAGE_PROCESSING_CONCURRENCY', '1'))
     
     # Logging
     LOG_LEVEL: str = "INFO"

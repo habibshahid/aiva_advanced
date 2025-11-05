@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Power, PowerOff } from 'lucide-react';
+import { Plus, Edit2, Trash2, Power, PowerOff, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAgents, deleteAgent, updateAgent } from '../services/api';
 
@@ -166,6 +166,23 @@ const Agents = () => {
                     >
                       <Edit2 className="w-5 h-5" />
                     </Link>
+					{/* ADD THIS NEW BUTTON */}
+					  <Link
+						to={`/agents/${agent.id}/chat-integration`}
+						className="inline-flex items-center px-3 py-1.5 border border-primary-300 shadow-sm text-xs font-medium rounded text-primary-700 bg-primary-50 hover:bg-primary-100"
+						title="Chat Integration"
+					  >
+						<MessageSquare className="w-3 h-3 mr-1" />
+						Chat
+					  </Link>
+					  
+					  <button
+						onClick={() => handleDelete(agent)}
+						className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-red-50 hover:bg-red-100"
+					  >
+						<Trash2 className="w-3 h-3 mr-1" />
+						Delete
+					  </button>
                     <button
                       onClick={() => handleDelete(agent)}
                       className="p-2 text-red-400 hover:text-red-600"

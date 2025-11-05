@@ -1,9 +1,9 @@
 /**
  * Shopify Integration Page
- * Main page for Shopify store management
+ * Main page for Shopify store management with sync progress
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   Store, 
@@ -16,19 +16,38 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Clock,
+  Loader
 } from 'lucide-react';
 import * as shopifyApi from '../../services/shopifyApi';
 
 const ShopifyIntegration = () => {
   const [stores, setStores] = useState([]);
   const [stats, setStats] = useState(null);
+  const [syncStatuses, setSyncStatuses] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const intervalRef = useRef(null);
 
   useEffect(() => {
     loadData();
+    
+    // Start polling for sync statuses
+    startPolling();
+    
+    return () => {
+      // Cleanup polling on unmount
+      stopPolling();
+    };
   }, []);
+
+  useEffect(() => {
+    // Update polling when stores change
+    if (stores.length > 0) {
+      loadSyncStatuses();
+    }
+  }, [stores]);
 
   const loadData = async () => {
     try {
@@ -48,13 +67,52 @@ const ShopifyIntegration = () => {
     }
   };
 
+  const loadSyncStatuses = async () => {
+    try {
+      const statusPromises = stores.map(store => 
+        shopifyApi.getStoreSyncStatus(store.id)
+          .then(res => ({ storeId: store.id, status: res.data.data }))
+          .catch(err => {
+            console.error(`Error loading sync status for ${store.id}:`, err);
+            return { storeId: store.id, status: null };
+          })
+      );
+
+      const results = await Promise.all(statusPromises);
+      const statusMap = {};
+      results.forEach(({ storeId, status }) => {
+        statusMap[storeId] = status;
+      });
+
+      setSyncStatuses(statusMap);
+    } catch (err) {
+      console.error('Load sync statuses error:', err);
+    }
+  };
+
+  const startPolling = () => {
+    // Poll every 3 seconds
+    intervalRef.current = setInterval(() => {
+      loadSyncStatuses();
+    }, 3000);
+  };
+
+  const stopPolling = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
   const handleSync = async (storeId) => {
     try {
       const response = await shopifyApi.triggerSync(storeId);
       alert(`Sync started! Job ID: ${response.data.data.job_id}`);
-      loadData();
+      
+      // Immediately refresh sync statuses
+      await loadSyncStatuses();
     } catch (err) {
-      alert(`Sync failed: ${err.message}`);
+      alert(`Sync failed: ${err.response?.data?.error || err.message}`);
     }
   };
 
@@ -72,6 +130,115 @@ const ShopifyIntegration = () => {
   const formatDate = (date) => {
     if (!date) return 'Never';
     return new Date(date).toLocaleString();
+  };
+
+  const formatTimeAgo = (date) => {
+    if (!date) return 'Never';
+    
+    const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+    
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  };
+
+  const formatDuration = (seconds) => {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  };
+
+  const renderSyncStatus = (store) => {
+    const syncStatus = syncStatuses[store.id];
+    
+    if (!syncStatus) {
+      return (
+        <div className="text-sm text-gray-500">
+          Loading status...
+        </div>
+      );
+    }
+
+    if (syncStatus.is_syncing) {
+      const { progress, timing } = syncStatus;
+      
+      return (
+        <div className="space-y-2">
+          {/* Progress Bar */}
+          <div className="relative">
+            <div className="flex items-center justify-between text-sm mb-1">
+              <span className="text-blue-600 font-medium flex items-center">
+                <Loader className="w-4 h-4 mr-1 animate-spin" />
+                Syncing...
+              </span>
+              <span className="text-gray-600">
+                {progress.percentage}%
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div 
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progress.percentage}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Progress Details */}
+          <div className="flex items-center justify-between text-xs text-gray-600">
+            <span>
+              {progress.products.processed} / {progress.products.total} products
+            </span>
+            <span>
+              {timing.estimated_remaining_seconds > 0 
+                ? `~${formatDuration(timing.estimated_remaining_seconds)} remaining`
+                : 'Calculating...'
+              }
+            </span>
+          </div>
+
+          {/* Images Progress */}
+          {progress.images.total > 0 && (
+            <div className="text-xs text-gray-500">
+              {progress.images.processed} / {progress.images.total} images processed
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Not syncing - show last sync info
+    return (
+      <div className="space-y-1">
+        {syncStatus.last_sync ? (
+          <>
+            <div className="flex items-center text-sm text-gray-600">
+              <CheckCircle className="w-4 h-4 mr-1 text-green-500" />
+              <span>
+                Last synced: {formatTimeAgo(syncStatus.last_sync.completed_at)}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500">
+              {syncStatus.last_sync.products_processed} products, {syncStatus.last_sync.images_processed} images
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-gray-500">
+            Never synced
+          </div>
+        )}
+
+        {/* Next Sync Info */}
+        {syncStatus.next_sync?.enabled && syncStatus.next_sync.next_sync_at && (
+          <div className="flex items-center text-xs text-gray-500 mt-1">
+            <Clock className="w-3 h-3 mr-1" />
+            <span>
+              Next sync: {formatTimeAgo(syncStatus.next_sync.next_sync_at)}
+            </span>
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -262,26 +429,10 @@ const ShopifyIntegration = () => {
                             <ExternalLink className="w-4 h-4" />
                           </a>
                         </div>
-                        <div className="mt-1 flex items-center space-x-4 text-sm text-gray-500">
-                          <span>
-                            {store.total_products_synced || 0} products
-                          </span>
-                          <span>•</span>
-                          <span>
-                            Last sync: {formatDate(store.last_sync_at)}
-                          </span>
-                          {store.last_sync_status && (
-                            <>
-                              <span>•</span>
-                              <span className={
-                                store.last_sync_status === 'success'
-                                  ? 'text-green-600'
-                                  : 'text-red-600'
-                              }>
-                                {store.last_sync_status}
-                              </span>
-                            </>
-                          )}
+
+                        {/* Sync Status Component */}
+                        <div className="mt-3">
+                          {renderSyncStatus(store)}
                         </div>
                       </div>
                     </div>
@@ -289,9 +440,10 @@ const ShopifyIntegration = () => {
                     <div className="flex items-center space-x-2 ml-4">
                       <button
                         onClick={() => handleSync(store.id)}
-                        className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50"
+                        disabled={syncStatuses[store.id]?.is_syncing}
+                        className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <RefreshCw className="w-3 h-3 mr-1" />
+                        <RefreshCw className={`w-3 h-3 mr-1 ${syncStatuses[store.id]?.is_syncing ? 'animate-spin' : ''}`} />
                         Sync
                       </button>
                       <Link

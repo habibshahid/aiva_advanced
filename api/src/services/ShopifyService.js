@@ -258,9 +258,9 @@ class ShopifyService {
     
     let endpoint = `/products.json?limit=${limit}`;
     
-    if (status) {
-      endpoint += `&status=${status}`;
-    }
+    if (status && !cursor) {
+	  endpoint += `&status=${status}`;
+	}
     
     if (cursor) {
       endpoint += `&page_info=${cursor}`;
@@ -319,24 +319,7 @@ class ShopifyService {
     
     return allProducts;
   }
-  
-  /**
-   * Fetch single product by ID
-   * @param {string} shopDomain - Shop domain
-   * @param {string} accessToken - Access token
-   * @param {number} productId - Shopify product ID
-   * @returns {Promise<Object>} Product
-   */
-  async fetchProduct(shopDomain, accessToken, productId) {
-    const data = await this._makeRequest(
-      shopDomain,
-      accessToken,
-      `/products/${productId}.json`
-    );
-    
-    return response.data.product;
-  }
-  
+ 
   /**
    * Fetch products count
    * @param {string} shopDomain - Shop domain
@@ -374,25 +357,41 @@ class ShopifyService {
    * Parse pagination info from response
    * @private
    */
-  _parsePageInfo(data) {
-    // Shopify uses cursor-based pagination
-    // The response doesn't include pagination in body for REST API
-    // We need to check if we got the max limit to determine if there's more
-    
-    const products = data.products || [];
-    const hasNextPage = products.length === 250; // If we got max, there might be more
-    
-    // For cursor, we use the last product's ID
-    const endCursor = products.length > 0
-      ? products[products.length - 1].id
-      : null;
-    
-    return {
-      hasNextPage,
-      endCursor,
-      hasPreviousPage: false, // We don't support backward pagination
-      startCursor: products.length > 0 ? products[0].id : null
-    };
+  _parsePageInfo(response) {
+	  const linkHeader = response.headers?.link || response.headers?.Link;
+	  
+	  let hasNextPage = false;
+	  let endCursor = null;
+	  
+	  if (linkHeader) {
+		// Parse Link header: <url>; rel="next"
+		const links = linkHeader.split(',').reduce((acc, link) => {
+		  const match = link.match(/<([^>]+)>;\s*rel="([^"]+)"/);
+		  if (match) {
+			const [, url, rel] = match;
+			acc[rel] = url;
+		  }
+		  return acc;
+		}, {});
+		
+		if (links.next) {
+		  try {
+			// Extract page_info from next URL
+			const nextUrl = new URL(links.next);
+			endCursor = nextUrl.searchParams.get('page_info');
+			hasNextPage = !!endCursor;
+		  } catch (error) {
+			console.error('Failed to parse next page URL:', error);
+		  }
+		}
+	  }
+	  
+	  return {
+		hasNextPage,
+		endCursor,
+		hasPreviousPage: false,
+		startCursor: null
+	  };
   }
   
   /**

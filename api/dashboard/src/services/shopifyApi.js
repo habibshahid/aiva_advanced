@@ -80,12 +80,20 @@ export const getProductStatuses = (jobId) =>
   api.get(`/shopify/sync/${jobId}/products`);
 
 /**
- * List products
+ * List products with pagination
  * @param {Object} params - Query parameters
- * @returns {Promise<Object>} Products list
+ * @returns {Promise<Object>} Products list with pagination
  */
 export const getProducts = (params = {}) => 
   api.get('/shopify/products', { params });
+
+/**
+ * Get product filter options
+ * @param {string} kbId - Knowledge base ID
+ * @returns {Promise<Object>} Filter options (vendors, product types)
+ */
+export const getProductFilters = (kbId) => 
+  api.get(`/shopify/products/filters/${kbId}`);
 
 /**
  * Get single product details
@@ -132,3 +140,19 @@ export const deleteProduct = async (productId) => {
  */
 export const getStats = (params = {}) => 
   api.get('/shopify/stats', { params });
+  
+/**
+ * Get product statistics
+ * @param {Object} params - Query parameters
+ * @returns {Promise<Object>} Product statistics
+ */
+export const getProductStats = (params = {}) => 
+  api.get('/shopify/products/stats', { params });
+  
+/**
+ * Get store sync status (current or last)
+ * @param {string} storeId - Store ID
+ * @returns {Promise<Object>} Sync status
+ */
+export const getStoreSyncStatus = (storeId) => 
+  api.get(`/shopify/stores/${storeId}/sync-status`);

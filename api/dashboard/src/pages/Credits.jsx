@@ -14,6 +14,10 @@ const Credits = () => {
   const [addAmount, setAddAmount] = useState('');
   const [addNote, setAddNote] = useState('');
 
+  if (!['admin', 'super_admin'].includes(user?.role)) {
+    return <Navigate to="/" replace />;
+  }
+  
   useEffect(() => {
     loadCredits();
   }, []);

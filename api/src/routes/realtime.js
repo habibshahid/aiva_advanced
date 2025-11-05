@@ -149,7 +149,7 @@ router.post('/finalize', verifyToken, async (req, res) => {
                 final_cost = ?,
                 status = 'completed'
             WHERE session_id = ? AND tenant_id = ?`,
-            [Math.floor(duration_ms / 1000), estimatedCost, session_id, req.user.id]
+            [Math.floor(duration_ms / 1000), estimatedCost, session_id, req.user.tenant_id]
         );
         
         // Deduct credits
@@ -157,7 +157,7 @@ router.post('/finalize', verifyToken, async (req, res) => {
             `UPDATE yovo_tbl_aiva_tenants 
             SET credit_balance = credit_balance - ? 
             WHERE id = ?`,
-            [estimatedCost, req.user.id]
+            [estimatedCost, req.user.tenant_id]
         );
         
 		const logId = uuidv4();
@@ -172,7 +172,7 @@ router.post('/finalize', verifyToken, async (req, res) => {
             `INSERT INTO yovo_tbl_aiva_credit_transactions 
             (id, tenant_id, amount, type, reference_type, note, reference_id, balance_before, balance_after) 
             VALUES (?, ?, ?, 'deduct', 'test call', ?, (SELECT id FROM yovo_tbl_aiva_call_logs WHERE session_id = ?), (SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?), ?)`,
-            [logId, req.user.id, estimatedCost, 'Test call charge', session_id, req.user.id, balanceAfter]
+            [logId, req.user.id, estimatedCost, 'Test call charge', session_id, req.user.tenant_id, balanceAfter]
         );
         
         res.json({ 
@@ -185,5 +185,6 @@ router.post('/finalize', verifyToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to finalize cost' });
     }
 });
+
 
 module.exports = router;

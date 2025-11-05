@@ -17,6 +17,9 @@ const chatRoutes = require('./routes/chat');
 const knowledgeRoutes = require('./routes/knowledge');
 const shopifyRoutes = require('./routes/shopify');
 const conversationStrategyRoutes = require('./routes/conversationStrategy');
+const usersRoutes = require('./routes/users');
+const publicChatRoutes = require('./routes/public-chat');
+const widgetRoutes = require('./routes/widget');
 
 const app = express();
 const PORT = process.env.API_PORT || 62001;
@@ -26,8 +29,13 @@ app.use(helmet());
 
 // CORS
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    credentials: true
+  origin: function(origin, callback) {
+    // Allow all origins for widget (you can restrict this later)
+    callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
 }));
 
 // Rate limiting
@@ -35,6 +43,9 @@ const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100 // limit each IP to 100 requests per windowMs
 });
+
+app.use('/', widgetRoutes);
+
 app.use('/api/', limiter);
 
 // Body parsing
@@ -86,6 +97,8 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
 app.use('/api/shopify', shopifyRoutes);
 app.use('/api/conversation-strategy', conversationStrategyRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/public/chat', publicChatRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

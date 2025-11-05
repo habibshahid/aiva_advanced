@@ -378,6 +378,118 @@ router.get('/sync/:job_id/status', verifyToken, async (req, res) => {
 });
 
 /**
+ * @route GET /api/shopify/stores/:store_id/sync-status
+ * @desc Get current sync status for a store (active or last completed)
+ * @access Private
+ */
+router.get('/stores/:store_id/sync-status', verifyToken, async (req, res) => {
+  try {
+    const { store_id } = req.params;
+    const rb = new ResponseBuilder();
+
+    const store = await ShopifyService.getStore(store_id);
+
+    if (!store) {
+      return res.status(404).json(rb.notFound('Store not found'));
+    }
+
+    // Verify ownership
+    if (store.tenant_id !== (req.user.tenant_id || req.user.id)) {
+      return res.status(403).json(rb.forbidden());
+    }
+
+    // Check for active sync job
+    const activeJob = await SyncJobService.getActiveJob(store_id);
+
+    if (activeJob) {
+      // Calculate progress
+      const progress = activeJob.total_products > 0
+        ? Math.round((activeJob.processed_products / activeJob.total_products) * 100)
+        : 0;
+
+      const elapsedMs = activeJob.started_at
+        ? Date.now() - new Date(activeJob.started_at).getTime()
+        : 0;
+
+      const avgTimePerProduct = activeJob.processed_products > 0
+        ? elapsedMs / activeJob.processed_products
+        : 0;
+
+      const remainingProducts = activeJob.total_products - activeJob.processed_products;
+      const estimatedRemainingMs = remainingProducts * avgTimePerProduct;
+
+      return res.json(rb.success({
+        is_syncing: true,
+        job_id: activeJob.id,
+        status: activeJob.status,
+        progress: {
+          percentage: progress,
+          products: {
+            processed: activeJob.processed_products,
+            total: activeJob.total_products,
+            failed: activeJob.failed_products
+          },
+          images: {
+            processed: activeJob.processed_images,
+            total: activeJob.total_images,
+            failed: activeJob.failed_images
+          }
+        },
+        timing: {
+          started_at: activeJob.started_at,
+          elapsed_seconds: Math.round(elapsedMs / 1000),
+          estimated_remaining_seconds: Math.round(estimatedRemainingMs / 1000),
+          estimated_completion: estimatedRemainingMs > 0
+            ? new Date(Date.now() + estimatedRemainingMs)
+            : null
+        }
+      }));
+    }
+
+    // No active job - return last sync info
+    const lastJobs = await SyncJobService.getJobs(
+      req.user.tenant_id || req.user.id,
+      { store_id, limit: 1, status: 'completed' }
+    );
+
+    const lastJob = lastJobs[0] || null;
+
+    // Calculate next sync time if auto-sync enabled
+    let nextSyncAt = null;
+    if (store.auto_sync_enabled && store.last_sync_at) {
+      const lastSyncTime = new Date(store.last_sync_at).getTime();
+      const intervalMs = (store.sync_frequency_minutes || 1440) * 60 * 1000;
+      nextSyncAt = new Date(lastSyncTime + intervalMs);
+    }
+
+    res.json(rb.success({
+      is_syncing: false,
+      last_sync: lastJob ? {
+        job_id: lastJob.id,
+        completed_at: lastJob.completed_at,
+        status: lastJob.status,
+        products_processed: lastJob.processed_products,
+        products_failed: lastJob.failed_products,
+        images_processed: lastJob.processed_images
+      } : null,
+      next_sync: store.auto_sync_enabled ? {
+        enabled: true,
+        frequency_minutes: store.sync_frequency_minutes,
+        next_sync_at: nextSyncAt
+      } : {
+        enabled: false
+      }
+    }));
+
+  } catch (error) {
+    console.error('Get store sync status error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to get sync status')
+    );
+  }
+});
+
+/**
  * @route GET /api/shopify/sync/:store_id/jobs
  * @desc Get sync job history for store
  * @access Private
@@ -575,17 +687,121 @@ router.post('/test-connection', verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * @route GET /api/shopify/products/stats
+ * @desc Get product statistics for a knowledge base
+ * @access Private
+ */
+router.get('/products/stats', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.query;
+
+    if (!kb_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('kb_id is required')
+      );
+    }
+
+    const db = require('../config/database');
+
+    // Get comprehensive product statistics
+    const [stats] = await db.query(`
+      SELECT 
+        COUNT(*) as total_products,
+        COUNT(DISTINCT vendor) as total_vendors,
+        COUNT(DISTINCT product_type) as total_product_types,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_products,
+        SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as draft_products,
+        SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) as archived_products,
+        SUM(total_inventory) as total_inventory,
+        AVG(price) as avg_price,
+        MIN(price) as min_price,
+        MAX(price) as max_price
+      FROM yovo_tbl_aiva_products
+      WHERE kb_id = ?
+    `, [kb_id]);
+
+    // Get vendor list with product counts
+    const [vendors] = await db.query(`
+      SELECT 
+        vendor,
+        COUNT(*) as product_count
+      FROM yovo_tbl_aiva_products
+      WHERE kb_id = ? AND vendor IS NOT NULL
+      GROUP BY vendor
+      ORDER BY product_count DESC
+      LIMIT 10
+    `, [kb_id]);
+
+    // Get product type list with counts
+    const [productTypes] = await db.query(`
+      SELECT 
+        product_type,
+        COUNT(*) as product_count
+      FROM yovo_tbl_aiva_products
+      WHERE kb_id = ? AND product_type IS NOT NULL
+      GROUP BY product_type
+      ORDER BY product_count DESC
+      LIMIT 10
+    `, [kb_id]);
+
+    const result = {
+      summary: {
+        total_products: parseInt(stats[0].total_products) || 0,
+        total_vendors: parseInt(stats[0].total_vendors) || 0,
+        total_product_types: parseInt(stats[0].total_product_types) || 0,
+        total_inventory: parseInt(stats[0].total_inventory) || 0,
+        avg_price: parseFloat(stats[0].avg_price) || 0,
+        min_price: parseFloat(stats[0].min_price) || 0,
+        max_price: parseFloat(stats[0].max_price) || 0
+      },
+      by_status: {
+        active: parseInt(stats[0].active_products) || 0,
+        draft: parseInt(stats[0].draft_products) || 0,
+        archived: parseInt(stats[0].archived_products) || 0
+      },
+      top_vendors: vendors.map(v => ({
+        name: v.vendor,
+        count: parseInt(v.product_count)
+      })),
+      top_product_types: productTypes.map(pt => ({
+        name: pt.product_type,
+        count: parseInt(pt.product_count)
+      }))
+    };
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Get product stats error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
 
 /**
  * @route GET /api/shopify/products
- * @desc List synced products
+ * @desc List synced products with pagination and filters
  * @access Private
  */
 router.get('/products', verifyToken, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
-    const { kb_id, status, search, limit = 50 } = req.query;
+    const { 
+      kb_id, 
+      page = 1,
+      limit = 20,
+      status,
+      vendor,
+      product_type,
+      min_price,
+      max_price,
+      search,
+      sort_by,
+      sort_order
+    } = req.query;
 
     if (!kb_id) {
       return res.status(400).json(
@@ -594,16 +810,52 @@ router.get('/products', verifyToken, async (req, res) => {
     }
 
     const ProductService = require('../services/ProductService');
-    const products = await ProductService.listProducts(kb_id, {
+    const result = await ProductService.listProducts(kb_id, {
+      page: parseInt(page),
+      limit: parseInt(limit),
       status,
+      vendor,
+      product_type,
+      min_price: min_price ? parseFloat(min_price) : undefined,
+      max_price: max_price ? parseFloat(max_price) : undefined,
       search,
-      limit: parseInt(limit)
+      sort_by,
+      sort_order
     });
 
-    res.json(rb.success({ products, total: products.length }));
+    res.json(rb.success(result));
 
   } catch (error) {
     console.error('List products error:', error);
+    res.status(500).json(ResponseBuilder.serverError(error.message));
+  }
+});
+
+/**
+ * @route GET /api/shopify/products/filters/:kb_id
+ * @desc Get available filter options (vendors, product types)
+ * @access Private
+ */
+router.get('/products/filters/:kb_id', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id } = req.params;
+
+    const ProductService = require('../services/ProductService');
+    
+    const [vendors, productTypes] = await Promise.all([
+      ProductService.getVendors(kb_id),
+      ProductService.getProductTypes(kb_id)
+    ]);
+
+    res.json(rb.success({
+      vendors,
+      product_types: productTypes
+    }));
+
+  } catch (error) {
+    console.error('Get filter options error:', error);
     res.status(500).json(ResponseBuilder.serverError(error.message));
   }
 });
@@ -683,6 +935,14 @@ router.post('/products/:product_id/refresh', verifyToken, async (req, res) => {
 
     // Get updated product
     const updated = await ProductService.getProduct(req.params.product_id);
+
+	try {
+	  const KnowledgeService = require('../services/KnowledgeService');
+	  await KnowledgeService.updateKBStats(product.kb_id);
+	} catch (error) {
+	  console.error('Failed to update KB stats:', error);
+	  // Don't fail the request
+	}
 
     res.json(rb.success(updated, 'Product refreshed successfully'));
 

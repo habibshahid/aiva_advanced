@@ -19,7 +19,7 @@ const authenticate = (req, res, next) => {
 // Get balance
 router.get('/balance', authenticate, async (req, res) => {
     try {
-        const balance = await CreditService.getBalance(req.user.id);
+        const balance = await CreditService.getBalance(req.user.tenant_id);
         res.json({ balance });
     } catch (error) {
         console.error('Get balance error:', error);
@@ -81,9 +81,9 @@ router.get('/transactions', authenticate, async (req, res) => {
         const offset = parseInt(req.query.offset) || 0;
         
         const transactions = await CreditService.getTransactions(
-            req.user.id,
-            limit,
-            offset
+            req.user.tenant_id,
+            parseInt(limit),
+            parseInt(offset)
         );
         
         res.json({ transactions });
@@ -97,7 +97,7 @@ router.get('/transactions', authenticate, async (req, res) => {
 router.get('/usage', authenticate, async (req, res) => {
     try {
         const days = parseInt(req.query.days) || 30;
-        const stats = await CreditService.getUsageStats(req.user.id, days);
+        const stats = await CreditService.getUsageStats(req.user.tenant_id, parseInt(days));
         res.json(stats);
     } catch (error) {
         console.error('Get usage stats error:', error);

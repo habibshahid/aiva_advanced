@@ -374,59 +374,159 @@ class ProductService {
   }
   
   /**
-   * List products for a knowledge base
-   * @param {string} kbId - Knowledge base ID
-   * @param {Object} filters - Filter options
-   * @returns {Promise<Array>} Products
-   */
-  async listProducts(kbId, filters = {}) {
-    let query = `
-      SELECT 
-        p.*,
-        s.shop_domain,
-        (
-          SELECT pi.image_id
-          FROM yovo_tbl_aiva_product_images pi
-          WHERE pi.product_id = p.id
-          ORDER BY pi.position ASC
-          LIMIT 1
-        ) as primary_image_id
-      FROM yovo_tbl_aiva_products p
-      LEFT JOIN yovo_tbl_aiva_shopify_stores s ON p.shopify_store_id = s.id
-      WHERE p.kb_id = ?
-    `;
-    const params = [kbId];
-    
-    if (filters.status) {
-      query += ' AND p.status = ?';
-      params.push(filters.status);
-    }
-    
-    if (filters.search) {
-      query += ' AND (p.title LIKE ? OR p.description LIKE ?)';
-      params.push(`%${filters.search}%`, `%${filters.search}%`);
-    }
-    
-    query += ' ORDER BY p.created_at DESC LIMIT ?';
-    params.push(filters.limit || 100);
-    
-    const [products] = await db.query(query, params);
-    
-    return products.map(p => {
-      if (p.tags && typeof p.tags === 'string') {
-        p.tags = JSON.parse(p.tags);
-      }
-      if (p.shopify_metadata && typeof p.shopify_metadata === 'string') {
-        p.shopify_metadata = JSON.parse(p.shopify_metadata);
-      }
-      // Convert image_id to API URL
-      if (p.primary_image_id) {
-        p.image_url = `${process.env.STORAGE_PATH_PREFIX}/api/knowledge/${p.kb_id}/images/${p.primary_image_id}/view`;
-      }
-      delete p.primary_image_id; // Remove internal field
-      return p;
-    });
-  }
+	 * List products for a knowledge base with pagination and advanced filters
+	 * @param {string} kbId - Knowledge base ID
+	 * @param {Object} filters - Filter options
+	 * @returns {Promise<Object>} Products and pagination info
+	 */
+	async listProducts(kbId, filters = {}) {
+	  // Extract pagination params
+	  const page = parseInt(filters.page) || 1;
+	  const limit = parseInt(filters.limit) || 20;
+	  const offset = (page - 1) * limit;
+
+	  // Build base query
+	  let query = `
+		SELECT 
+		  p.*,
+		  s.shop_domain,
+		  (
+			SELECT pi.image_id
+			FROM yovo_tbl_aiva_product_images pi
+			WHERE pi.product_id = p.id
+			ORDER BY pi.position ASC
+			LIMIT 1
+		  ) as primary_image_id
+		FROM yovo_tbl_aiva_products p
+		LEFT JOIN yovo_tbl_aiva_shopify_stores s ON p.shopify_store_id = s.id
+		WHERE p.kb_id = ?
+	  `;
+	  const params = [kbId];
+
+	  // Status filter
+	  if (filters.status && filters.status !== 'all') {
+		query += ' AND p.status = ?';
+		params.push(filters.status);
+	  }
+
+	  // Vendor filter
+	  if (filters.vendor && filters.vendor !== 'all') {
+		query += ' AND p.vendor = ?';
+		params.push(filters.vendor);
+	  }
+
+	  // Product type filter
+	  if (filters.product_type && filters.product_type !== 'all') {
+		query += ' AND p.product_type = ?';
+		params.push(filters.product_type);
+	  }
+
+	  // Price range filters
+	  if (filters.min_price) {
+		query += ' AND p.price >= ?';
+		params.push(parseFloat(filters.min_price));
+	  }
+
+	  if (filters.max_price) {
+		query += ' AND p.price <= ?';
+		params.push(parseFloat(filters.max_price));
+	  }
+
+	  // Search filter (across multiple fields)
+	  if (filters.search) {
+		query += ' AND (p.title LIKE ? OR p.description LIKE ? OR p.vendor LIKE ? OR p.product_type LIKE ?)';
+		const searchPattern = `%${filters.search}%`;
+		params.push(searchPattern, searchPattern, searchPattern, searchPattern);
+	  }
+
+	  // Get total count before pagination
+	  const countQuery = query.replace(
+		/SELECT .+ FROM/,
+		'SELECT COUNT(DISTINCT p.id) as total FROM'
+	  ).replace(/ORDER BY.+/, '');
+	  
+	  const [countResult] = await db.query(countQuery, params);
+	  const totalProducts = countResult[0].total;
+	  const totalPages = Math.ceil(totalProducts / limit);
+
+	  // Sorting
+	  const sortBy = filters.sort_by || 'created_at';
+	  const sortOrder = filters.sort_order || 'DESC';
+	  
+	  // Validate sort fields to prevent SQL injection
+	  const allowedSortFields = ['created_at', 'title', 'price', 'total_inventory', 'vendor', 'product_type'];
+	  const allowedSortOrders = ['ASC', 'DESC'];
+	  
+	  const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
+	  const safeSortOrder = allowedSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+	  
+	  query += ` ORDER BY p.${safeSortBy} ${safeSortOrder}`;
+
+	  // Pagination
+	  query += ' LIMIT ? OFFSET ?';
+	  params.push(limit, offset);
+
+	  const [products] = await db.query(query, params);
+
+	  const formattedProducts = products.map(p => {
+		if (p.tags && typeof p.tags === 'string') {
+		  p.tags = JSON.parse(p.tags);
+		}
+		if (p.shopify_metadata && typeof p.shopify_metadata === 'string') {
+		  p.shopify_metadata = JSON.parse(p.shopify_metadata);
+		}
+		// Convert image_id to API URL
+		if (p.primary_image_id) {
+		  p.image_url = `${process.env.STORAGE_PATH_PREFIX}/api/knowledge/${p.kb_id}/images/${p.primary_image_id}/view`;
+		}
+		delete p.primary_image_id; // Remove internal field
+		return p;
+	  });
+
+	  return {
+		products: formattedProducts,
+		pagination: {
+		  page,
+		  limit,
+		  total: totalProducts,
+		  total_pages: totalPages,
+		  has_next: page < totalPages,
+		  has_prev: page > 1
+		}
+	  };
+	}
+
+	/**
+	 * Get unique vendors for a knowledge base
+	 * @param {string} kbId - Knowledge base ID
+	 * @returns {Promise<Array>} Vendors
+	 */
+	async getVendors(kbId) {
+	  const [vendors] = await db.query(`
+		SELECT DISTINCT vendor
+		FROM yovo_tbl_aiva_products
+		WHERE kb_id = ? AND vendor IS NOT NULL
+		ORDER BY vendor ASC
+	  `, [kbId]);
+	  
+	  return vendors.map(v => v.vendor);
+	}
+
+	/**
+	 * Get unique product types for a knowledge base
+	 * @param {string} kbId - Knowledge base ID
+	 * @returns {Promise<Array>} Product types
+	 */
+	async getProductTypes(kbId) {
+	  const [types] = await db.query(`
+		SELECT DISTINCT product_type
+		FROM yovo_tbl_aiva_products
+		WHERE kb_id = ? AND product_type IS NOT NULL
+		ORDER BY product_type ASC
+	  `, [kbId]);
+	  
+	  return types.map(t => t.product_type);
+	}
   
   /**
    * Delete product

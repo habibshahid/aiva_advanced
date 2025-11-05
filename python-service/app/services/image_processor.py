@@ -17,6 +17,7 @@ from transformers import CLIPProcessor, CLIPModel
 import requests
 
 from app.config import settings
+from app.services.image_queue import get_image_queue
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,14 @@ class ImageProcessor:
                 self.model = self.model.to("cuda")
                 logger.info("CLIP model loaded on GPU")
             else:
-                logger.info("CLIP model loaded on CPU")
+                self.model.eval()  # Set to evaluation mode
+                torch.set_num_threads(2)  # Limit CPU threads
+                logger.info("CLIP model loaded on CPU with optimizations")
+             
+            # Get queue instance
+            max_concurrent = int(getattr(settings, 'IMAGE_PROCESSING_CONCURRENCY', 1))
+            self.queue = get_image_queue(max_concurrent=max_concurrent)
+            logger.info(f"Image processor queue initialized with concurrency={max_concurrent}")
                 
         except Exception as e:
             logger.error(f"Failed to load CLIP model: {e}")
@@ -45,7 +53,7 @@ class ImageProcessor:
     async def generate_text_embedding(self, text: str) -> Dict[str, Any]:
         """
         Generate embedding for text query (for text-to-image search)
-        
+        NO QUEUE - text embeddings are lightweight
         Args:
             text: Query text
             
@@ -90,7 +98,7 @@ class ImageProcessor:
             logger.error(f"Error generating text embedding: {e}")
             raise
     
-    async def generate_image_embedding(self, image: Image.Image) -> Dict[str, Any]:
+    async def generate_image_embedding_old(self, image: Image.Image) -> Dict[str, Any]:
         """
         Generate embedding for an image
         
@@ -103,6 +111,9 @@ class ImageProcessor:
         start_time = time.time()
         
         try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
             # Preprocess image
             inputs = self.processor(
                 images=image,
@@ -123,6 +134,10 @@ class ImageProcessor:
             # Convert to list
             embedding = image_features.cpu().numpy().tolist()[0]
             
+            del inputs, image_features
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
             processing_time = int((time.time() - start_time) * 1000)
             
             return {
@@ -137,6 +152,68 @@ class ImageProcessor:
             logger.error(f"Error generating image embedding: {e}")
             raise
     
+    async def generate_image_embedding(self, image: Image.Image) -> Dict[str, Any]:
+        """
+        Generate embedding for an image - QUEUED
+        This goes through the queue to control memory usage
+        """
+        # Process through queue
+        return await self.queue.process(
+            self._generate_image_embedding_internal,
+            image,
+            cleanup=True
+        )
+    
+    async def _generate_image_embedding_internal(self, image: Image.Image) -> Dict[str, Any]:
+        """
+        Internal method - actual image embedding generation
+        Called by queue, not directly
+        """
+        start_time = time.time()
+        
+        try:
+            # Clear cache before processing
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Preprocess image
+            inputs = self.processor(
+                images=image,
+                return_tensors="pt",
+                padding=True
+            )
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                inputs = {k: v.to("cuda") for k, v in inputs.items()}
+            
+            # Generate image features
+            with torch.no_grad():
+                image_features = self.model.get_image_features(**inputs)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            
+            # Convert to list
+            embedding = image_features.cpu().numpy().tolist()[0]
+            
+            # Cleanup tensors immediately
+            del inputs, image_features
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            processing_time = int((time.time() - start_time) * 1000)
+            
+            return {
+                "embedding": embedding,
+                "dimension": len(embedding),
+                "model": "openai/clip-vit-base-patch32",
+                "processing_time_ms": processing_time,
+                "image_size": image.size
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating image embedding: {e}")
+            raise
+            
     async def process_image_file(self, file_path: Path, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process an image file and generate embedding
@@ -283,3 +360,7 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"Error processing image from bytes: {e}")
             raise
+            
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get queue statistics"""
+        return self.queue.get_stats()

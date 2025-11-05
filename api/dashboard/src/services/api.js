@@ -121,4 +121,13 @@ export const finalizeTestCall = (sessionId, durationMs) =>
 export const generateInstructions = (data) => 
   api.post('/ai-assist/generate-instructions', data);
   
+export const updateChatIntegration = (agentId, settings) => 
+  api.put(`/agents/${agentId}/chat-integration`, settings);
+
+export const getChatIntegrationCode = (agentId) => 
+  api.get(`/agents/${agentId}/chat-integration/code`);
+
+export const testChatIntegration = (agentId) => 
+  api.post(`/agents/${agentId}/chat-integration/test`);
+  
 export default api;

@@ -12,7 +12,8 @@ import {
   Mic,
   BookOpen,
   MessageSquare,
-  Store
+  Store,
+  Users
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -21,17 +22,77 @@ const Layout = () => {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
 
-  const navigation = [
-    { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-    { name: 'Agents', href: '/agents', icon: Bot },
-	{ name: 'Knowledge Base', href: '/knowledge', icon: BookOpen },
-	{ name: 'Shopify', href: '/shopify', icon: Store },
-    { name: 'Live Monitor', href: '/monitor', icon: Activity }, // Added
-    { name: 'Credits', href: '/credits', icon: DollarSign },
-    { name: 'Calls', href: '/calls', icon: Phone },
-	{ name: 'Test Call', href: '/test', icon: Mic },
-	{ name: 'Test Chat', href: '/agent-test', icon: MessageSquare },
-  ];
+  // Get navigation items based on user role
+  const getNavigation = () => {
+    const allItems = [
+      { 
+        name: 'Dashboard', 
+        href: '/', 
+        icon: LayoutDashboard,
+        roles: ['super_admin', 'admin', 'agent_manager', 'client']
+      },
+      { 
+        name: 'Agents', 
+        href: '/agents', 
+        icon: Bot,
+        roles: ['super_admin', 'admin', 'agent_manager', 'client']
+      },
+      { 
+        name: 'Knowledge Base', 
+        href: '/knowledge', 
+        icon: BookOpen,
+        roles: ['super_admin', 'admin', 'agent_manager', 'client']
+      },
+      { 
+        name: 'Shopify', 
+        href: '/shopify', 
+        icon: Store,
+        roles: ['super_admin', 'admin', 'agent_manager']
+      },
+      { 
+        name: 'Live Monitor', 
+        href: '/monitor', 
+        icon: Activity,
+        roles: ['super_admin', 'admin', 'agent_manager']
+      },
+      { 
+        name: 'Credits', 
+        href: '/credits', 
+        icon: DollarSign,
+        roles: ['super_admin', 'admin'] // Only admins can manage credits
+      },
+      { 
+        name: 'Calls', 
+        href: '/calls', 
+        icon: Phone,
+        roles: ['super_admin', 'admin', 'agent_manager', 'client']
+      },
+      { 
+        name: 'Users', 
+        href: '/users', 
+        icon: Users,
+        roles: ['super_admin', 'admin'] // User management only for admins
+      },
+      { 
+        name: 'Test Call', 
+        href: '/test', 
+        icon: Mic,
+        roles: ['super_admin', 'admin', 'agent_manager'] // Testing tools
+      },
+      { 
+        name: 'Test Chat', 
+        href: '/agent-test', 
+        icon: MessageSquare,
+        roles: ['super_admin', 'admin', 'agent_manager'] // Testing tools
+      }
+    ];
+
+    // Filter based on user role
+    if (!user?.role) return allItems;
+    return allItems.filter(item => item.roles.includes(user.role));
+  };
+
+  const navigation = getNavigation();
 
   const isActive = (href) => {
     if (href === '/') return location.pathname === '/';
@@ -52,7 +113,26 @@ const Layout = () => {
             </button>
           </div>
           
-          <nav className="flex-1 px-2 py-4 space-y-1">
+          {/* User Info - Mobile */}
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center">
+              <div className="flex-shrink-0 h-10 w-10 rounded-full bg-primary-100 flex items-center justify-center">
+                <span className="text-primary-600 font-medium">
+                  {user?.name?.charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div className="ml-3 flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">
+                  {user?.name}
+                </p>
+                <p className="text-xs text-gray-500 truncate capitalize">
+                  {user?.role?.replace('_', ' ')}
+                </p>
+              </div>
+            </div>
+          </div>
+          
+          <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
             {navigation.map((item) => {
               const Icon = item.icon;
               return (
@@ -72,6 +152,17 @@ const Layout = () => {
               );
             })}
           </nav>
+
+          {/* Logout - Mobile */}
+          <div className="p-4 border-t">
+            <button
+              onClick={logout}
+              className="flex items-center w-full px-4 py-2 text-sm font-medium text-gray-600 rounded-md hover:bg-gray-50"
+            >
+              <LogOut className="w-5 h-5 mr-3" />
+              Logout
+            </button>
+          </div>
         </div>
       </div>
 
@@ -82,7 +173,31 @@ const Layout = () => {
             <span className="text-xl font-bold text-primary-600">Agent Manager</span>
           </div>
           
-          <nav className="flex-1 px-2 py-4 space-y-1">
+          {/* User Info - Desktop */}
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center">
+              <div className="flex-shrink-0 h-10 w-10 rounded-full bg-primary-100 flex items-center justify-center">
+                <span className="text-primary-600 font-medium">
+                  {user?.name?.charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div className="ml-3 flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">
+                  {user?.name}
+                </p>
+                <p className="text-xs text-gray-500 truncate capitalize">
+                  {user?.role?.replace('_', ' ')}
+                </p>
+              </div>
+            </div>
+            {user?.tenant_name && (
+              <div className="mt-2 text-xs text-gray-500 truncate">
+                {user.tenant_name}
+              </div>
+            )}
+          </div>
+          
+          <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
             {navigation.map((item) => {
               const Icon = item.icon;
               return (

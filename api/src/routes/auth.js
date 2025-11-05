@@ -1,56 +1,16 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../config/database');
+const UserService = require('../services/UserService');
 const { generateToken, verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
 /**
- * @swagger
- * /auth/login:
- *   post:
- *     summary: Login user
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *                 example: user@example.com
- *               password:
- *                 type: string
- *                 format: password
- *                 example: password123
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   type: object
- *                   properties:
- *                     token:
- *                       type: string
- *                     user:
- *                       type: object
- *       401:
- *         description: Invalid credentials
- */ 
+ * @route POST /api/auth/login
+ * @desc Login user
+ * @access Public
+ */
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -61,22 +21,17 @@ router.post('/login', async (req, res) => {
             });
         }
         
-        // Get user
-        const [users] = await db.query(
-            'SELECT * FROM yovo_tbl_aiva_tenants WHERE email = ? AND is_active = TRUE',
-            [email]
-        );
+        // Get user with password hash
+        const user = await UserService.getUserByEmail(email);
         
-        if (users.length === 0) {
+        if (!user) {
             return res.status(401).json({ 
                 error: 'Invalid credentials' 
             });
         }
         
-        const user = users[0];
-        
         // Verify password
-        const validPassword = await bcrypt.compare(password, user.password_hash);
+        const validPassword = await UserService.verifyPassword(password, user.password_hash);
         
         if (!validPassword) {
             return res.status(401).json({ 
@@ -84,17 +39,34 @@ router.post('/login', async (req, res) => {
             });
         }
         
+        // Update last login
+        await UserService.updateLastLogin(user.id);
+        
+        // Log action
+        await UserService.logAction({
+            user_id: user.id,
+            tenant_id: user.tenant_id,
+            action: 'login',
+            ip_address: req.ip
+        });
+        
         // Generate token
         const token = generateToken(user);
+        
+        // Remove sensitive data
+        delete user.password_hash;
         
         res.json({
             token,
             user: {
                 id: user.id,
+                tenant_id: user.tenant_id,
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                credit_balance: parseFloat(user.credit_balance)
+                tenant_name: user.tenant_name,
+                company_name: user.company_name,
+                credit_balance: parseFloat(user.tenant_credit_balance)
             }
         });
         
@@ -106,32 +78,51 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// Get current user
+/**
+ * @route GET /api/auth/me
+ * @desc Get current user
+ * @access Private
+ */
 router.get('/me', verifyToken, async (req, res) => {
-    res.json({
-        user: {
-            id: req.user.id,
-            name: req.user.name,
-            email: req.user.email,
-            role: req.user.role,
-            credit_balance: parseFloat(req.user.credit_balance)
-        }
-    });
+    try {
+        const user = await UserService.getUser(req.user.id);
+        res.json({ user });
+    } catch (error) {
+        console.error('Get current user error:', error);
+        res.status(500).json({ error: 'Failed to get user' });
+    }
 });
 
-// Generate API key
+/**
+ * @route POST /api/auth/api-key/generate
+ * @desc Generate API key for tenant
+ * @access Private (admin or super_admin only)
+ */
 router.post('/api-key/generate', verifyToken, async (req, res) => {
     try {
+        // Only admin and super_admin can generate API keys
+        if (!['admin', 'super_admin'].includes(req.user.role)) {
+            return res.status(403).json({ 
+                error: 'Insufficient permissions' 
+            });
+        }
+        
         const apiKey = `ak_${uuidv4().replace(/-/g, '')}`;
         
         await db.query(
             'UPDATE yovo_tbl_aiva_tenants SET api_key = ? WHERE id = ?',
-            [apiKey, req.user.id]
+            [apiKey, req.user.tenant_id]
         );
         
-        res.json({ 
-            api_key: apiKey 
+        // Log action
+        await UserService.logAction({
+            user_id: req.user.id,
+            tenant_id: req.user.tenant_id,
+            action: 'api_key_generated',
+            ip_address: req.ip
         });
+        
+        res.json({ api_key: apiKey });
         
     } catch (error) {
         console.error('API key generation error:', error);

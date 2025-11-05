@@ -184,6 +184,72 @@ class AgentService {
             );
         }
     }
+	
+	/**
+	 * Update agent chat integration settings
+	 */
+	async updateChatIntegration(agentId, settings) {
+	  const fields = [];
+	  const values = [];
+
+	  if (settings.enable_chat_integration !== undefined) {
+		fields.push('enable_chat_integration = ?');
+		values.push(settings.enable_chat_integration);
+	  }
+
+	  if (settings.widget_config) {
+		fields.push('widget_config = ?');
+		values.push(JSON.stringify(settings.widget_config));
+	  }
+
+	  if (settings.chat_page_enabled !== undefined) {
+		fields.push('chat_page_enabled = ?');
+		values.push(settings.chat_page_enabled);
+	  }
+
+	  if (settings.chat_page_slug) {
+		fields.push('chat_page_slug = ?');
+		values.push(settings.chat_page_slug);
+	  }
+
+	  if (fields.length === 0) return;
+
+	  values.push(agentId);
+
+	  await db.query(
+		`UPDATE yovo_tbl_aiva_agents SET ${fields.join(', ')} WHERE id = ?`,
+		values
+	  );
+	}
+
+	/**
+	 * Generate widget embed code
+	 */
+	generateWidgetCode(agentId, config = {}) {
+	  const baseUrl = process.env.WIDGET_BASE_URL || process.env.API_BASE_URL || 'https://yourdomain.com';
+	  
+	  return `<!-- AIVA Chat Widget -->
+	<script>
+	  (function(w,d,s,o,f,js,fjs){
+		w['AIVAWidget']=o;w[o] = w[o] || function () { (w[o].q = w[o].q || []).push(arguments) };
+		js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
+		js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
+	  }(window, document, 'script', 'aiva', '${baseUrl}/widget.js'));
+	  aiva('init', {
+		agentId: '${agentId}',
+		primaryColor: '${config.primary_color || '#6366f1'}',
+		position: '${config.position || 'bottom-right'}'
+	  });
+	</script>`;
+	}
+
+	/**
+	 * Generate standalone chat page URL
+	 */
+	generateChatPageUrl(agentId, slug) {
+	  const baseUrl = process.env.CHAT_PAGE_URL || process.env.API_BASE_URL || 'https://yourdomain.com';
+	  return `${baseUrl}/chat/${slug || agentId}`;
+	}
 }
 
 module.exports = new AgentService();

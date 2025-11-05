@@ -6,6 +6,8 @@
 const ShopifyService = require('../../services/ShopifyService');
 const ProductSyncService = require('../../services/ProductSyncService');
 const SyncJobService = require('../../services/SyncJobService');
+const KnowledgeService = require('../../services/KnowledgeService');
+const db = require('../../config/database');
 
 /**
  * Process full sync job
@@ -166,7 +168,6 @@ async function processFullSync(job) {
     await SyncJobService.complete(job_id);
     
     // Update store last sync
-    const db = require('../../config/database');
     await db.query(`
       UPDATE yovo_tbl_aiva_shopify_stores 
       SET 
@@ -176,6 +177,16 @@ async function processFullSync(job) {
       WHERE id = ?
     `, [processedCount, store_id]);
     
+	console.log(`[Job ${job_id}] Updating knowledge base stats...`);
+	
+	try {
+	  await KnowledgeService.updateKBStats(kb_id);
+	  console.log(`[Job ${job_id}] ✓ KB stats updated`);
+	} catch (statsError) {
+	  console.error(`[Job ${job_id}] Failed to update KB stats:`, statsError);
+	  // Don't fail the job, just log the error
+	}
+
     return {
       success: true,
       processed: processedCount,
