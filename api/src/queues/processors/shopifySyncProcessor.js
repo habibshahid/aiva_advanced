@@ -181,6 +181,7 @@ async function processFullSync(job) {
 	
 	try {
 	  await KnowledgeService.updateKBStats(kb_id);
+	  await KnowledgeService.updateKBMetadata(kb_id);
 	  console.log(`[Job ${job_id}] ✓ KB stats updated`);
 	} catch (statsError) {
 	  console.error(`[Job ${job_id}] Failed to update KB stats:`, statsError);

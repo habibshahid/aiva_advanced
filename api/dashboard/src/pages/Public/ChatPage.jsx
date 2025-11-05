@@ -1,12 +1,97 @@
 /**
  * Standalone Chat Page
- * OpenAI-style full-page chat interface
+ * OpenAI-style full-page chat interface with rich content support
  */
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader } from 'lucide-react';
+import { Send, Loader, ExternalLink, ShoppingBag } from 'lucide-react';
 import axios from 'axios';
+
+/**
+ * Collapsible Source Component
+ */
+const CollapsibleSource = ({ source, index }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  return (
+    <div className="bg-gray-50 rounded-lg overflow-hidden text-xs">
+      <div className="p-3">
+        {/* Title - More prominent */}
+        <div className="font-semibold text-gray-900 mb-2 flex items-start gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-[10px] font-bold">
+            {index + 1}
+          </span>
+          <span className="flex-1">{source.source.metadata.title || 'Document'}</span>
+        </div>
+        
+        {/* Content Preview */}
+        <div 
+          className="text-gray-600 mb-2"
+          style={{
+            display: isExpanded ? 'block' : '-webkit-box',
+            WebkitLineClamp: isExpanded ? 'unset' : 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden'
+          }}
+        >
+          {source.content}
+        </div>
+
+        {/* Metadata Info */}
+        {(source.page || source.relevance_score) && (
+          <div className="flex items-center gap-3 text-[10px] text-gray-500 mb-2">
+            {source.page && (
+              <span>📄 Page {source.source.metadata.page}</span>
+            )}
+            {source.source.metadata.relevance_score && (
+              <span>🎯 {(source.source.metadata.relevance_score * 100).toFixed(0)}% match</span>
+            )}
+          </div>
+        )}
+
+        {/* Expand/Collapse Button */}
+        {source.content && source.content.length > 150 && (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="text-primary-600 hover:text-primary-700 font-medium inline-flex items-center gap-1"
+          >
+            {isExpanded ? (
+              <>
+                Show less
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+              </>
+            ) : (
+              <>
+                Show more
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </>
+            )}
+          </button>
+        )}
+
+        {/* Source Link - Fixed path */}
+        {(source.url || source.source.metadata?.source_url) && (
+          <div className="mt-2 pt-2 border-t border-gray-200">
+            <a 
+              href={source.url || source.source.metadata?.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 font-medium"
+            >
+              <ExternalLink className="w-3 h-3" />
+              View source
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const ChatPage = () => {
   const { agentId } = useParams();
@@ -18,7 +103,7 @@ const ChatPage = () => {
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef(null);
 
-  const API_URL = window.location.origin + '/api/public/chat';
+  const API_URL = window.location.origin + '/aiva/api/public/chat';
 
   useEffect(() => {
     initChat();
@@ -80,20 +165,32 @@ const ChatPage = () => {
   };
 
   const loadHistory = async (sid) => {
-    try {
-      const response = await axios.get(`${API_URL}/history/${sid}`);
-      if (response.data.success) {
-        setMessages(response.data.data.messages);
-      }
-    } catch (error) {
-      console.error('Load history error:', error);
-    }
-  };
+	  try {
+		const response = await axios.get(`${API_URL}/history/${sid}`);
+		if (response.data.success) {
+		  // Map messages to include all rich content
+		  const loadedMessages = response.data.data.messages.map(msg => ({
+			id: msg.id,
+			role: msg.role,
+			content: msg.content,
+			html: msg.content_html,
+			sources: msg.sources || [],
+			images: msg.images || [],
+			products: msg.products || [],
+			agent_transfer: msg.agent_transfer_requested,
+			created_at: msg.created_at
+		  }));
+		  setMessages(loadedMessages);
+		}
+	  } catch (error) {
+		console.error('Load history error:', error);
+	  }
+	};
 
   const sendMessage = async (e) => {
     e.preventDefault();
     
-    if (!input.trim() || !sessionId || sending) return;
+    if (!input.trim() || sending) return;
 
     const userMessage = input.trim();
     setInput('');
@@ -111,17 +208,46 @@ const ChatPage = () => {
     try {
       const response = await axios.post(`${API_URL}/message`, {
         session_id: sessionId,
+        agent_id: agentId,
         message: userMessage
       });
 
       if (response.data.success) {
+        const data = response.data.data;
+        
+        // Update sessionId if new session was created
+        if (data.new_session_created) {
+          const newSessionId = data.session_id;
+          setSessionId(newSessionId);
+          localStorage.setItem(`aiva_chat_${agentId}`, newSessionId);
+        }
+
+        // Build rich message
         const assistantMessage = {
-          id: response.data.data.message_id,
+          id: data.message_id,
           role: 'assistant',
-          content: response.data.data.response,
-          created_at: response.data.data.created_at
+          content: data.response.text || data.response,
+          html: data.response.html,
+          sources: data.sources || [],
+          images: data.images || [],
+          products: data.products || [],
+          agent_transfer: data.agent_transfer,
+          created_at: data.created_at
         };
+        
         setMessages(prev => [...prev, assistantMessage]);
+
+        // Handle agent transfer
+        if (data.agent_transfer) {
+          setTimeout(() => {
+            setMessages(prev => [...prev, {
+              id: 'transfer-' + Date.now(),
+              role: 'system',
+              content: '🤝 Connecting you to a human agent...',
+              created_at: new Date().toISOString()
+            }]);
+          }, 1000);
+        }
       } else {
         throw new Error('Failed to send message');
       }
@@ -143,6 +269,97 @@ const ChatPage = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Render message content with rich elements
+  const renderMessageContent = (message) => {
+    return (
+      <>
+        {/* Main text content */}
+        <div 
+          className="text-sm whitespace-pre-wrap"
+          dangerouslySetInnerHTML={{ __html: message.html || message.content }}
+        />
+
+        {/* Sources */}
+        {message.sources && message.sources.length > 0 && (
+		  <div className="mt-4 pt-4 border-t border-gray-200">
+			<div className="text-xs font-semibold text-gray-600 mb-2">
+			  📚 Sources ({message.sources.length})
+			</div>
+			<div className="space-y-2">
+			  {message.sources.map((source, idx) => (
+				<CollapsibleSource key={idx} source={source} index={idx} />
+			  ))}
+			</div>
+		  </div>
+		)}
+
+        {/* Products */}
+        {message.products && message.products.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1">
+              <ShoppingBag className="w-4 h-4" />
+              Products ({message.products.length})
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {message.products.map((product, idx) => (
+                <div key={idx} className="bg-gray-50 rounded-lg p-3 text-center hover:shadow-md transition-shadow">
+                  {product.image && (
+                    <img 
+                      src={product.image}
+                      alt={product.name}
+                      className="w-full h-32 object-cover rounded-md mb-2"
+                    />
+                  )}
+                  <div className="text-sm font-medium text-gray-900 mb-1 line-clamp-2">
+                    {product.name}
+                  </div>
+                  <div className="text-sm font-semibold text-primary-600 mb-2">
+                    {product.price}
+                  </div>
+                  {product.purchase_url && (
+                    <a 
+                      href={product.purchase_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block bg-primary-600 text-white text-xs px-3 py-1 rounded-md hover:bg-primary-700 transition-colors"
+                    >
+                      View Product
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Images */}
+        {message.images && message.images.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="text-xs font-semibold text-gray-600 mb-3">
+              🖼️ Images ({message.images.length})
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {message.images.map((image, idx) => (
+                <div key={idx} className="rounded-lg overflow-hidden">
+                  <img 
+                    src={image.url}
+                    alt={image.description || 'Image'}
+                    className="w-full h-auto"
+                  />
+                  {image.description && (
+                    <div className="bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                      {image.description}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -159,7 +376,7 @@ const ChatPage = () => {
           <h1 className="text-xl font-semibold text-gray-900">
             {agent?.name || 'AI Assistant'}
           </h1>
-          <p className="text-sm text-gray-500">Powered by AIVA</p>
+          <p className="text-sm text-gray-500">Powered by Intellicon AiVA</p>
         </div>
       </div>
 
@@ -180,16 +397,28 @@ const ChatPage = () => {
             messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${
+                  message.role === 'user' 
+                    ? 'justify-end' 
+                    : message.role === 'system'
+                    ? 'justify-center'
+                    : 'justify-start'
+                }`}
               >
                 <div
-                  className={`max-w-3xl rounded-2xl px-4 py-3 ${
+                  className={`rounded-2xl px-4 py-3 ${
                     message.role === 'user'
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                      ? 'max-w-3xl bg-primary-600 text-white'
+                      : message.role === 'system'
+                      ? 'bg-yellow-50 text-yellow-800 border border-yellow-200 px-6'
+                      : 'max-w-3xl bg-white text-gray-900 shadow-sm border border-gray-200'
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  {message.role === 'system' ? (
+                    <p className="text-sm text-center">{message.content}</p>
+                  ) : (
+                    renderMessageContent(message)
+                  )}
                 </div>
               </div>
             ))

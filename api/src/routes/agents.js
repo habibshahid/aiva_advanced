@@ -9,7 +9,7 @@ const router = express.Router();
 // Middleware that accepts either JWT token OR API key
 const authenticate = (req, res, next) => {
     const apiKey = req.headers['x-api-key'];
-    
+
     if (apiKey) {
         // Use API key authentication
         return verifyApiKey(req, res, next);
@@ -178,64 +178,119 @@ router.delete('/:id', authenticate, checkPermission('agents.delete'), async (req
  * @desc Update chat integration settings
  * @access Private
  */
-router.put('/:id/chat-integration', verifyToken, checkPermission('agents.update'), async (req, res) => {
+
+router.put('/:id/chat-integration', authenticate, checkPermission('agents.update'), async (req, res) => {
+
   try {
-    const agent = await AgentService.getAgent(req.params.id);
-    
-    if (!agent) {
-      return res.status(404).json({ error: 'Agent not found' });
-    }
-    
-    // Check ownership
-    if (agent.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    
-    await AgentService.updateChatIntegration(req.params.id, req.body);
-    
-    const updatedAgent = await AgentService.getAgent(req.params.id);
-    res.json({ agent: updatedAgent });
-    
+    const { id } = req.params;
+    const settings = req.body;
+    const config = await AgentService.updateChatIntegration(
+      id,
+      settings
+    );
+
+    res.json({
+      success: true,
+      data: config
+    });
+
   } catch (error) {
     console.error('Update chat integration error:', error);
+    
+    // Handle specific errors
+    if (error.message === 'Agent not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error.message === 'Access denied') {
+      return res.status(403).json({ error: error.message });
+    }
+    if (error.message.includes('slug')) {
+      return res.status(400).json({ error: error.message });
+    }
+    
     res.status(500).json({ error: 'Failed to update chat integration' });
   }
 });
 
 /**
- * @route GET /api/agents/:id/chat-integration/code
- * @desc Get embed code for agent
+ * @route GET /api/agents/:id/chat-integration
+ * @desc Get chat integration settings
  * @access Private
  */
-router.get('/:id/chat-integration/code', verifyToken, async (req, res) => {
+router.get('/:id/chat-integration', authenticate, async (req, res) => {
   try {
-    const agent = await AgentService.getAgent(req.params.id);
+    const { id } = req.params;
+
+    // Get agent first to verify tenant access
+    const agent = await AgentService.getAgent(id);
     
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    // Check ownership
-    if (agent.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
+
+    // Verify tenant access
+    if (agent.tenant_id !== req.user.tenantId) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    
-    const widgetCode = AgentService.generateWidgetCode(req.params.id, agent.widget_config || {});
-    const chatPageUrl = AgentService.generateChatPageUrl(req.params.id, agent.chat_page_slug);
-    
+
+    const config = await AgentService.getChatIntegration(id);
+
     res.json({
-      widget_code: widgetCode,
-      chat_page_url: chatPageUrl,
-      agent: {
-        name: agent.name,
-        enable_chat_integration: agent.enable_chat_integration,
-        chat_page_enabled: agent.chat_page_enabled
+      success: true,
+      data: config
+    });
+
+  } catch (error) {
+    console.error('Get chat integration error:', error);
+    
+    if (error.message === 'Agent not found') {
+      return res.status(404).json({ error: error.message });
+    }
+    
+    res.status(500).json({ error: 'Failed to get chat integration' });
+  }
+});
+
+/**
+ * @route GET /api/agents/:id/widget-code
+ * @desc Get widget embed code
+ * @access Private
+ */
+router.get('/:id/widget-code', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify agent exists and user has access
+    const agent = await AgentService.getAgent(id);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    if (agent.tenant_id !== req.user.tenantId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Get chat integration config
+    const config = await AgentService.getChatIntegration(id);
+
+    // Generate widget code
+    const widgetCode = AgentService.generateWidgetCode(id, {
+      base_url: `${req.protocol}://${req.get('host')}`,
+      ...config.widget_config
+    });
+
+    res.json({
+      success: true,
+      data: {
+        widget_code: widgetCode,
+        config: config
       }
     });
-    
+
   } catch (error) {
-    console.error('Get embed code error:', error);
-    res.status(500).json({ error: 'Failed to get embed code' });
+    console.error('Get widget code error:', error);
+    res.status(500).json({ error: 'Failed to get widget code' });
   }
 });
 

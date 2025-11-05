@@ -13,36 +13,41 @@ const { v4: uuidv4 } = require('uuid');
 
 /**
  * @route POST /api/public/chat/init
- * @desc Initialize chat session (no auth required)
- * @access Public
+ * @desc Initialize chat session
  */
 router.post('/init', async (req, res) => {
-  const rb = new ResponseBuilder();
-
   try {
     const { agent_id, visitor_info } = req.body;
 
     if (!agent_id) {
-      return res.status(400).json(rb.badRequest('agent_id is required'));
+      return res.status(400).json({
+        success: false,
+        error: 'agent_id is required'
+      });
     }
 
-    // Get agent
     const agent = await AgentService.getAgent(agent_id);
     if (!agent) {
-      return res.status(404).json(rb.notFound('Agent not found'));
+      return res.status(404).json({
+        success: false,
+        error: 'Agent not found'
+      });
     }
 
-    // Check if agent has chat integration enabled
     if (!agent.enable_chat_integration) {
-      return res.status(403).json(rb.forbidden('Chat integration is not enabled for this agent'));
+      return res.status(403).json({
+        success: false,
+        error: 'Chat integration is not enabled for this agent'
+      });
     }
 
     // Check tenant credits
-    const hasCredits = await CreditService.hasSufficientCredits(agent.tenant_id, 0.01);
-    if (!hasCredits) {
-      return res.status(402).json(
-        rb.paymentRequired('Service temporarily unavailable')
-      );
+    const balance = await CreditService.getBalance(agent.tenant_id);
+    if (balance < 0.01) {
+      return res.status(402).json({
+        success: false,
+        error: 'Service temporarily unavailable'
+      });
     }
 
     // Create session
@@ -60,20 +65,24 @@ router.post('/init', async (req, res) => {
       }
     });
 
-    res.json(rb.success({
-      session_id: sessionId,
-      agent: {
-        name: agent.name,
-        greeting: agent.greeting || 'Hello! How can I help you today?',
-        avatar: agent.avatar_url
+    res.json({
+      success: true,
+      data: {
+        session_id: sessionId,
+        agent: {
+          name: agent.name,
+          greeting: agent.greeting || 'Hello! How can I help you today?',
+          //avatar: agent.avatar_url
+        }
       }
-    }));
+    });
 
   } catch (error) {
     console.error('Init chat error:', error);
-    res.status(500).json(
-      ResponseBuilder.serverError('Failed to initialize chat')
-    );
+    res.status(500).json({
+      success: false,
+      error: 'Failed to initialize chat'
+    });
   }
 });
 
@@ -83,36 +92,97 @@ router.post('/init', async (req, res) => {
  * @access Public
  */
 router.post('/message', async (req, res) => {
-  const rb = new ResponseBuilder();
-
   try {
-    const { session_id, message, image } = req.body;
+    const { session_id, message, image, agent_id } = req.body;
 
-    if (!session_id || !message) {
-      return res.status(400).json(rb.badRequest('session_id and message are required'));
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        error: 'message is required'
+      });
     }
 
-    // Get session
-    const session = await ChatService.getSession(session_id);
+    let session = null;
+    let sessionId = session_id;
+
+    // Try to get existing session
+    if (sessionId) {
+      session = await ChatService.getSession(sessionId);
+    }
+
+    // If session not found, create a new one
     if (!session) {
-      return res.status(404).json(rb.notFound('Session not found or expired'));
+      // Need agent_id to create new session
+      if (!agent_id) {
+        return res.status(400).json({
+          success: false,
+          error: 'session_id or agent_id is required'
+        });
+      }
+
+      // Get agent
+      const agent = await AgentService.getAgentForPublicChat(agent_id);
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          error: 'Agent not found'
+        });
+      }
+
+      // Check if agent has chat integration enabled
+      if (!agent.enable_chat_integration && !agent.chat_page_enabled) {
+        return res.status(403).json({
+          success: false,
+          error: 'Chat integration is not enabled for this agent'
+        });
+      }
+
+      // Check tenant credits
+      const balance = await CreditService.getBalance(agent.tenant_id);
+      if (balance < 0.01) {
+        return res.status(402).json({
+          success: false,
+          error: 'Service temporarily unavailable'
+        });
+      }
+
+      // Create new session
+      console.log('Creating new session for agent:', agent_id);
+      session = await ChatService.createSession({
+        tenantId: agent.tenant_id,
+        agentId: agent.id,
+        userId: null,
+        sessionName: 'Public Chat Session',
+        metadata: {
+          type: 'public_chat',
+          visitor_info: {},
+          user_agent: req.headers['user-agent'],
+          ip_address: req.ip,
+          referrer: req.headers.referer,
+          auto_created: true
+        }
+      });
+
+      sessionId = session.id;
+      console.log('New session created:', sessionId);
     }
 
     // Check tenant credits
-    const hasCredits = await CreditService.hasSufficientCredits(session.tenant_id, 0.01);
-    if (!hasCredits) {
-      return res.status(402).json(
-        rb.paymentRequired('Service temporarily unavailable')
-      );
+    const balance = await CreditService.getBalance(session.tenant_id);
+    if (balance < 0.01) {
+      return res.status(402).json({
+        success: false,
+        error: 'Service temporarily unavailable'
+      });
     }
 
-    // Send message
+    // Send message using ChatService.sendMessage()
     const result = await ChatService.sendMessage({
-      sessionId: session_id,
+      sessionId: sessionId,
       agentId: session.agent_id,
       message: message,
       image: image,
-      userId: null // Public user
+      userId: null
     });
 
     // Deduct credits
@@ -122,95 +192,194 @@ router.post('/message', async (req, res) => {
         result.cost,
         'public_chat_message',
         {
-          session_id: session_id,
+          session_id: sessionId,
           message_id: result.message_id,
           agent_id: session.agent_id,
           public_chat: true
         },
-        session_id
+        sessionId
       );
     }
 
-    res.json(rb.success({
-      message_id: result.message_id,
-      response: result.response.text,
-      created_at: result.created_at
-    }));
+    res.json({
+      success: true,
+      data: {
+        session_id: sessionId,
+        message_id: result.message_id,
+        agent_transfer: result.agent_transfer || false,
+        response: result.response, // { text, html, markdown }
+        sources: result.sources || [],
+        images: result.images || [],
+        products: result.products || [],
+        function_calls: result.function_calls || [],
+        llm_decision: result.llm_decision || {},
+        context_used: result.context_used || {},
+        agent_metadata: {
+          agent_id: result.agent_metadata?.agent_id,
+          agent_name: result.agent_metadata?.agent_name,
+          provider: result.agent_metadata?.provider,
+          model: result.agent_metadata?.model,
+          temperature: result.agent_metadata?.temperature
+        },
+        created_at: new Date().toISOString(),
+        new_session_created: session_id !== sessionId
+      }
+    });
 
   } catch (error) {
     console.error('Send message error:', error);
-    res.status(500).json(
-      ResponseBuilder.serverError('Failed to send message')
-    );
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to send message'
+    });
   }
 });
 
 /**
  * @route GET /api/public/chat/history/:session_id
- * @desc Get chat history (no auth required)
- * @access Public
+ * @desc Get chat history
  */
 router.get('/history/:session_id', async (req, res) => {
-  const rb = new ResponseBuilder();
-
   try {
     const { session_id } = req.params;
 
-    const messages = await ChatService.getMessages(session_id);
+    const messages = await ChatService.getConversationHistory(session_id);
 
-    res.json(rb.success({
-      messages: messages.map(m => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        created_at: m.created_at
-      }))
+    const formattedMessages = messages.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      content_html: m.content_html,
+      content_markdown: m.content_markdown,
+      // ✅ INCLUDE SOURCES, IMAGES, PRODUCTS
+      sources: m.sources || [],
+      images: m.images || [],
+      products: m.products || [],
+      function_calls: m.function_calls || [],
+      agent_transfer_requested: m.agent_transfer_requested || false,
+      created_at: m.created_at
     }));
+
+    res.json({
+      success: true,
+      data: {
+        session_id: session_id,
+        messages: formattedMessages
+      }
+    });
 
   } catch (error) {
     console.error('Get history error:', error);
-    res.status(500).json(
-      ResponseBuilder.serverError('Failed to get history')
-    );
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get history'
+    });
   }
 });
 
 /**
- * @route GET /api/public/chat/agent/:agent_id/config
- * @desc Get agent widget configuration (no auth required)
+ * @route GET /api/public/chat/page/:slug
+ * @desc Get public chat page data by slug
  * @access Public
  */
-router.get('/agent/:agent_id/config', async (req, res) => {
-  const rb = new ResponseBuilder();
-
+router.get('/page/:slug', async (req, res) => {
   try {
-    const { agent_id } = req.params;
+    const { slug } = req.params;
 
-    const agent = await AgentService.getAgent(agent_id);
+    // Use AgentService to get agent by slug
+    const agent = await AgentService.getAgentBySlug(slug);
+
     if (!agent) {
-      return res.status(404).json(rb.notFound('Agent not found'));
+      return res.status(404).json({
+        success: false,
+        error: 'Chat page not found'
+      });
     }
 
-    if (!agent.enable_chat_integration) {
-      return res.status(403).json(rb.forbidden('Chat integration is not enabled'));
-    }
-
-    res.json(rb.success({
-      name: agent.name,
-      greeting: agent.greeting,
-      avatar: agent.avatar_url,
-      widget_config: agent.widget_config || {
-        primary_color: '#6366f1',
-        position: 'bottom-right',
-        button_text: 'Chat with us'
+    res.json({
+      success: true,
+      data: {
+        agent_id: agent.id,
+        name: agent.name,
+        greeting: agent.greeting,
+        //avatar_url: agent.avatar_url,
+        widget_config: agent.widget_config || {
+          primary_color: '#6366f1',
+          position: 'bottom-right'
+        }
       }
-    }));
+    });
+
+  } catch (error) {
+    console.error('Get public page error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load chat page'
+    });
+  }
+});
+
+/**
+ * @route GET /api/public/chat/agent/:identifier/config
+ * @desc Get agent widget configuration (works with both agent_id and custom_slug)
+ * @access Public
+ */
+router.get('/agent/:identifier/config', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    let agent;
+    
+    // Check if identifier looks like a UUID (agent_id) or a slug
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
+    
+    if (isUUID) {
+      // It's an agent ID
+      agent = await AgentService.getAgent(identifier);
+      
+      if (!agent){
+        return res.status(404).json({
+          success: false,
+          error: 'Agent not found'
+        });
+      }
+	  
+	  if(!agent.enable_chat_integration && !agent.chat_page_enabled) {
+		  return res.status(404).json({
+            success: false,
+            error: 'chat integration not enabled'
+          });
+	  }
+    } else {
+      // It's a slug
+      agent = await AgentService.getAgentBySlug(identifier);
+      
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          error: 'Chat page not found'
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        name: agent.name,
+        greeting: agent.greeting,
+        //avatar: agent.avatar_url,
+        widget_config: agent.widget_config || {
+          primary_color: '#6366f1',
+          position: 'bottom-right'
+        }
+      }
+    });
 
   } catch (error) {
     console.error('Get agent config error:', error);
-    res.status(500).json(
-      ResponseBuilder.serverError('Failed to get configuration')
-    );
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get configuration'
+    });
   }
 });
 

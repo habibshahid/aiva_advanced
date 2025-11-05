@@ -2,6 +2,7 @@
 SQLyog Ultimate v13.1.1 (64 bit)
 MySQL - 8.0.34 : Database - yovo_db_cc
 *********************************************************************
+FIXED: Correct table creation order to avoid foreign key errors
 */
 
 /*!40101 SET NAMES utf8 */;
@@ -16,6 +17,121 @@ CREATE DATABASE /*!32312 IF NOT EXISTS*/`yovo_db_cc` /*!40100 DEFAULT CHARACTER 
 
 USE `yovo_db_cc`;
 
+/* ============================================
+   LEVEL 1: Base tables (no dependencies)
+   ============================================ */
+
+/*Table structure for table `yovo_tbl_aiva_tenants` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_tenants`;
+
+CREATE TABLE `yovo_tbl_aiva_tenants` (
+  `id` varchar(36) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `company_name` varchar(255) DEFAULT NULL,
+  `email` varchar(255) DEFAULT NULL COMMENT 'DEPRECATED: Use yovo_tbl_aiva_users',
+  `password_hash` varchar(255) DEFAULT NULL COMMENT 'DEPRECATED: Use yovo_tbl_aiva_users',
+  `api_key` varchar(255) DEFAULT NULL,
+  `role` enum('super_admin','admin','agent_manager','client') DEFAULT NULL COMMENT 'DEPRECATED: Use yovo_tbl_aiva_users',
+  `credit_balance` decimal(10,4) DEFAULT '0.0000',
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `email` (`email`),
+  UNIQUE KEY `api_key` (`api_key`),
+  KEY `idx_email` (`email`),
+  KEY `idx_api_key` (`api_key`),
+  KEY `idx_role` (`role`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+insert  into `yovo_tbl_aiva_tenants`(`id`,`name`,`company_name`,`email`,`password_hash`,`api_key`,`role`,`credit_balance`,`is_active`,`created_at`,`updated_at`) values 
+('8903395d-a021-11f0-bf05-005056b138bb','Super Admin','Super Admin','admin@intellicon.com','$2a$10$zyZ1fDrq4C8sn0q0hI4.JeLdD9af.pjDeK3gHFyCvatO8rqUaxoxe','a7dlHSldjka8sskasd874uhsgdtoktcn7iowedkwscm','super_admin',0.0,1,'2025-10-03 11:23:54','2025-11-05 18:10:12');
+
+/* ============================================
+   LEVEL 2: Tables depending only on tenants
+   ============================================ */
+
+/*Table structure for table `yovo_tbl_aiva_users` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_users`;
+
+CREATE TABLE `yovo_tbl_aiva_users` (
+  `id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `email` varchar(255) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `role` enum('super_admin','admin','agent_manager','client') NOT NULL DEFAULT 'client',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `last_login_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `email` (`email`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_email` (`email`),
+  KEY `idx_role` (`role`),
+  CONSTRAINT `fk_users_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+insert  into `yovo_tbl_aiva_users`(`id`,`tenant_id`,`email`,`password_hash`,`name`,`role`,`is_active`,`last_login_at`,`created_at`,`updated_at`) values 
+('1b76eb4c-ba44-11f0-b0d6-0050568d99ce','8903395d-a021-11f0-bf05-005056b138bb','admin@yourdomain.com','$2a$10$zyZ1fDrq4C8sn0q0hI4.JeLdD9af.pjDeK3gHFyCvatO8rqUaxoxe','Super Admin','super_admin',1,'2025-11-05 19:01:39','2025-10-03 11:23:54','2025-11-05 19:01:39'),
+('39141308-e55d-4b69-91eb-2b551644f5f3','8903395d-a021-11f0-bf05-005056b138bb','habib@contegris.com','$2a$10$vzBZFQqHkm5CnCkEReS18eFlbLcC.XBip2z9NS/dHFjTXlPyq3Fz2','Habib Shahid','agent_manager',1,'2025-11-05 18:21:01','2025-11-05 18:20:54','2025-11-05 18:21:01');
+
+/*Table structure for table `yovo_tbl_aiva_knowledge_bases` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_knowledge_bases`;
+
+CREATE TABLE `yovo_tbl_aiva_knowledge_bases` (
+  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `tenant_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+  `type` enum('general','product_catalog','faq','documentation') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'general',
+  `status` enum('active','processing','inactive') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'active',
+  `settings` json DEFAULT NULL COMMENT 'KB settings: chunking strategy, embedding model, etc.',
+  `stats` json DEFAULT NULL COMMENT 'Document count, chunk count, storage size, etc.',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_status` (`status`),
+  CONSTRAINT `fk_kb_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_credit_transactions` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_credit_transactions`;
+
+CREATE TABLE `yovo_tbl_aiva_credit_transactions` (
+  `id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `type` enum('add','deduct','refund') NOT NULL,
+  `amount` decimal(10,4) NOT NULL,
+  `balance_before` decimal(10,4) NOT NULL,
+  `balance_after` decimal(10,4) NOT NULL,
+  `reference_type` varchar(50) DEFAULT NULL,
+  `reference_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `operation_type` varchar(50) DEFAULT NULL COMMENT 'Type: voice_call, chat_message, doc_upload, knowledge_search, etc.',
+  `operation_details` json DEFAULT NULL COMMENT 'Detailed breakdown of the operation',
+  `admin_id` varchar(36) DEFAULT NULL,
+  `note` text,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `admin_id` (`admin_id`),
+  KEY `idx_tenant_date` (`tenant_id`,`created_at`),
+  KEY `idx_reference` (`reference_type`,`reference_id`),
+  KEY `idx_operation_type` (`operation_type`),
+  KEY `idx_created_at_desc` (`created_at` DESC),
+  CONSTRAINT `yovo_tbl_aiva_credit_transactions_ibfk_1` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `yovo_tbl_aiva_credit_transactions_ibfk_2` FOREIGN KEY (`admin_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/* ============================================
+   LEVEL 3: Tables depending on KB
+   ============================================ */
+
 /*Table structure for table `yovo_tbl_aiva_agents` */
 
 DROP TABLE IF EXISTS `yovo_tbl_aiva_agents`;
@@ -29,6 +145,7 @@ CREATE TABLE `yovo_tbl_aiva_agents` (
   `voice` varchar(50) DEFAULT 'shimmer',
   `language` varchar(10) DEFAULT 'ur',
   `model` varchar(100) DEFAULT 'gpt-4o-mini-realtime-preview-2024-12-17',
+  `chat_model` varchar(100) DEFAULT 'gpt-4o-mini',
   `provider` enum('openai','deepgram') DEFAULT 'openai',
   `deepgram_model` varchar(100) DEFAULT NULL,
   `deepgram_voice` varchar(100) DEFAULT NULL,
@@ -43,14 +160,85 @@ CREATE TABLE `yovo_tbl_aiva_agents` (
   `is_active` tinyint(1) DEFAULT '1',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `conversation_strategy` json DEFAULT NULL,
+  `enable_chat_integration` tinyint(1) DEFAULT '0',
+  `widget_config` json DEFAULT NULL COMMENT 'Widget appearance configuration',
+  `chat_page_enabled` tinyint(1) DEFAULT '0',
+  `chat_page_slug` varchar(100) DEFAULT NULL COMMENT 'URL slug for standalone chat page',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_active` (`tenant_id`,`is_active`),
   KEY `idx_type` (`type`),
   KEY `idx_provider` (`provider`),
   KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_agents_chat_slug` (`chat_page_slug`),
   CONSTRAINT `fk_agents_kb` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE SET NULL,
   CONSTRAINT `yovo_tbl_aiva_agents_ibfk_1` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_shopify_stores` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_shopify_stores`;
+
+CREATE TABLE `yovo_tbl_aiva_shopify_stores` (
+  `id` varchar(36) NOT NULL,
+  `kb_id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `shop_domain` varchar(255) NOT NULL,
+  `access_token` text NOT NULL,
+  `auto_sync_enabled` tinyint(1) DEFAULT '1',
+  `sync_frequency_minutes` int DEFAULT '1440',
+  `last_sync_at` datetime DEFAULT NULL,
+  `next_sync_at` datetime DEFAULT NULL,
+  `sync_collections` json DEFAULT NULL,
+  `sync_status_filter` varchar(50) DEFAULT 'active',
+  `sync_reviews` tinyint(1) DEFAULT '1',
+  `total_products_synced` int DEFAULT '0',
+  `total_reviews_synced` int DEFAULT '0',
+  `last_sync_status` enum('success','partial','failed') DEFAULT 'success',
+  `last_sync_error` text,
+  `status` enum('active','paused','error') DEFAULT 'active',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `kb_id` (`kb_id`),
+  KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_next_sync` (`next_sync_at`,`auto_sync_enabled`,`status`),
+  CONSTRAINT `yovo_tbl_aiva_shopify_stores_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_documents` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_documents`;
+
+CREATE TABLE `yovo_tbl_aiva_documents` (
+  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `kb_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `tenant_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `filename` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `original_filename` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `file_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `file_size_bytes` bigint NOT NULL,
+  `storage_url` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `status` enum('uploaded','processing','completed','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'processing',
+  `processing_stats` json DEFAULT NULL COMMENT 'Pages, chunks, images extracted, processing time, etc.',
+  `metadata` json DEFAULT NULL COMMENT 'Custom metadata: tags, category, author, etc.',
+  `error_message` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+  `uploaded_by` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_status` (`status`),
+  KEY `idx_created_at` (`created_at`),
+  CONSTRAINT `fk_docs_kb` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_docs_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/* ============================================
+   LEVEL 4: Tables depending on agents/documents
+   ============================================ */
 
 /*Table structure for table `yovo_tbl_aiva_call_logs` */
 
@@ -91,34 +279,6 @@ CREATE TABLE `yovo_tbl_aiva_call_logs` (
   CONSTRAINT `yovo_tbl_aiva_call_logs_ibfk_2` FOREIGN KEY (`agent_id`) REFERENCES `yovo_tbl_aiva_agents` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-/*Table structure for table `yovo_tbl_aiva_chat_messages` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_chat_messages`;
-
-CREATE TABLE `yovo_tbl_aiva_chat_messages` (
-  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `session_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `role` enum('user','assistant','system','function') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `content_html` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci COMMENT 'HTML formatted content',
-  `content_markdown` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci COMMENT 'Markdown formatted content',
-  `sources` json DEFAULT NULL COMMENT 'Array of source documents/chunks used',
-  `images` json DEFAULT NULL COMMENT 'Array of images included in response',
-  `products` json DEFAULT NULL COMMENT 'Array of products recommended',
-  `function_calls` json DEFAULT NULL COMMENT 'Functions executed for this message',
-  `cost` decimal(10,6) DEFAULT '0.000000',
-  `cost_breakdown` json DEFAULT NULL COMMENT 'Detailed cost breakdown',
-  `tokens_input` int DEFAULT NULL,
-  `tokens_output` int DEFAULT NULL,
-  `processing_time_ms` int DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_session_id` (`session_id`),
-  KEY `idx_role` (`role`),
-  KEY `idx_created_at` (`created_at`),
-  CONSTRAINT `fk_messages_session` FOREIGN KEY (`session_id`) REFERENCES `yovo_tbl_aiva_chat_sessions` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
 /*Table structure for table `yovo_tbl_aiva_chat_sessions` */
 
 DROP TABLE IF EXISTS `yovo_tbl_aiva_chat_sessions`;
@@ -143,34 +303,6 @@ CREATE TABLE `yovo_tbl_aiva_chat_sessions` (
   KEY `idx_start_time` (`start_time`),
   CONSTRAINT `fk_chat_sessions_agent` FOREIGN KEY (`agent_id`) REFERENCES `yovo_tbl_aiva_agents` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_chat_sessions_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-/*Table structure for table `yovo_tbl_aiva_credit_transactions` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_credit_transactions`;
-
-CREATE TABLE `yovo_tbl_aiva_credit_transactions` (
-  `id` varchar(36) NOT NULL,
-  `tenant_id` varchar(36) NOT NULL,
-  `type` enum('add','deduct','refund') NOT NULL,
-  `amount` decimal(10,4) NOT NULL,
-  `balance_before` decimal(10,4) NOT NULL,
-  `balance_after` decimal(10,4) NOT NULL,
-  `reference_type` varchar(50) DEFAULT NULL,
-  `reference_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
-  `operation_type` varchar(50) DEFAULT NULL COMMENT 'Type: voice_call, chat_message, doc_upload, knowledge_search, etc.',
-  `operation_details` json DEFAULT NULL COMMENT 'Detailed breakdown of the operation',
-  `admin_id` varchar(36) DEFAULT NULL,
-  `note` text,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `admin_id` (`admin_id`),
-  KEY `idx_tenant_date` (`tenant_id`,`created_at`),
-  KEY `idx_reference` (`reference_type`,`reference_id`),
-  KEY `idx_operation_type` (`operation_type`),
-  KEY `idx_created_at_desc` (`created_at` DESC),
-  CONSTRAINT `yovo_tbl_aiva_credit_transactions_ibfk_1` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `yovo_tbl_aiva_credit_transactions_ibfk_2` FOREIGN KEY (`admin_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 /*Table structure for table `yovo_tbl_aiva_did_mappings` */
@@ -220,55 +352,6 @@ CREATE TABLE `yovo_tbl_aiva_document_chunks` (
   CONSTRAINT `fk_chunks_kb` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-/*Table structure for table `yovo_tbl_aiva_documents` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_documents`;
-
-CREATE TABLE `yovo_tbl_aiva_documents` (
-  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `kb_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `tenant_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `filename` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `original_filename` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `file_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `file_size_bytes` bigint NOT NULL,
-  `storage_url` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `status` enum('uploaded','processing','completed','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'processing',
-  `processing_stats` json DEFAULT NULL COMMENT 'Pages, chunks, images extracted, processing time, etc.',
-  `metadata` json DEFAULT NULL COMMENT 'Custom metadata: tags, category, author, etc.',
-  `error_message` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
-  `uploaded_by` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_kb_id` (`kb_id`),
-  KEY `idx_tenant_id` (`tenant_id`),
-  KEY `idx_status` (`status`),
-  KEY `idx_created_at` (`created_at`),
-  CONSTRAINT `fk_docs_kb` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_docs_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-/*Table structure for table `yovo_tbl_aiva_function_call_logs` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_function_call_logs`;
-
-CREATE TABLE `yovo_tbl_aiva_function_call_logs` (
-  `id` varchar(36) NOT NULL,
-  `call_log_id` varchar(36) NOT NULL,
-  `function_name` varchar(255) NOT NULL,
-  `arguments` json DEFAULT NULL,
-  `result` json DEFAULT NULL,
-  `execution_time_ms` int DEFAULT NULL,
-  `status` enum('success','failed') NOT NULL,
-  `error_message` text,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_call_log` (`call_log_id`),
-  KEY `idx_function` (`function_name`),
-  CONSTRAINT `yovo_tbl_aiva_function_call_logs_ibfk_1` FOREIGN KEY (`call_log_id`) REFERENCES `yovo_tbl_aiva_call_logs` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
 /*Table structure for table `yovo_tbl_aiva_functions` */
 
 DROP TABLE IF EXISTS `yovo_tbl_aiva_functions`;
@@ -293,30 +376,6 @@ CREATE TABLE `yovo_tbl_aiva_functions` (
   UNIQUE KEY `unique_function_per_agent` (`agent_id`,`name`),
   KEY `idx_agent_active` (`agent_id`,`is_active`),
   CONSTRAINT `yovo_tbl_aiva_functions_ibfk_1` FOREIGN KEY (`agent_id`) REFERENCES `yovo_tbl_aiva_agents` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-/*Table structure for table `yovo_tbl_aiva_image_searches` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_image_searches`;
-
-CREATE TABLE `yovo_tbl_aiva_image_searches` (
-  `id` varchar(36) NOT NULL,
-  `kb_id` varchar(36) NOT NULL,
-  `tenant_id` varchar(36) NOT NULL,
-  `query` text,
-  `search_type` enum('text','image','hybrid') DEFAULT 'text',
-  `results_count` int DEFAULT '0',
-  `top_result_score` float DEFAULT NULL,
-  `processing_time_ms` int DEFAULT NULL,
-  `cost` decimal(10,6) DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_kb_id` (`kb_id`),
-  KEY `idx_tenant_id` (`tenant_id`),
-  KEY `idx_search_type` (`search_type`),
-  KEY `idx_created_at` (`created_at`),
-  CONSTRAINT `yovo_tbl_aiva_image_searches_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `yovo_tbl_aiva_image_searches_ibfk_2` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 /*Table structure for table `yovo_tbl_aiva_images` */
@@ -350,25 +409,169 @@ CREATE TABLE `yovo_tbl_aiva_images` (
   CONSTRAINT `fk_images_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-/*Table structure for table `yovo_tbl_aiva_knowledge_bases` */
+/*Table structure for table `yovo_tbl_aiva_sync_jobs` */
 
-DROP TABLE IF EXISTS `yovo_tbl_aiva_knowledge_bases`;
+DROP TABLE IF EXISTS `yovo_tbl_aiva_sync_jobs`;
 
-CREATE TABLE `yovo_tbl_aiva_knowledge_bases` (
-  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `tenant_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
-  `type` enum('general','product_catalog','faq','documentation') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'general',
-  `status` enum('active','processing','inactive') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT 'active',
-  `settings` json DEFAULT NULL COMMENT 'KB settings: chunking strategy, embedding model, etc.',
-  `stats` json DEFAULT NULL COMMENT 'Document count, chunk count, storage size, etc.',
+CREATE TABLE `yovo_tbl_aiva_sync_jobs` (
+  `id` varchar(36) NOT NULL,
+  `store_id` varchar(36) NOT NULL,
+  `kb_id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `job_type` enum('full_sync','incremental_sync','manual_sync') DEFAULT 'full_sync',
+  `status` enum('pending','processing','completed','failed','cancelled') DEFAULT 'pending',
+  `total_products` int DEFAULT '0',
+  `processed_products` int DEFAULT '0',
+  `failed_products` int DEFAULT '0',
+  `total_images` int DEFAULT '0',
+  `processed_images` int DEFAULT '0',
+  `failed_images` int DEFAULT '0',
+  `started_at` datetime DEFAULT NULL,
+  `completed_at` datetime DEFAULT NULL,
+  `estimated_completion_at` datetime DEFAULT NULL,
+  `products_added` int DEFAULT '0',
+  `products_updated` int DEFAULT '0',
+  `products_deleted` int DEFAULT '0',
+  `error_message` text,
+  `error_details` json DEFAULT NULL,
+  `metadata` json DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  KEY `idx_store_id` (`store_id`),
+  KEY `idx_kb_id` (`kb_id`),
   KEY `idx_tenant_id` (`tenant_id`),
   KEY `idx_status` (`status`),
-  CONSTRAINT `fk_kb_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
+  KEY `idx_created_at` (`created_at`),
+  KEY `idx_sync_jobs_tenant_status` (`tenant_id`,`status`),
+  CONSTRAINT `yovo_tbl_aiva_sync_jobs_ibfk_1` FOREIGN KEY (`store_id`) REFERENCES `yovo_tbl_aiva_shopify_stores` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_products` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_products`;
+
+CREATE TABLE `yovo_tbl_aiva_products` (
+  `id` varchar(36) NOT NULL,
+  `kb_id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `shopify_product_id` bigint NOT NULL,
+  `shopify_store_id` varchar(36) DEFAULT NULL,
+  `title` varchar(500) NOT NULL,
+  `description` text,
+  `vendor` varchar(255) DEFAULT NULL,
+  `product_type` varchar(255) DEFAULT NULL,
+  `tags` json DEFAULT NULL,
+  `price` decimal(10,2) DEFAULT NULL,
+  `compare_at_price` decimal(10,2) DEFAULT NULL,
+  `currency` varchar(3) DEFAULT 'PKR',
+  `status` enum('active','draft','archived','deleted') DEFAULT 'active',
+  `published_at` datetime DEFAULT NULL,
+  `total_inventory` int DEFAULT '0',
+  `average_rating` decimal(2,1) DEFAULT NULL,
+  `review_count` int DEFAULT '0',
+  `vector_chunk_id` varchar(36) DEFAULT NULL,
+  `shopify_metadata` json DEFAULT NULL,
+  `custom_metadata` json DEFAULT NULL,
+  `last_synced_at` datetime DEFAULT NULL,
+  `shopify_updated_at` datetime DEFAULT NULL,
+  `sync_status` enum('pending','synced','error') DEFAULT 'pending',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `embedding_status` enum('pending','completed','failed') DEFAULT 'pending',
+  `embedding_generated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `shopify_product_id` (`shopify_product_id`),
+  KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_shopify_product_id` (`shopify_product_id`),
+  KEY `idx_shopify_store_id` (`shopify_store_id`),
+  KEY `idx_status` (`status`),
+  KEY `idx_last_synced` (`last_synced_at`),
+  KEY `idx_average_rating` (`average_rating`),
+  KEY `idx_products_kb_status` (`kb_id`,`status`),
+  KEY `idx_products_tenant_status` (`tenant_id`,`status`),
+  KEY `idx_embedding_status` (`embedding_status`),
+  CONSTRAINT `fk_products_store` FOREIGN KEY (`shopify_store_id`) REFERENCES `yovo_tbl_aiva_shopify_stores` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `yovo_tbl_aiva_products_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/* ============================================
+   LEVEL 5: Tables depending on products/sessions/call_logs
+   ============================================ */
+
+/*Table structure for table `yovo_tbl_aiva_chat_messages` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_chat_messages`;
+
+CREATE TABLE `yovo_tbl_aiva_chat_messages` (
+  `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `session_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `role` enum('user','assistant','system','function') CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `content_html` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci COMMENT 'HTML formatted content',
+  `content_markdown` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci COMMENT 'Markdown formatted content',
+  `sources` json DEFAULT NULL COMMENT 'Array of source documents/chunks used',
+  `images` json DEFAULT NULL COMMENT 'Array of images included in response',
+  `products` json DEFAULT NULL COMMENT 'Array of products recommended',
+  `function_calls` json DEFAULT NULL COMMENT 'Functions executed for this message',
+  `cost` decimal(10,6) DEFAULT '0.000000',
+  `cost_breakdown` json DEFAULT NULL COMMENT 'Detailed cost breakdown',
+  `tokens_input` int DEFAULT NULL,
+  `tokens_output` int DEFAULT NULL,
+  `processing_time_ms` int DEFAULT NULL,
+  `agent_transfer_requested` tinyint(1) DEFAULT '0',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_session_id` (`session_id`),
+  KEY `idx_role` (`role`),
+  KEY `idx_created_at` (`created_at`),
+  KEY `idx_agent_transfer` (`agent_transfer_requested`,`created_at`),
+  CONSTRAINT `fk_messages_session` FOREIGN KEY (`session_id`) REFERENCES `yovo_tbl_aiva_chat_sessions` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_function_call_logs` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_function_call_logs`;
+
+CREATE TABLE `yovo_tbl_aiva_function_call_logs` (
+  `id` varchar(36) NOT NULL,
+  `call_log_id` varchar(36) NOT NULL,
+  `function_name` varchar(255) NOT NULL,
+  `arguments` json DEFAULT NULL,
+  `result` json DEFAULT NULL,
+  `execution_time_ms` int DEFAULT NULL,
+  `status` enum('success','failed') NOT NULL,
+  `error_message` text,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_call_log` (`call_log_id`),
+  KEY `idx_function` (`function_name`),
+  CONSTRAINT `yovo_tbl_aiva_function_call_logs_ibfk_1` FOREIGN KEY (`call_log_id`) REFERENCES `yovo_tbl_aiva_call_logs` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+/*Table structure for table `yovo_tbl_aiva_image_searches` */
+
+DROP TABLE IF EXISTS `yovo_tbl_aiva_image_searches`;
+
+CREATE TABLE `yovo_tbl_aiva_image_searches` (
+  `id` varchar(36) NOT NULL,
+  `kb_id` varchar(36) NOT NULL,
+  `tenant_id` varchar(36) NOT NULL,
+  `query` text,
+  `search_type` enum('text','image','hybrid') DEFAULT 'text',
+  `results_count` int DEFAULT '0',
+  `top_result_score` float DEFAULT NULL,
+  `processing_time_ms` int DEFAULT NULL,
+  `cost` decimal(10,6) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_tenant_id` (`tenant_id`),
+  KEY `idx_search_type` (`search_type`),
+  KEY `idx_created_at` (`created_at`),
+  CONSTRAINT `yovo_tbl_aiva_image_searches_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `yovo_tbl_aiva_image_searches_ibfk_2` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 /*Table structure for table `yovo_tbl_aiva_knowledge_searches` */
@@ -507,143 +710,46 @@ CREATE TABLE `yovo_tbl_aiva_product_variants` (
   CONSTRAINT `yovo_tbl_aiva_product_variants_ibfk_1` FOREIGN KEY (`product_id`) REFERENCES `yovo_tbl_aiva_products` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-/*Table structure for table `yovo_tbl_aiva_products` */
+/*Table structure for table `yovo_tbl_aiva_user_sessions` */
 
-DROP TABLE IF EXISTS `yovo_tbl_aiva_products`;
+DROP TABLE IF EXISTS `yovo_tbl_aiva_user_sessions`;
 
-CREATE TABLE `yovo_tbl_aiva_products` (
+CREATE TABLE `yovo_tbl_aiva_user_sessions` (
   `id` varchar(36) NOT NULL,
-  `kb_id` varchar(36) NOT NULL,
-  `tenant_id` varchar(36) NOT NULL,
-  `shopify_product_id` bigint NOT NULL,
-  `shopify_store_id` varchar(36) DEFAULT NULL,
-  `title` varchar(500) NOT NULL,
-  `description` text,
-  `vendor` varchar(255) DEFAULT NULL,
-  `product_type` varchar(255) DEFAULT NULL,
-  `tags` json DEFAULT NULL,
-  `price` decimal(10,2) DEFAULT NULL,
-  `compare_at_price` decimal(10,2) DEFAULT NULL,
-  `currency` varchar(3) DEFAULT 'PKR',
-  `status` enum('active','draft','archived','deleted') DEFAULT 'active',
-  `published_at` datetime DEFAULT NULL,
-  `total_inventory` int DEFAULT '0',
-  `average_rating` decimal(2,1) DEFAULT NULL,
-  `review_count` int DEFAULT '0',
-  `vector_chunk_id` varchar(36) DEFAULT NULL,
-  `shopify_metadata` json DEFAULT NULL,
-  `custom_metadata` json DEFAULT NULL,
-  `last_synced_at` datetime DEFAULT NULL,
-  `shopify_updated_at` datetime DEFAULT NULL,
-  `sync_status` enum('pending','synced','error') DEFAULT 'pending',
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `user_id` varchar(36) NOT NULL,
+  `token_hash` varchar(255) NOT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` text,
+  `expires_at` datetime NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `shopify_product_id` (`shopify_product_id`),
-  KEY `idx_kb_id` (`kb_id`),
-  KEY `idx_tenant_id` (`tenant_id`),
-  KEY `idx_shopify_product_id` (`shopify_product_id`),
-  KEY `idx_shopify_store_id` (`shopify_store_id`),
-  KEY `idx_status` (`status`),
-  KEY `idx_last_synced` (`last_synced_at`),
-  KEY `idx_average_rating` (`average_rating`),
-  KEY `idx_products_kb_status` (`kb_id`,`status`),
-  KEY `idx_products_tenant_status` (`tenant_id`,`status`),
-  CONSTRAINT `fk_products_store` FOREIGN KEY (`shopify_store_id`) REFERENCES `yovo_tbl_aiva_shopify_stores` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `yovo_tbl_aiva_products_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE
+  KEY `idx_user_id` (`user_id`),
+  KEY `idx_token_hash` (`token_hash`),
+  KEY `idx_expires_at` (`expires_at`),
+  CONSTRAINT `fk_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `yovo_tbl_aiva_users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-/*Table structure for table `yovo_tbl_aiva_shopify_stores` */
+/*Table structure for table `yovo_tbl_aiva_user_audit_log` */
 
-DROP TABLE IF EXISTS `yovo_tbl_aiva_shopify_stores`;
+DROP TABLE IF EXISTS `yovo_tbl_aiva_user_audit_log`;
 
-CREATE TABLE `yovo_tbl_aiva_shopify_stores` (
+CREATE TABLE `yovo_tbl_aiva_user_audit_log` (
   `id` varchar(36) NOT NULL,
-  `kb_id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `tenant_id` varchar(36) NOT NULL,
-  `shop_domain` varchar(255) NOT NULL,
-  `access_token` text NOT NULL,
-  `auto_sync_enabled` tinyint(1) DEFAULT '1',
-  `sync_frequency_minutes` int DEFAULT '1440',
-  `last_sync_at` datetime DEFAULT NULL,
-  `next_sync_at` datetime DEFAULT NULL,
-  `sync_collections` json DEFAULT NULL,
-  `sync_status_filter` varchar(50) DEFAULT 'active',
-  `sync_reviews` tinyint(1) DEFAULT '1',
-  `total_products_synced` int DEFAULT '0',
-  `total_reviews_synced` int DEFAULT '0',
-  `last_sync_status` enum('success','partial','failed') DEFAULT 'success',
-  `last_sync_error` text,
-  `status` enum('active','paused','error') DEFAULT 'active',
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `action` varchar(100) NOT NULL,
+  `resource_type` varchar(50) DEFAULT NULL,
+  `resource_id` varchar(36) DEFAULT NULL,
+  `details` json DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `kb_id` (`kb_id`),
-  KEY `idx_kb_id` (`kb_id`),
+  KEY `idx_user_id` (`user_id`),
   KEY `idx_tenant_id` (`tenant_id`),
-  KEY `idx_next_sync` (`next_sync_at`,`auto_sync_enabled`,`status`),
-  CONSTRAINT `yovo_tbl_aiva_shopify_stores_ibfk_1` FOREIGN KEY (`kb_id`) REFERENCES `yovo_tbl_aiva_knowledge_bases` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-/*Table structure for table `yovo_tbl_aiva_sync_jobs` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_sync_jobs`;
-
-CREATE TABLE `yovo_tbl_aiva_sync_jobs` (
-  `id` varchar(36) NOT NULL,
-  `store_id` varchar(36) NOT NULL,
-  `kb_id` varchar(36) NOT NULL,
-  `tenant_id` varchar(36) NOT NULL,
-  `job_type` enum('full_sync','incremental_sync','manual_sync') DEFAULT 'full_sync',
-  `status` enum('pending','processing','completed','failed','cancelled') DEFAULT 'pending',
-  `total_products` int DEFAULT '0',
-  `processed_products` int DEFAULT '0',
-  `failed_products` int DEFAULT '0',
-  `total_images` int DEFAULT '0',
-  `processed_images` int DEFAULT '0',
-  `failed_images` int DEFAULT '0',
-  `started_at` datetime DEFAULT NULL,
-  `completed_at` datetime DEFAULT NULL,
-  `estimated_completion_at` datetime DEFAULT NULL,
-  `products_added` int DEFAULT '0',
-  `products_updated` int DEFAULT '0',
-  `products_deleted` int DEFAULT '0',
-  `error_message` text,
-  `error_details` json DEFAULT NULL,
-  `metadata` json DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_store_id` (`store_id`),
-  KEY `idx_kb_id` (`kb_id`),
-  KEY `idx_tenant_id` (`tenant_id`),
-  KEY `idx_status` (`status`),
+  KEY `idx_action` (`action`),
   KEY `idx_created_at` (`created_at`),
-  KEY `idx_sync_jobs_tenant_status` (`tenant_id`,`status`),
-  CONSTRAINT `yovo_tbl_aiva_sync_jobs_ibfk_1` FOREIGN KEY (`store_id`) REFERENCES `yovo_tbl_aiva_shopify_stores` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-/*Table structure for table `yovo_tbl_aiva_tenants` */
-
-DROP TABLE IF EXISTS `yovo_tbl_aiva_tenants`;
-
-CREATE TABLE `yovo_tbl_aiva_tenants` (
-  `id` varchar(36) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  `email` varchar(255) NOT NULL,
-  `password_hash` varchar(255) NOT NULL,
-  `api_key` varchar(255) DEFAULT NULL,
-  `role` enum('super_admin','admin','agent_manager','client') NOT NULL DEFAULT 'client',
-  `credit_balance` decimal(10,4) DEFAULT '0.0000',
-  `is_active` tinyint(1) DEFAULT '1',
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `email` (`email`),
-  UNIQUE KEY `api_key` (`api_key`),
-  KEY `idx_email` (`email`),
-  KEY `idx_api_key` (`api_key`),
-  KEY `idx_role` (`role`)
+  CONSTRAINT `fk_audit_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `yovo_tbl_aiva_tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_audit_user` FOREIGN KEY (`user_id`) REFERENCES `yovo_tbl_aiva_users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;

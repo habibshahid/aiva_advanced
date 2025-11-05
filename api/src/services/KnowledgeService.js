@@ -226,7 +226,8 @@ class KnowledgeService {
 
     // Process document with Python service (async)
     this._processDocumentAsync(documentId, kbId, tenantId, storagePath, originalFilename, fileSizeBytes);
-
+	await this.updateKBMetadata(kbId);
+	
     return {
       document_id: documentId,
       status: 'processing',
@@ -286,6 +287,7 @@ class KnowledgeService {
       );
 
       console.log(`Document ${documentId} processed successfully`);
+	  await this.updateKBMetadata(kbId);
 
     } catch (error) {
       console.error(`Document processing failed for ${documentId}:`, error);
@@ -409,6 +411,7 @@ class KnowledgeService {
 
     // Update KB stats
     await this.updateKBStats(doc.kb_id);
+	await this.updateKBMetadata(kbId);
   }
 
   /**
@@ -812,6 +815,63 @@ class KnowledgeService {
       throw error;
     }
   }
+  
+  /**
+	 * Update KB metadata (document and product counts)
+	 * @param {string} kbId - Knowledge base ID
+	 * @returns {Promise<Object>} Updated metadata
+	 */
+	async updateKBMetadata(kbId) {
+	  try {
+		console.log('Updating KB metadata for:', kbId);
+
+		// Count documents
+		const [docCount] = await db.query(
+		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_documents WHERE kb_id = ? AND status != "deleted"',
+		  [kbId]
+		);
+
+		// Count products
+		const [productCount] = await db.query(
+		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_kb_products WHERE kb_id = ?',
+		  [kbId]
+		);
+
+		const documentCount = docCount[0].count;
+		const productCounts = productCount[0].count;
+
+		// Update KB metadata
+		await db.query(
+		  `UPDATE yovo_tbl_aiva_knowledge_bases 
+		   SET has_documents = ?,
+			   has_products = ?,
+			   document_count = ?,
+			   product_count = ?,
+			   content_updated_at = NOW()
+		   WHERE id = ?`,
+		  [
+			documentCount > 0,
+			productCount > 0,
+			documentCount,
+			productCount,
+			kbId
+		  ]
+		);
+
+		console.log(`KB metadata updated: docs=${documentCount}, products=${productCount}`);
+
+		return {
+		  has_documents: documentCount > 0,
+		  has_products: productCount > 0,
+		  document_count: documentCount,
+		  product_count: productCount
+		};
+
+	  } catch (error) {
+		console.error('Failed to update KB metadata:', error);
+		throw error;
+	  }
+	}
 }
  
 module.exports = new KnowledgeService();

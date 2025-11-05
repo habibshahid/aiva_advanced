@@ -90,17 +90,19 @@ const ChatIntegration = () => {
     w['AIVAWidget']=o;w[o] = w[o] || function () { (w[o].q = w[o].q || []).push(arguments) };
     js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
     js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
-  }(window, document, 'script', 'aiva', '${window.location.origin}/widget.js'));
+  }(window, document, 'script', 'aiva', '${window.location.origin}/aiva/widget.js'));
   aiva('init', {
     agentId: '${agentId}',
+    // API URL will auto-detect from widget source
+    // Or explicitly set: apiUrl: 'https://your-domain.com/aiva/api/public/chat',
     primaryColor: '${config.widget_config.primary_color}',
     position: '${config.widget_config.position}'
   });
 </script>`;
 
   const chatPageUrl = config.chat_page_slug 
-    ? `${window.location.origin}/chat/${config.chat_page_slug}`
-    : `${window.location.origin}/chat/${agentId}`;
+    ? `${window.location.origin}/aiva/chat/${config.chat_page_slug}`
+    : `${window.location.origin}/aiva/chat/${agentId}`;
 
   if (loading) {
     return (
@@ -324,7 +326,7 @@ const ChatIntegration = () => {
                 </label>
                 <div className="flex rounded-md shadow-sm">
                   <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">
-                    {window.location.origin}/chat/
+                    {window.location.origin}/aiva/chat/
                   </span>
                   <input
                     type="text"

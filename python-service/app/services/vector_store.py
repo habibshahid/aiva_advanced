@@ -195,40 +195,35 @@ class VectorStore:
             if cached_result:
                 search_time = int((time.time() - search_start) * 1000)
                 
-                # Convert cached dict results back to TextResult models
-                from app.models.responses import TextResult
+                # ✅ Return cached results with all fields intact
+                text_results = cached_result['results'].get('text_results', [])
                 
-                text_results = []
-                for r in cached_result['results'].get('text_results', []):
-                    if isinstance(r, dict):
-                        # Convert dict back to TextResult
-                        text_results.append(TextResult(
-                            result_id=r.get('result_id', ''),
-                            type=r.get('type', 'text'),
-                            content=r.get('content', ''),
-                            source=r.get('source', {}),
-                            score=r.get('score', 0.0),
-                            scoring_details=r.get('scoring_details', {}),
-                            highlight=r.get('highlight')
-                        ))
-                    else:
-                        # Already a TextResult
-                        text_results.append(r)
+                # Ensure each result has all needed fields
+                formatted_text_results = []
+                for r in text_results:
+                    formatted_text_results.append({
+                        "type": "document",
+                        "source_id": r.get("source_id") or r.get("document_id"),
+                        "title": r.get("title", "Document"),
+                        "content": r.get("content", ""),
+                        "chunk_id": r.get("chunk_id"),
+                        "relevance_score": r.get("relevance_score") or r.get("score", 0.0),
+                        "metadata": r.get("metadata", {})
+                    })
                 
                 return {
                     "total_found": cached_result['results'].get('total_found', 0),
                     "returned": cached_result['results'].get('returned', 0),
-                    "text_results": text_results,
+                    "text_results": formatted_text_results,
                     "image_results": cached_result['results'].get('image_results', []),
                     "product_results": cached_result['results'].get('product_results', []),
                     "query_tokens": cached_result['results'].get('query_tokens', query_tokens),
                     "embedding_model": cached_result['results'].get('embedding_model', ''),
                     "chunks_searched": cached_result['results'].get('chunks_searched', 0),
                     'cached': True,
-                    'cache_similarity': cached_result['cache_similarity'],
-                    'original_cached_query': cached_result['original_query'],
-                    'cache_age_seconds': cached_result['cache_age_seconds'],
-                    'cache_access_count': cached_result['access_count'],
+                    'cache_similarity': cached_result.get('cache_similarity', 1.0),
+                    'original_query': cached_result.get('original_query', query),
+                    'cache_age_seconds': cached_result.get('cache_age_seconds', 0),
                     'search_time_ms': search_time
                 }
         
@@ -310,13 +305,17 @@ class VectorStore:
                 "returned": search_results["returned"],
                 "text_results": [
                     {
+                        # ✅ CACHE ALL FIELDS NEEDED FOR FRONTEND DISPLAY
                         "chunk_id": r.get("chunk_id") if isinstance(r, dict) else getattr(r, "chunk_id", None),
                         "document_id": r.get("document_id") if isinstance(r, dict) else getattr(r, "document_id", None),
+                        "title": r.get("title") if isinstance(r, dict) else getattr(r, "title", ""),  # ✅ ADD THIS
                         "content": r.get("content") if isinstance(r, dict) else getattr(r, "content", ""),
                         "score": r.get("score") if isinstance(r, dict) else getattr(r, "score", 0.0),
                         "chunk_type": r.get("chunk_type") if isinstance(r, dict) else getattr(r, "chunk_type", "text"),
                         "metadata": r.get("metadata") if isinstance(r, dict) else getattr(r, "metadata", {}),
-                        "source": r.get("source") if isinstance(r, dict) else getattr(r, "source", {})
+                        "source": r.get("source") if isinstance(r, dict) else getattr(r, "source", {}),
+                        "relevance_score": r.get("score") if isinstance(r, dict) else getattr(r, "score", 0.0),  # ✅ ADD THIS
+                        "source_id": r.get("document_id") if isinstance(r, dict) else getattr(r, "document_id", None)  # ✅ ADD THIS
                     } for r in text_results
                 ],
                 "image_results": search_results.get("image_results", []),

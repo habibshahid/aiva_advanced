@@ -702,7 +702,7 @@ router.get('/:id/stats', authenticate, async (req, res) => {
     
     // Verify KB ownership
     const kb = await KnowledgeService.getKnowledgeBase(id);
-    if (!kb || kb.tenant_id !== req.user.id) {
+    if (!kb || kb.tenant_id !== req.user.tenant_id) {
       return res.status(404).json(ResponseBuilder.notFound(null, 'Knowledge base not found', 404));
     }
     

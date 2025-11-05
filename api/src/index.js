@@ -24,43 +24,58 @@ const widgetRoutes = require('./routes/widget');
 const app = express();
 const PORT = process.env.API_PORT || 62001;
 
-// Security middleware
-app.use(helmet());
+// 1. TRUST PROXY - MUST BE FIRST
+app.set('trust proxy', 1); 
 
-// CORS
+// 2. SECURITY MIDDLEWARE
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// 3. CORS - Allow all for public widget
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow all origins for widget (you can restrict this later)
-    callback(null, true);
-  },
+  origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100 // limit each IP to 100 requests per windowMs
-});
-
-app.use('/', widgetRoutes);
-
-app.use('/api/', limiter);
-
-// Body parsing
+// 4. BODY PARSING - BEFORE routes
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Health check
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString() 
-    });
+// 5. RATE LIMITING - Only for protected routes
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  skip: (req) => {
+    // Skip rate limiting for public endpoints
+    return req.path.startsWith('/api/public/') || 
+           req.path === '/widget.js' ||
+           req.path === '/api/health';
+  }
 });
 
-// Swagger Documentation
+// Apply rate limiter to API routes (but will skip public routes)
+app.use('/api/', limiter);
+
+// 6. PUBLIC ROUTES FIRST (NO AUTH, NO RATE LIMIT)
+app.use('/', widgetRoutes); // Serves /widget.js
+app.use('/api/public/chat', publicChatRoutes); // Public chat API
+
+// 7. HEALTH CHECK
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    routes: {
+      public_chat: '/api/public/chat',
+      widget: '/widget.js'
+    }
+  });
+});
+
+// 8. SWAGGER DOCUMENTATION
 app.use('/swagger/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customCss: `
     .swagger-ui .topbar { background-color: #2c3e50; }
@@ -71,10 +86,10 @@ app.use('/swagger/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
       font-size: 24px;
       font-weight: bold;
     }
-	swaggerOptions: {
-      persistAuthorization: true
-    }
   `,
+  swaggerOptions: {
+    persistAuthorization: true
+  },
   customSiteTitle: 'AiVA API Documentation',
   customfavIcon: '/favicon.ico'
 }));
@@ -85,7 +100,7 @@ app.get('/swagger/api-docs.json', (req, res) => {
   res.send(swaggerSpec);
 });
 
-// API routes
+// 9. PROTECTED API ROUTES (WITH AUTH)
 app.use('/api/auth', authRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/functions', functionRoutes);
@@ -98,30 +113,38 @@ app.use('/api/knowledge', knowledgeRoutes);
 app.use('/api/shopify', shopifyRoutes);
 app.use('/api/conversation-strategy', conversationStrategyRoutes);
 app.use('/api/users', usersRoutes);
-app.use('/api/public/chat', publicChatRoutes);
 
-// Error handling middleware
+// 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({ 
-        error: 'Internal server error' 
-    });
+  console.error('Unhandled error:', err);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
 });
 
-// 404 handler
+// 11. 404 HANDLER (MUST BE LAST)
 app.use((req, res) => {
-    res.status(404).json({ 
-        error: 'Not found' 
-    });
+  console.log('404 Not Found:', req.method, req.path);
+  res.status(404).json({ 
+    error: 'Not found',
+    path: req.path
+  });
 });
 
-// Start server
+// 12. START SERVER
 app.listen(PORT, () => {
-    console.log('='.repeat(60));
-    console.log('Agent Management API Server');
-    console.log('='.repeat(60));
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📍 API URL: http://localhost:${PORT}/api`);
-    console.log(`❤️  Health check: http://localhost:${PORT}/health`);
-    console.log('='.repeat(60));
+  console.log('='.repeat(60));
+  console.log('🚀 Agent Management API Server');
+  console.log('='.repeat(60));
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📍 API URL: http://localhost:${PORT}/api`);
+  console.log(`💬 Public Chat: http://localhost:${PORT}/api/public/chat`);
+  console.log(`📦 Widget: http://localhost:${PORT}/widget.js`);
+  console.log(`❤️  Health: http://localhost:${PORT}/api/health`);
+  console.log(`📚 Swagger: http://localhost:${PORT}/swagger/api-docs`);
+  console.log('='.repeat(60));
+  console.log('');
 });
+
+module.exports = app;

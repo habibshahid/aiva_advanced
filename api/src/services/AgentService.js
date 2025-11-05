@@ -53,9 +53,17 @@ class AgentService {
         }
         
         const [agents] = await db.query(
-            'SELECT * FROM yovo_tbl_aiva_agents WHERE id = ?',
-            [agentId]
-        );
+			`SELECT 
+			  a.*,
+			  kb.has_documents,
+			  kb.has_products,
+			  kb.document_count,
+			  kb.product_count
+			 FROM yovo_tbl_aiva_agents a
+			 LEFT JOIN yovo_tbl_aiva_knowledge_bases kb ON a.kb_id = kb.id
+			 WHERE a.id = ?`,
+			[agentId]
+		);
         
         if (agents.length === 0) {
             return null;
@@ -76,6 +84,69 @@ class AgentService {
 			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null
 		}));
         
+		agent.kb_metadata = {
+			has_documents: !!agent.has_documents,
+			has_products: !!agent.has_products,
+			document_count: agent.document_count || 0,
+			product_count: agent.product_count || 0
+		};
+
+        // Cache it
+        await redisClient.setEx(
+            `agent:${agentId}`, 
+            300, // 5 minutes
+            JSON.stringify(agent)
+        );
+        
+        return agent;
+    }
+	
+	async getAgentForPublicChat(agentId) {
+        // Try cache first
+        const cached = await redisClient.get(`agent:${agentId}`);
+        if (cached) {
+            return JSON.parse(cached);
+        }
+        
+        const [agents] = await db.query(
+			`SELECT 
+			  a.*,
+			  kb.has_documents,
+			  kb.has_products,
+			  kb.document_count,
+			  kb.product_count
+			 FROM yovo_tbl_aiva_agents a
+			 LEFT JOIN yovo_tbl_aiva_knowledge_bases kb ON a.kb_id = kb.id
+			 WHERE a.id = ? OR a.chat_page_slug = ?`,
+			[agentId, agentId]
+		);
+        
+        if (agents.length === 0) {
+            return null;
+        }
+        
+        const agent = agents[0];
+        
+        // Get functions
+        const [functions] = await db.query(
+            'SELECT * FROM yovo_tbl_aiva_functions WHERE agent_id = ? AND is_active = TRUE',
+            [agentId]
+        );
+        
+        agent.functions = functions.map(f => ({
+			...f,
+			parameters: typeof f.parameters === 'string' ? JSON.parse(f.parameters) : f.parameters,
+			api_headers: f.api_headers ? (typeof f.api_headers === 'string' ? JSON.parse(f.api_headers) : f.api_headers) : null,
+			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null
+		}));
+        
+		agent.kb_metadata = {
+			has_documents: !!agent.has_documents,
+			has_products: !!agent.has_products,
+			document_count: agent.document_count || 0,
+			product_count: agent.product_count || 0
+		};
+
         // Cache it
         await redisClient.setEx(
             `agent:${agentId}`, 
@@ -189,44 +260,158 @@ class AgentService {
 	 * Update agent chat integration settings
 	 */
 	async updateChatIntegration(agentId, settings) {
-	  const fields = [];
-	  const values = [];
+	  const { 
+		enable_chat_integration, 
+		chat_page_enabled, 
+		chat_page_slug,
+		widget_config 
+	  } = settings;
 
-	  if (settings.enable_chat_integration !== undefined) {
-		fields.push('enable_chat_integration = ?');
-		values.push(settings.enable_chat_integration);
+	  // Get current agent
+	  const agent = await this.getAgent(agentId);
+	  
+	  if (!agent) {
+		throw new Error('Agent not found');
 	  }
 
-	  if (settings.widget_config) {
-		fields.push('widget_config = ?');
-		values.push(JSON.stringify(settings.widget_config));
+	  // Generate slug if public page enabled but no custom slug provided
+	  let finalSlug = chat_page_slug;
+	  if (chat_page_enabled && !finalSlug) {
+		// Auto-generate slug from agent name
+		finalSlug = agent.name
+		  .toLowerCase()
+		  .replace(/[^a-z0-9]+/g, '-')
+		  .replace(/^-+|-+$/g, '')
+		  .substring(0, 50);
+		
+		// Ensure uniqueness
+		const [existing] = await db.query(
+		  'SELECT id FROM yovo_tbl_aiva_agents WHERE chat_page_slug = ? AND id != ?',
+		  [finalSlug, agentId]
+		);
+		
+		if (existing.length > 0) {
+		  // Add random suffix
+		  finalSlug = `${finalSlug}-${Math.random().toString(36).substring(2, 8)}`;
+		}
 	  }
 
-	  if (settings.chat_page_enabled !== undefined) {
-		fields.push('chat_page_enabled = ?');
-		values.push(settings.chat_page_enabled);
+	  // If public page disabled, clear the slug
+	  if (!chat_page_enabled) {
+		finalSlug = null;
 	  }
 
-	  if (settings.chat_page_slug) {
-		fields.push('chat_page_slug = ?');
-		values.push(settings.chat_page_slug);
+	  // Validate slug if provided
+	  if (finalSlug) {
+		// Check slug format
+		if (!/^[a-z0-9-]+$/.test(finalSlug)) {
+		  throw new Error('Slug can only contain lowercase letters, numbers, and hyphens');
+		}
+
+		// Check slug uniqueness
+		const [existing] = await db.query(
+		  'SELECT id FROM yovo_tbl_aiva_agents WHERE chat_page_slug = ? AND id != ?',
+		  [finalSlug, agentId]
+		);
+
+		if (existing.length > 0) {
+		  throw new Error('This slug is already taken. Please choose another.');
+		}
 	  }
 
-	  if (fields.length === 0) return;
-
-	  values.push(agentId);
-
+	  // Update agent
 	  await db.query(
-		`UPDATE yovo_tbl_aiva_agents SET ${fields.join(', ')} WHERE id = ?`,
-		values
+		`UPDATE yovo_tbl_aiva_agents 
+		 SET enable_chat_integration = ?,
+			 chat_page_enabled = ?,
+			 chat_page_slug = ?,
+			 widget_config = ?
+		 WHERE id = ?`,
+		[
+		  enable_chat_integration ? 1 : 0,
+		  chat_page_enabled ? 1 : 0,
+		  finalSlug,
+		  widget_config ? JSON.stringify(widget_config) : null,
+		  agentId
+		]
 	  );
+
+	  // Return updated config
+	  return this.getChatIntegration(agentId);
+	}
+
+	/**
+	 * Get chat integration settings
+	 */
+	async getChatIntegration(agentId) {
+	  const [agents] = await db.query(
+		`SELECT 
+		  enable_chat_integration,
+		  chat_page_enabled,
+		  chat_page_slug,
+		  widget_config
+		 FROM yovo_tbl_aiva_agents 
+		 WHERE id = ?`,
+		[agentId]
+	  );
+
+	  if (agents.length === 0) {
+		throw new Error('Agent not found');
+	  }
+
+	  const agent = agents[0];
+
+	  return {
+		enable_chat_integration: !!agent.enable_chat_integration,
+		chat_page_enabled: !!agent.chat_page_enabled,
+		chat_page_slug: agent.chat_page_slug,
+		widget_config: agent.widget_config ? agent.widget_config : {
+		  primary_color: '#6366f1',
+		  position: 'bottom-right'
+		}
+	  };
+	}
+
+	/**
+	 * Get agent by custom slug
+	 */
+	async getAgentBySlug(slug) {
+	  const [agents] = await db.query(
+		`SELECT 
+		  id, 
+		  tenant_id,
+		  name, 
+		  greeting, 
+		  widget_config, 
+		  chat_page_enabled
+		 FROM yovo_tbl_aiva_agents 
+		 WHERE chat_page_slug = ? AND chat_page_enabled = 1`,
+		[slug]
+	  );
+
+	  if (agents.length === 0) {
+		return null;
+	  }
+
+	  const agent = agents[0];
+	  
+	  return {
+		...agent,
+		widget_config: agent.widget_config ? agent.widget_config : null
+	  };
 	}
 
 	/**
 	 * Generate widget embed code
 	 */
 	generateWidgetCode(agentId, config = {}) {
-	  const baseUrl = process.env.WIDGET_BASE_URL || process.env.API_BASE_URL || 'https://yourdomain.com';
+	  // Don't hardcode domain - let widget auto-detect or allow override
+	  const widgetUrl = process.env.WIDGET_URL || 'https://aidev.contegris.com/aiva/widget.js';
+	  
+	  // Generate code with optional API URL override
+	  const apiUrlLine = config.custom_api_url 
+		? `    apiUrl: '${config.custom_api_url}',  // Custom API endpoint\n`
+		: '    // apiUrl will auto-detect from widget source\n';
 	  
 	  return `<!-- AIVA Chat Widget -->
 	<script>
@@ -234,10 +419,10 @@ class AgentService {
 		w['AIVAWidget']=o;w[o] = w[o] || function () { (w[o].q = w[o].q || []).push(arguments) };
 		js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
 		js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
-	  }(window, document, 'script', 'aiva', '${baseUrl}/widget.js'));
+	  }(window, document, 'script', 'aiva', '${widgetUrl}'));
 	  aiva('init', {
 		agentId: '${agentId}',
-		primaryColor: '${config.primary_color || '#6366f1'}',
+	${apiUrlLine}    primaryColor: '${config.primary_color || '#6366f1'}',
 		position: '${config.position || 'bottom-right'}'
 	  });
 	</script>`;
@@ -248,7 +433,7 @@ class AgentService {
 	 */
 	generateChatPageUrl(agentId, slug) {
 	  const baseUrl = process.env.CHAT_PAGE_URL || process.env.API_BASE_URL || 'https://yourdomain.com';
-	  return `${baseUrl}/chat/${slug || agentId}`;
+	  return `${baseUrl}/aiva/chat/${slug || agentId}`;
 	}
 }
 
