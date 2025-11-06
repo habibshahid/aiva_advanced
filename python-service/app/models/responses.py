@@ -97,26 +97,56 @@ class ProductResult(BaseModel):
         extra = "allow"
 
 
+class ScoringDetails(BaseModel):
+    """Scoring breakdown for search results"""
+    cosine_similarity: float = Field(default=0.0)
+    bm25_score: float = Field(default=0.0)
+    combined_score: float = Field(default=0.0)
+
+class SearchResult(BaseModel):
+    """Individual search result"""
+    result_id: str = Field(..., description="Unique result identifier")
+    type: str = Field(default="document", description="Result type")
+    source: Dict[str, Any] = Field(..., description="Source document metadata")  # ✅ Changed from str to Dict
+    source_type: str = Field(default="document", description="Type of source")
+    content: str = Field(default="", description="Result content")
+    score: float = Field(..., description="Relevance score")
+    scoring_details: ScoringDetails = Field(..., description="Score breakdown")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
 class SearchResults(BaseModel):
-    total_found: int
-    returned: int
-    search_type: str
-    text_results: List[TextResult] = []
-    image_results: List[ImageResult] = []
-    product_results: List[ProductResult] = []
-
-
+    """Search results container"""
+    text_results: List[SearchResult] = Field(default_factory=list)
+    image_results: List[Dict[str, Any]] = Field(default_factory=list)
+    product_results: List[Dict[str, Any]] = Field(default_factory=list)
+    total_found: int = Field(default=0)
+    returned: int = Field(default=0)
+    search_type: str = Field(default="hybrid", description="Type of search performed")  # ✅ ADD THIS
+    query_tokens: Optional[int] = None
+    embedding_model: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+    chunks_searched: int = Field(default=0)
+    
 class SearchMetrics(BaseModel):
     query_tokens: Optional[int] = None
     embedding_model: Optional[str] = None
     processing_time_ms: int
     chunks_searched: int
 
+class CostInfo(BaseModel):
+    """Cost information"""
+    operation: str
+    base_cost: float
+    embedding_cost: float
+    total_cost: float
+    profit_margin: float
+    final_cost: float
 
 class SearchResponse(BaseModel):
+    """Complete search response"""
     results: SearchResults
-    metrics: SearchMetrics
-    cost: float
+    metrics: SearchMetrics  # ✅ ADD THIS LINE
+    cost: CostInfo
 
 
 class EmbeddingResponse(BaseModel):

@@ -22,9 +22,9 @@ const CollapsibleSource = ({ source, index }) => {
           <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-[10px] font-bold">
             {index + 1}
           </span>
-          <span className="flex-1">{source.source.metadata.title || 'Document'}</span>
+          <span className="flex-1">{source.source?.metadata?.title || source.metadata?.title || 'Document'}</span>
         </div>
-        
+        {console.log(source)}
         {/* Content Preview */}
         <div 
           className="text-gray-600 mb-2"
@@ -42,10 +42,10 @@ const CollapsibleSource = ({ source, index }) => {
         {(source.page || source.relevance_score) && (
           <div className="flex items-center gap-3 text-[10px] text-gray-500 mb-2">
             {source.page && (
-              <span>📄 Page {source.source.metadata.page}</span>
+              <span>📄 Page {source.source?.metadata?.page || source.metadata?.page || ''}</span>
             )}
-            {source.source.metadata.relevance_score && (
-              <span>🎯 {(source.source.metadata.relevance_score * 100).toFixed(0)}% match</span>
+            {source.source?.metadata?.relevance_score || source.relevance_score && (
+              <span>🎯 {((source.source?.relevance_score || source.relevance_score || source.score) * 100).toFixed(0)}% match</span>
             )}
           </div>
         )}
@@ -75,10 +75,10 @@ const CollapsibleSource = ({ source, index }) => {
         )}
 
         {/* Source Link - Fixed path */}
-        {(source.url || source.source.metadata?.source_url) && (
+        {(source.url || source.source?.metadata?.source_url || source?.metadata?.source_url) && (
           <div className="mt-2 pt-2 border-t border-gray-200">
             <a 
-              href={source.url || source.source.metadata?.source_url}
+              href={source.url || source.source?.metadata?.source_url || source.metadata?.source_url}
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 font-medium"

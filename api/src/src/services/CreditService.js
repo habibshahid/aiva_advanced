@@ -1,0 +1,229 @@
+require('dotenv').config();
+
+const db = require('../config/database');
+const redisClient = require('../config/redis');
+const { v4: uuidv4 } = require('uuid');
+
+class CreditService {
+    // Get balance
+    async getBalance(tenantId) {
+        // Try cache first
+        const cached = await redisClient.get(`balance:${tenantId}`);
+        if (cached) {
+            return parseFloat(cached);
+        }
+        
+        const [tenants] = await db.query(
+            'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?',
+            [tenantId]
+        );
+        
+        if (tenants.length === 0) {
+            throw new Error('Tenant not found');
+        }
+        
+        const balance = parseFloat(tenants[0].credit_balance);
+        
+        // Cache it
+        await redisClient.setEx(`balance:${tenantId}`, 60, balance.toString());
+        
+        return balance;
+    }
+    
+    // Check if tenant has sufficient credits
+    async hasSufficientCredits(tenantId, requiredAmount = 0.10) {
+        const balance = await this.getBalance(tenantId);
+        return balance >= requiredAmount;
+    }
+    
+    // Add credits
+    async addCredits(tenantId, amount, adminId, note = null) {
+		console.log(tenantId, amount, adminId, note)
+        const connection = await db.getConnection();
+        
+        try {
+            await connection.beginTransaction();
+            
+            // Get current balance
+            const [tenants] = await connection.query(
+                'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ? FOR UPDATE',
+                [tenantId]
+            );
+            
+            if (tenants.length === 0) {
+                throw new Error('Tenant not found');
+            }
+            
+            const balanceBefore = parseFloat(tenants[0].credit_balance);
+            const balanceAfter = balanceBefore + amount;
+            
+            // Update balance
+            await connection.query(
+                'UPDATE yovo_tbl_aiva_tenants SET credit_balance = ? WHERE id = ?',
+                [balanceAfter, tenantId]
+            );
+            
+            // Record transaction
+            const transactionId = uuidv4();
+            await connection.query(
+                `INSERT INTO yovo_tbl_aiva_credit_transactions (
+                    id, tenant_id, type, amount, balance_before, 
+                    balance_after, reference_type, admin_id, note
+                ) VALUES (?, ?, 'add', ?, ?, ?, 'manual_topup', ?, ?)`,
+                [transactionId, tenantId, amount, balanceBefore, balanceAfter, adminId, note]
+            );
+            
+            await connection.commit();
+            
+            // Update cache
+            await redisClient.setEx(`balance:${tenantId}`, 60, balanceAfter.toString());
+            
+            return {
+                transaction_id: transactionId,
+                balance_before: balanceBefore,
+                balance_after: balanceAfter,
+                amount: amount
+            };
+            
+        } catch (error) {
+            await connection.rollback();
+            throw error;
+        } finally {
+            connection.release();
+        }
+    }
+    
+    /**
+	 * Deduct credits (enhanced for multiple operation types)
+	 * @param {string} tenantId - Tenant ID
+	 * @param {number} amount - Amount to deduct
+	 * @param {string|null} referenceId - Reference ID (call_log_id, session_id, etc.)
+	 * @param {string} operationType - Type of operation (voice_call, chat_message, doc_upload, knowledge_search)
+	 * @param {Object} operationDetails - Additional operation details
+	 * @returns {Promise<Object>} Transaction result
+	 */
+	/**
+   * Deduct credits from tenant account
+   */
+	  async deductCredits(tenantId, amount, operationType, operationDetails = {}, referenceId = null) {
+		const connection = await db.getConnection();
+		
+		try {
+		  await connection.beginTransaction();
+		  
+		  // Get current balance with lock
+		  const [balances] = await connection.query(
+			'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ? FOR UPDATE',
+			[tenantId]
+		  );
+		  
+		  if (balances.length === 0) {
+			throw new Error('Credit balance not found');
+		  }
+		  
+		  const currentBalance = parseFloat(balances[0].credit_balance);
+		  const deductAmount = parseFloat(amount);
+		  
+		  // Check if sufficient balance
+		  if (currentBalance < deductAmount) {
+			throw new Error(`Insufficient credits. Current: ${currentBalance}, Required: ${deductAmount}`);
+		  }
+		  
+		  const newBalance = currentBalance - deductAmount;
+		  
+		  // Update balance
+		  await connection.query(
+			'UPDATE yovo_tbl_aiva_tenants SET credit_balance = ?, updated_at = NOW() WHERE id = ?',
+			[newBalance, tenantId]
+		  );
+		  
+		  // Create transaction record
+		  const transactionId = uuidv4();
+		  
+		  // FIXED: Properly stringify operation_details
+		  const operationDetailsJson = JSON.stringify(operationDetails || {});
+		  
+		  await connection.query(`
+			INSERT INTO yovo_tbl_aiva_credit_transactions (
+			  id, tenant_id, type, amount, balance_before, 
+			  balance_after, reference_type, reference_id,
+			  operation_type, operation_details, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+		  `, [
+			transactionId,
+			tenantId,
+			'deduct',
+			deductAmount,
+			currentBalance,
+			newBalance,
+			operationType,  // 'document_processing', 'knowledge_search', 'web_scraping', etc.
+			referenceId || transactionId,
+			operationType,
+			operationDetailsJson  // FIXED: Pass as stringified JSON
+		  ]);
+		  
+		  await connection.commit();
+		  
+		  return {
+			transaction_id: transactionId,
+			amount_deducted: deductAmount,
+			balance_before: currentBalance,
+			balance_after: newBalance
+		  };
+		  
+		} catch (error) {
+		  await connection.rollback();
+		  throw error;
+		} finally {
+		  connection.release();
+		}
+	  }
+    
+    // Get transaction history
+    async getTransactions(tenantId, limit = 50, offset = 0) {
+        const [transactions] = await db.query(
+            `SELECT 
+                ct.*,
+                t.name as admin_name
+            FROM yovo_tbl_aiva_credit_transactions ct
+            LEFT JOIN yovo_tbl_aiva_tenants t ON ct.admin_id = t.id
+            WHERE ct.tenant_id = ?
+            ORDER BY ct.created_at DESC
+            LIMIT ? OFFSET ?`,
+            [tenantId, limit, offset]
+        );
+        
+        return transactions.map(t => ({
+            ...t,
+            amount: parseFloat(t.amount),
+            balance_before: parseFloat(t.balance_before),
+            balance_after: parseFloat(t.balance_after)
+        }));
+    }
+    
+    // Get usage statistics
+    async getUsageStats(tenantId, days = 30) {
+        const [stats] = await db.query(
+            `SELECT 
+                COUNT(*) as total_calls,
+                SUM(final_cost) as total_cost,
+                AVG(final_cost) as avg_cost_per_call,
+                SUM(duration_seconds) as total_duration_seconds
+            FROM yovo_tbl_aiva_call_logs
+            WHERE tenant_id = ? 
+            AND start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
+            AND status = 'completed'`,
+            [tenantId, days]
+        );
+        
+        return {
+            total_calls: stats[0].total_calls || 0,
+            total_cost: parseFloat(stats[0].total_cost || 0),
+            avg_cost_per_call: parseFloat(stats[0].avg_cost_per_call || 0),
+            total_duration_seconds: stats[0].total_duration_seconds || 0,
+            period_days: days
+        };
+    }
+}
+
+module.exports = new CreditService();
