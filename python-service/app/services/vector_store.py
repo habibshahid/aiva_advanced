@@ -195,19 +195,27 @@ class VectorStore:
             if cached_result:
                 search_time = int((time.time() - search_start) * 1000)
                 
-                # ✅ Return cached results with all fields intact
+                # ✅ Return cached results with proper SearchResult structure
                 text_results = cached_result['results'].get('text_results', [])
                 
-                # Ensure each result has all needed fields
+                # Format cached results to match SearchResult/TextResult model
                 formatted_text_results = []
                 for r in text_results:
                     formatted_text_results.append({
-                        "type": "document",
-                        "source_id": r.get("source_id") or r.get("document_id"),
-                        "title": r.get("title", "Document"),
+                        "result_id": r.get("chunk_id") or r.get("result_id", "unknown"),
+                        "type": r.get("type", "text"),
                         "content": r.get("content", ""),
-                        "chunk_id": r.get("chunk_id"),
-                        "relevance_score": r.get("relevance_score") or r.get("score", 0.0),
+                        "source": r.get("source", {
+                            "document_id": r.get("document_id"),
+                            "document_name": r.get("title", "Document"),
+                            "chunk_id": r.get("chunk_id")
+                        }),
+                        "score": r.get("score") or r.get("relevance_score", 0.0),
+                        "scoring_details": r.get("scoring_details", {
+                            "cosine_similarity": r.get("score") or r.get("relevance_score", 0.0),
+                            "bm25_score": 0.0,
+                            "combined_score": r.get("score") or r.get("relevance_score", 0.0)
+                        }),
                         "metadata": r.get("metadata", {})
                     })
                 
@@ -299,25 +307,31 @@ class VectorStore:
         
         # CACHE THE RESULTS (if enabled and text search)
         if self.enable_cache and search_type == "text" and len(text_results) > 0:
-            # Convert results to JSON-serializable format
+            # Convert TextResult Pydantic objects to dict format for caching
+            def serialize_result(r):
+                """Convert TextResult to dict, handling both Pydantic objects and dicts"""
+                if hasattr(r, 'dict'):
+                    # It's a Pydantic object - use .dict() method
+                    result_dict = r.dict()
+                elif hasattr(r, 'model_dump'):
+                    # Pydantic v2 - use .model_dump() method
+                    result_dict = r.model_dump()
+                else:
+                    # It's already a dict
+                    result_dict = r
+                
+                # Add extra fields for cache retrieval
+                if "source" in result_dict and isinstance(result_dict["source"], dict):
+                    result_dict["chunk_id"] = result_dict["source"].get("chunk_id")
+                    result_dict["document_id"] = result_dict["source"].get("document_id")
+                    result_dict["title"] = result_dict["source"].get("document_name", "Document")
+                
+                return result_dict
+            
             cacheable_results = {
                 "total_found": search_results["total_found"],
                 "returned": search_results["returned"],
-                "text_results": [
-                    {
-                        # ✅ CACHE ALL FIELDS NEEDED FOR FRONTEND DISPLAY
-                        "chunk_id": r.get("chunk_id") if isinstance(r, dict) else getattr(r, "chunk_id", None),
-                        "document_id": r.get("document_id") if isinstance(r, dict) else getattr(r, "document_id", None),
-                        "title": r.get("title") if isinstance(r, dict) else getattr(r, "title", ""),  # ✅ ADD THIS
-                        "content": r.get("content") if isinstance(r, dict) else getattr(r, "content", ""),
-                        "score": r.get("score") if isinstance(r, dict) else getattr(r, "score", 0.0),
-                        "chunk_type": r.get("chunk_type") if isinstance(r, dict) else getattr(r, "chunk_type", "text"),
-                        "metadata": r.get("metadata") if isinstance(r, dict) else getattr(r, "metadata", {}),
-                        "source": r.get("source") if isinstance(r, dict) else getattr(r, "source", {}),
-                        "relevance_score": r.get("score") if isinstance(r, dict) else getattr(r, "score", 0.0),  # ✅ ADD THIS
-                        "source_id": r.get("document_id") if isinstance(r, dict) else getattr(r, "document_id", None)  # ✅ ADD THIS
-                    } for r in text_results
-                ],
+                "text_results": [serialize_result(r) for r in text_results],
                 "image_results": search_results.get("image_results", []),
                 "product_results": search_results.get("product_results", []),
                 "query_tokens": search_results["query_tokens"],
