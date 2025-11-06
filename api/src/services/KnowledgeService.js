@@ -411,7 +411,7 @@ class KnowledgeService {
 
     // Update KB stats
     await this.updateKBStats(doc.kb_id);
-	await this.updateKBMetadata(kbId);
+	await this.updateKBMetadata(doc.kb_id);
   }
 
   /**
@@ -833,7 +833,7 @@ class KnowledgeService {
 
 		// Count products
 		const [productCount] = await db.query(
-		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_kb_products WHERE kb_id = ?',
+		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_products WHERE kb_id = ?',
 		  [kbId]
 		);
 
@@ -853,12 +853,12 @@ class KnowledgeService {
 			documentCount > 0,
 			productCount > 0,
 			documentCount,
-			productCount,
+			productCounts,
 			kbId
 		  ]
 		);
 
-		console.log(`KB metadata updated: docs=${documentCount}, products=${productCount}`);
+		console.log(`KB metadata updated: docs=${documentCount}, products=${productCounts}`);
 
 		return {
 		  has_documents: documentCount > 0,

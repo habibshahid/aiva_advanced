@@ -38,6 +38,7 @@ class CreditService {
     
     // Add credits
     async addCredits(tenantId, amount, adminId, note = null) {
+		console.log(tenantId, amount, adminId, note)
         const connection = await db.getConnection();
         
         try {

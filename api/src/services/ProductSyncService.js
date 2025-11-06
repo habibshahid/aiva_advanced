@@ -91,43 +91,124 @@ class ProductSyncService {
    * Checks if image already exists before downloading/processing
    */
   async processImagesWithDedup(productId, images, kbId, tenantId) {
-    const results = {
-      success: 0,
-      skipped: 0,
-      failed: 0,
-      errors: []
-    };
-    
-    // Process images with limited concurrency
-    const concurrency = parseInt(process.env.SYNC_IMAGE_CONCURRENCY) || 1;
-    
-    for (let i = 0; i < images.length; i += concurrency) {
-      const batch = images.slice(i, i + concurrency);
-      
-      const batchResults = await Promise.allSettled(
-        batch.map(img => this.processImageWithDedup(img, productId, kbId, tenantId))
-      );
-      
-      batchResults.forEach((result, idx) => {
-        if (result.status === 'fulfilled') {
-          if (result.value.skipped) {
-            results.skipped++;
-          } else {
-            results.success++;
-          }
-        } else {
-          results.failed++;
-          results.errors.push({
-            image: batch[idx].src,
-            error: result.reason.message
-          });
-        }
-      });
-    }
-    
-    return results;
-  }
+	  const results = {
+		success: 0,
+		skipped: 0,
+		failed: 0,
+		errors: []
+	  };
+	  
+	  // ✅ BULK CHECK: Single query for all images
+	  const shopifyImageIds = images.map(img => String(img.id));
+	  const existingImages = await this.bulkCheckImagesExist(shopifyImageIds, kbId);
+	  
+	  console.log(`Found ${Object.keys(existingImages).length}/${images.length} existing images`);
+	  
+	  // Separate existing vs new images
+	  const imagesToProcess = [];
+	  const imagesToLink = [];
+	  
+	  images.forEach(img => {
+		const existingImage = existingImages[String(img.id)];
+		if (existingImage) {
+		  imagesToLink.push({ imageData: img, existingImage });
+		} else {
+		  imagesToProcess.push(img);
+		}
+	  });
+	  
+	  // Link existing images (parallel)
+	  const linkPromises = imagesToLink.map(({ imageData, existingImage }) => 
+		this.ensureImageLinked(productId, existingImage.id, imageData)
+		  .then(() => ({ success: true, skipped: true }))
+		  .catch(err => ({ success: false, error: err.message }))
+	  );
+	  
+	  const linkResults = await Promise.allSettled(linkPromises);
+	  linkResults.forEach(result => {
+		if (result.status === 'fulfilled' && result.value.success) {
+		  results.skipped++;
+		}
+	  });
+	  
+	  // Process new images with concurrency control
+	  const concurrency = parseInt(process.env.SYNC_IMAGE_CONCURRENCY) || 3;
+	  
+	  for (let i = 0; i < imagesToProcess.length; i += concurrency) {
+		const batch = imagesToProcess.slice(i, i + concurrency);
+		
+		const batchResults = await Promise.allSettled(
+		  batch.map(img => this.processNewImage(img, productId, kbId, tenantId))
+		);
+		
+		batchResults.forEach((result, idx) => {
+		  if (result.status === 'fulfilled') {
+			results.success++;
+		  } else {
+			results.failed++;
+			results.errors.push({
+			  image: batch[idx].src,
+			  error: result.reason.message
+			});
+		  }
+		});
+	  }
+	  
+	  return results;
+	}
   
+	/**
+	 * Process a new image (doesn't exist in DB)
+	 * @private
+	 */
+	async processNewImage(imageData, productId, kbId, tenantId) {
+	  try {
+		console.log(`⬇ Downloading new image ${imageData.id}`);
+		
+		// Download image from Shopify
+		const imageBuffer = await this.downloadImage(imageData.src);
+		
+		// Create FormData for upload
+		const formData = new FormData();
+		
+		formData.append('file', imageBuffer, {
+		  filename: this.getFilenameFromUrl(imageData.src),
+		  contentType: 'image/jpeg'
+		});
+		formData.append('kb_id', kbId);
+		formData.append('tenant_id', tenantId);
+		formData.append('metadata', JSON.stringify({
+		  source: 'shopify',
+		  shopify_image_id: imageData.id,
+		  shopify_image_src: imageData.src,
+		  alt_text: imageData.alt || null,
+		  position: imageData.position,
+		  product_id: productId,
+		  width: imageData.width || null,
+		  height: imageData.height || null
+		}));
+		
+		// Upload to Python service for processing
+		const imageResult = await this.pythonClient.uploadImage(formData);
+		
+		// Link image to product
+		await ProductService.linkImage(
+		  productId,
+		  imageResult.image_id,
+		  imageData.id,
+		  imageData.position,
+		  imageData.alt,
+		  imageData.variant_ids || []
+		);
+		
+		return imageResult;
+		
+	  } catch (error) {
+		console.error(`Error processing image ${imageData.id}:`, error.message);
+		throw error;
+	  }
+	}
+
   /**
    * Process single image WITH DEDUPLICATION CHECK
    * @private
@@ -486,6 +567,38 @@ class ProductSyncService {
       throw error;
     }
   }
+  
+  /**
+	 * Bulk check which images already exist (single query)
+	 * @private
+	 */
+	async bulkCheckImagesExist(shopifyImageIds, kbId) {
+	  try {
+		const [images] = await db.query(`
+		  SELECT 
+			i.id, 
+			i.kb_id, 
+			i.filename, 
+			i.storage_url,
+			JSON_UNQUOTE(JSON_EXTRACT(i.metadata, '$.shopify_image_id')) as shopify_image_id
+		  FROM yovo_tbl_aiva_images i
+		  WHERE i.kb_id = ?
+		  AND JSON_EXTRACT(i.metadata, '$.shopify_image_id') IN (?)
+		`, [kbId, shopifyImageIds]);
+		
+		// Create map for fast lookup
+		const imageMap = {};
+		images.forEach(img => {
+		  imageMap[img.shopify_image_id] = img;
+		});
+		
+		return imageMap;
+		
+	  } catch (error) {
+		console.error('Error bulk checking image existence:', error);
+		return {};
+	  }
+	}
 }
 
 module.exports = new ProductSyncService();

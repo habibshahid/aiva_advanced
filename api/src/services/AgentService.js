@@ -10,10 +10,10 @@ class AgentService {
         const [result] = await db.query(
             `INSERT INTO yovo_tbl_aiva_agents (
                 id, tenant_id, name, type, instructions, voice, language, 
-				model, provider, deepgram_model, deepgram_voice, deepgram_language,
+				model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
 				temperature, max_tokens, vad_threshold, 
 				silence_duration_ms, greeting, kb_id, conversation_strategy
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 agentId,
 				tenantId,
@@ -23,11 +23,11 @@ class AgentService {
 				agentData.voice || 'shimmer',
 				agentData.language || 'ur',
 				agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
-				agentData.chat_model || 'gpt-4o-mini',
-				agentData.provider || 'openai',  // NEW
-				agentData.deepgram_model || null,  // NEW
-				agentData.deepgram_voice || null,  // NEW
-				agentData.deepgram_language || 'en',  // NEW
+				agentData.chat_model || 'gpt-4o-mini',  // ADDED: chat_model in correct position
+				agentData.provider || 'openai',
+				agentData.deepgram_model || null,
+				agentData.deepgram_voice || null,
+				agentData.deepgram_language || 'en',
 				agentData.temperature || 0.6,
 				agentData.max_tokens || 4096,
 				agentData.vad_threshold || 0.5,
