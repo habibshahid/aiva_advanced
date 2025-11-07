@@ -3,6 +3,7 @@ FastAPI main application
 """
 
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,11 +19,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
+# Global image processor instance (singleton)
+_image_processor = None
+
+def get_image_processor():
+    """Get the global image processor instance"""
+    global _image_processor
+    if _image_processor is None:
+        raise RuntimeError("Image processor not initialized")
+    return _image_processor
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifecycle manager - runs on startup and shutdown
+    Loads CLIP model ONCE and shares across all workers
+    """
+    global _image_processor
+    
+    # Startup: Load CLIP model once
+    logger.info("=" * 60)
+    logger.info("Starting up: Loading CLIP model (ONE TIME)...")
+    logger.info("=" * 60)
+    
+    from app.services.image_processor import ImageProcessor
+    _image_processor = ImageProcessor()
+    
+    logger.info("✓ CLIP model loaded and ready!")
+    logger.info("=" * 60)
+    
+    yield  # Application runs
+    
+    # Shutdown: Cleanup
+    logger.info("Shutting down: Cleaning up resources...")
+    _image_processor = None
+
+# Create FastAPI app with lifespan
 app = FastAPI(
     title="AIVA Knowledge Service",
     description="Document processing, embeddings, image search, and vector search",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan  # ✅ Add lifespan event
 )
 
 # CORS middleware
@@ -72,7 +109,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router, tags=["Health"])
 app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])
 app.include_router(search.router, prefix="/api/v1", tags=["Search"])
-app.include_router(images.router, prefix="/api/v1", tags=["Images"])  # NEW: Image routes
+app.include_router(images.router, prefix="/api/v1", tags=["Images"])
 
 @app.get("/")
 async def root():

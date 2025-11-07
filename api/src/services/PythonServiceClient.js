@@ -11,7 +11,7 @@ class PythonServiceClient {
   constructor() {
     this.baseUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:62002';
     this.apiKey = process.env.PYTHON_SERVICE_API_KEY;
-    this.timeout = 60000; // 60 seconds default
+    this.timeout = parseInt(process.env.PYTHON_SERVICE_TIMEOUT_MS) || 120000; // 60 seconds default
     
     // Create axios instance with defaults
     this.client = axios.create({

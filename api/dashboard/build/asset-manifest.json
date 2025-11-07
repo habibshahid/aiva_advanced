@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/aiva/static/css/main.6e593a6b.css",
-    "main.js": "/aiva/static/js/main.98bb71ca.js",
+    "main.css": "/aiva/static/css/main.6e026056.css",
+    "main.js": "/aiva/static/js/main.703de60d.js",
     "index.html": "/aiva/index.html",
-    "main.6e593a6b.css.map": "/aiva/static/css/main.6e593a6b.css.map",
-    "main.98bb71ca.js.map": "/aiva/static/js/main.98bb71ca.js.map"
+    "main.6e026056.css.map": "/aiva/static/css/main.6e026056.css.map",
+    "main.703de60d.js.map": "/aiva/static/js/main.703de60d.js.map"
   },
   "entrypoints": [
-    "static/css/main.6e593a6b.css",
-    "static/js/main.98bb71ca.js"
+    "static/css/main.6e026056.css",
+    "static/js/main.703de60d.js"
   ]
 }

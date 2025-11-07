@@ -16,6 +16,7 @@ class ProductSyncService {
     this.pythonClient = PythonServiceClient;
     this.imageTimeout = parseInt(process.env.SYNC_IMAGE_TIMEOUT_MS) || 10000;
     this.productTimeout = parseInt(process.env.SYNC_PRODUCT_TIMEOUT_MS) || 30000;
+    this.delayBetweenBatches = parseInt(process.env.SYNC_BATCH_DELAY_MS) || 1000; 
   }
   
   /**
@@ -152,6 +153,10 @@ class ProductSyncService {
 			});
 		  }
 		});
+		
+		if (i + concurrency < imagesToProcess.length) {
+			await new Promise(resolve => setTimeout(resolve, this.delayBetweenBatches || 1000));
+		}
 	  }
 	  
 	  return results;

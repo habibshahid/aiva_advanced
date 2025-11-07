@@ -53,7 +53,8 @@ async def upload_image(
         contents = await file.read()
         
         # Initialize processor
-        processor = ImageProcessor()
+        from app.main import get_image_processor
+        processor = get_image_processor()
         
         # Process image
         result = await processor.process_image_bytes(contents, metadata=meta)
