@@ -107,7 +107,7 @@ const Layout = () => {
         
         <div className="fixed inset-y-0 left-0 flex flex-col w-64 bg-white">
           <div className="flex items-center justify-between h-16 px-4 border-b">
-            <span className="text-xl font-bold text-primary-600">Agent Manager</span>
+            <span className="text-xl font-bold text-primary-600">AiVA Manager</span>
             <button onClick={() => setSidebarOpen(false)}>
               <X className="w-6 h-6" />
             </button>
@@ -170,7 +170,7 @@ const Layout = () => {
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
         <div className="flex flex-col flex-1 min-h-0 bg-white border-r">
           <div className="flex items-center h-16 px-4 border-b">
-            <span className="text-xl font-bold text-primary-600">Agent Manager</span>
+            <span className="text-xl font-bold text-primary-600">AiVA Manager</span>
           </div>
           
           {/* User Info - Desktop */}
@@ -243,7 +243,7 @@ const Layout = () => {
             <Menu className="w-6 h-6" />
           </button>
           <div className="flex items-center flex-1 px-4">
-            <span className="text-xl font-bold text-primary-600">Agent Manager</span>
+            <span className="text-xl font-bold text-primary-600">AiVA Manager</span>
           </div>
         </div>
 

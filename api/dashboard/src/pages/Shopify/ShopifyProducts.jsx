@@ -89,7 +89,14 @@ const ShopifyProducts = () => {
       ]);
 
       setProducts(productsRes.data.data.products || []);
-      setPagination(productsRes.data.data.pagination);
+      setPagination({
+		page: productsRes.data.data.pagination?.page || 1,
+		limit: productsRes.data.data.pagination?.limit || 20,
+		total: productsRes.data.data.pagination?.total || 0,
+		total_pages: productsRes.data.data.pagination?.total_pages || 0,
+		has_next: productsRes.data.data.pagination?.has_next || false,
+		has_prev: productsRes.data.data.pagination?.has_prev || false
+	  });
       setStats(statsRes.data.data);
     } catch (err) {
       console.error('Load data error:', err);

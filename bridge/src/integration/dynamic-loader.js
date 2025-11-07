@@ -166,6 +166,7 @@ class DynamicAgentLoader {
 			instructions: agent.instructions,
 			tools: openAITools,
 			functions: [builtInTransferFunction, ...(agent.functions || [])],
+			kb_id: agent.kb_id,
 			config: {
 				voice: agent.voice || 'shimmer',
 				language: agent.language || 'en',

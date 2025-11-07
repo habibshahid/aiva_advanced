@@ -213,17 +213,21 @@ router.post('/sync/:store_id', verifyToken, async (req, res) => {
     // Check if sync already running
     const existingJob = await SyncJobService.getActiveJob(store_id);
     if (existingJob) {
-      return res.status(409).json(
-        ResponseBuilder.conflict('Sync already in progress', {
-          job_id: existingJob.id,
-          status: existingJob.status,
-          progress: {
-            products: `${existingJob.processed_products}/${existingJob.total_products}`,
-            images: `${existingJob.processed_images}/${existingJob.total_images}`
-          }
-        })
-      );
-    }
+	  const progress = existingJob.total_products > 0
+		? Math.round((existingJob.processed_products / existingJob.total_products) * 100)
+		: 0;
+
+	  return res.status(409).json(
+		ResponseBuilder.conflict('A sync is already in progress for this store. Please wait for it to complete or cancel it first.', {
+		  job_id: existingJob.id,
+		  status: existingJob.status,
+		  progress_percentage: progress,
+		  products_progress: `${existingJob.processed_products}/${existingJob.total_products}`,
+		  images_progress: `${existingJob.processed_images}/${existingJob.total_images}`,
+		  message: 'You can monitor the progress or cancel the existing sync before starting a new one.'
+		})
+	  );
+	}
 
     // Get product count estimate
     let estimatedProducts = 0;
@@ -325,13 +329,20 @@ router.get('/sync/:job_id/status', verifyToken, async (req, res) => {
       : 0;
 
     const avgTimePerProduct = job.processed_products > 0
-      ? elapsedMs / job.processed_products
-      : 3000;
+	  ? elapsedMs / job.processed_products
+	  : 3000; // Default 3 seconds per product
 
-    const remainingProducts = job.total_products - job.processed_products;
-    const estimatedRemainingMs = remainingProducts * avgTimePerProduct;
+	const remainingProducts = Math.max(0, job.total_products - job.processed_products);
 
-    const response = {
+	// ✅ Better calculation: don't use average if not enough data yet
+	const estimatedRemainingMs = job.processed_products >= 5
+	  ? remainingProducts * avgTimePerProduct
+	  : remainingProducts * 3000; // Use default if < 5 products processed
+
+	// ✅ Cap the estimate at 24 hours to prevent crazy values
+	const cappedEstimatedMs = Math.min(estimatedRemainingMs, 24 * 60 * 60 * 1000);
+    
+	const response = {
       job: {
         id: job.id,
         status: job.status,
@@ -352,14 +363,14 @@ router.get('/sync/:job_id/status', verifyToken, async (req, res) => {
           }
         },
         timing: {
-          started_at: job.started_at,
-          completed_at: job.completed_at,
-          estimated_completion_at: job.status === 'processing'
-            ? new Date(Date.now() + estimatedRemainingMs)
-            : null,
-          elapsed_seconds: Math.round(elapsedMs / 1000),
-          estimated_remaining_seconds: Math.round(estimatedRemainingMs / 1000)
-        },
+		  started_at: job.started_at,
+		  completed_at: job.completed_at,
+		  estimated_completion_at: job.status === 'processing' && cappedEstimatedMs > 0
+			? new Date(Date.now() + cappedEstimatedMs)
+			: job.estimated_completion_at, // Use saved value if available
+		  elapsed_seconds: Math.round(elapsedMs / 1000),
+		  estimated_remaining_seconds: Math.round(cappedEstimatedMs / 1000)
+		},
         error: job.error_message ? {
           message: job.error_message,
           details: job.error_details

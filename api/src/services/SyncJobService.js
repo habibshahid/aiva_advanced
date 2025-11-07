@@ -145,58 +145,60 @@ class SyncJobService {
    * @param {string} jobId - Job ID
    * @param {Object} progress - Progress data
    */
-  async updateProgress(jobId, progress) {
-    const updates = [];
-    const values = [];
-    
-    const fields = [
-      'total_products',
-      'processed_products',
-      'failed_products',
-      'total_images',
-      'processed_images',
-      'failed_images',
-      'products_added',
-      'products_updated',
-      'products_deleted'
-    ];
-    
-    fields.forEach(field => {
-      if (progress[field] !== undefined) {
-        updates.push(`${field} = ?`);
-        values.push(progress[field]);
-      }
-    });
-    
-    if (updates.length === 0) {
-      return;
-    }
-    
-    // Calculate estimated completion if we have progress
-    if (progress.processed_products !== undefined && progress.total_products) {
-      const job = await this.getJob(jobId);
-      
-      if (job.started_at) {
-        const elapsed = Date.now() - new Date(job.started_at).getTime();
-        const avgTimePerProduct = elapsed / progress.processed_products;
-        const remaining = progress.total_products - progress.processed_products;
-        const estimatedMs = remaining * avgTimePerProduct;
-        const estimatedCompletion = new Date(Date.now() + estimatedMs);
-        
-        updates.push('estimated_completion_at = ?');
-        // Convert Date to MySQL datetime format
-        values.push(estimatedCompletion.toISOString().slice(0, 19).replace('T', ' '));
-      }
-    }
-    
-    values.push(jobId);
-    
-    await db.query(`
-      UPDATE yovo_tbl_aiva_sync_jobs 
-      SET ${updates.join(', ')}, updated_at = NOW()
-      WHERE id = ?
-    `, values);
-  }
+  // FIND the updateProgress method and UPDATE it:
+
+	async updateProgress(jobId, progress) {
+	  const updates = [];
+	  const values = [];
+	  
+	  const fields = [
+		'total_products',
+		'processed_products',
+		'failed_products',
+		'total_images',
+		'processed_images',
+		'failed_images',
+		'products_added',
+		'products_updated',
+		'products_deleted'
+	  ];
+	  
+	  fields.forEach(field => {
+		if (progress[field] !== undefined) {
+		  updates.push(`${field} = ?`);
+		  values.push(progress[field]);
+		}
+	  });
+	  
+	  if (updates.length === 0) {
+		return;
+	  }
+	  
+	  // Calculate estimated completion if we have progress
+	  if (progress.processed_products !== undefined && progress.total_products) {
+		const job = await this.getJob(jobId);
+		
+		if (job && job.started_at && progress.processed_products > 0) {
+		  const elapsed = Date.now() - new Date(job.started_at).getTime();
+		  const avgTimePerProduct = elapsed / progress.processed_products;
+		  const remaining = progress.total_products - progress.processed_products;
+		  const estimatedMs = remaining * avgTimePerProduct;
+		  const estimatedCompletion = new Date(Date.now() + estimatedMs);
+		  
+		  // ✅ ADD THIS - Save estimated_completion_at to database
+		  updates.push('estimated_completion_at = ?');
+		  values.push(estimatedCompletion.toISOString().slice(0, 19).replace('T', ' '));
+		}
+	  }
+	  
+	  values.push(jobId);
+	  
+	  await db.query(`
+		UPDATE yovo_tbl_aiva_sync_jobs 
+		SET ${updates.join(', ')}, updated_at = NOW()
+		WHERE id = ?
+	  `, values);
+	}
   
   /**
    * Increment processed count

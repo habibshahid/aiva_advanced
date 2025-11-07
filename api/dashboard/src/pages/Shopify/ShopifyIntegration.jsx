@@ -67,35 +67,74 @@ const ShopifyIntegration = () => {
     }
   };
 
-  const loadSyncStatuses = async () => {
-    try {
-      const statusPromises = stores.map(store => 
-        shopifyApi.getStoreSyncStatus(store.id)
-          .then(res => ({ storeId: store.id, status: res.data.data }))
-          .catch(err => {
-            console.error(`Error loading sync status for ${store.id}:`, err);
-            return { storeId: store.id, status: null };
-          })
-      );
+  // FIND the loadSyncStatuses function and REPLACE it with:
 
-      const results = await Promise.all(statusPromises);
-      const statusMap = {};
-      results.forEach(({ storeId, status }) => {
-        statusMap[storeId] = status;
-      });
+	const loadSyncStatuses = async () => {
+	  if (!stores || stores.length === 0) return;
 
-      setSyncStatuses(statusMap);
-    } catch (err) {
-      console.error('Load sync statuses error:', err);
-    }
-  };
+	  try {
+		const statusPromises = stores.map(async (store) => {
+		  try {
+			const response = await shopifyApi.getStoreSyncStatus(store.id);
+			return { storeId: store.id, data: response.data.data };
+		  } catch (error) {
+			console.error(`Error loading sync status for store ${store.id}:`, error);
+			return { 
+			  storeId: store.id, 
+			  data: { 
+				is_syncing: false, 
+				last_sync: null, 
+				next_sync: { enabled: false } 
+			  } 
+			};
+		  }
+		});
 
-  const startPolling = () => {
-    // Poll every 3 seconds
-    intervalRef.current = setInterval(() => {
-      loadSyncStatuses();
-    }, 3000);
-  };
+		const results = await Promise.allSettled(statusPromises);
+		const newStatuses = {};
+		let hasActiveSyncs = false;
+
+		results.forEach((result) => {
+		  if (result.status === 'fulfilled' && result.value) {
+			newStatuses[result.value.storeId] = result.value.data;
+			if (result.value.data.is_syncing) {
+			  hasActiveSyncs = true;
+			}
+		  }
+		});
+
+		setSyncStatuses(newStatuses);
+
+		// Dynamic polling: only poll if there are active syncs
+		if (hasActiveSyncs) {
+		  // Stop existing interval and start fresh
+		  if (intervalRef.current) {
+			clearInterval(intervalRef.current);
+		  }
+		  intervalRef.current = setInterval(loadSyncStatuses, 3000);
+		} else {
+		  // Stop polling when no active syncs
+		  if (intervalRef.current) {
+			clearInterval(intervalRef.current);
+			intervalRef.current = null;
+		  }
+		}
+	  } catch (error) {
+		console.error('Error loading sync statuses:', error);
+		// Stop polling on general error
+		if (intervalRef.current) {
+		  clearInterval(intervalRef.current);
+		  intervalRef.current = null;
+		}
+	  }
+	};
+
+	const startPolling = () => {
+	  // Initial load
+	  loadSyncStatuses();
+	  // The interval will be set dynamically by loadSyncStatuses if needed
+	};
+
 
   const stopPolling = () => {
     if (intervalRef.current) {
