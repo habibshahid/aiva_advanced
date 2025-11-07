@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/etc/aiva-oai/python-service
 Environment="PATH=/etc/aiva-oai/python-service/venv/bin"
-ExecStart=/etc/aiva-oai/python-service/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 5000 --workers 4
+ExecStart=/etc/aiva-oai/python-service/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 62002 --workers 4
 Restart=always
 RestartSec=10
 

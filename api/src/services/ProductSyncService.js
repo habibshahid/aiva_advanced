@@ -153,13 +153,10 @@ class ProductSyncService {
 			});
 		  }
 		});
-<<<<<<< HEAD
 		
 		if (i + concurrency < imagesToProcess.length) {
 			await new Promise(resolve => setTimeout(resolve, this.delayBetweenBatches || 1000));
 		}
-=======
->>>>>>> b31f35a1342b50e33e8ea11c9413eff668723c3d
 	  }
 	  
 	  return results;
