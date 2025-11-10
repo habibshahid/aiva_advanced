@@ -76,7 +76,7 @@ router.get('/', authenticate, checkPermission('calls.view'), async (req, res) =>
         const offset = parseInt(req.query.offset) || 0;
         
         const calls = await CallService.listCalls(
-            req.user.id,
+            req.user.tenant_id,
             req.query,
             limit,
             offset

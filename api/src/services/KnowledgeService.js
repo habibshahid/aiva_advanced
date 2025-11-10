@@ -153,7 +153,8 @@ class KnowledgeService {
       `UPDATE yovo_tbl_aiva_knowledge_bases SET ${fields.join(', ')} WHERE id = ?`,
       values
     );
-
+	
+	this.updateKBMetadata(kbId);
     return this.getKnowledgeBase(kbId);
   }
 
@@ -851,7 +852,7 @@ class KnowledgeService {
 		   WHERE id = ?`,
 		  [
 			documentCount > 0,
-			productCount > 0,
+			productCounts > 0,
 			documentCount,
 			productCounts,
 			kbId
@@ -862,9 +863,9 @@ class KnowledgeService {
 
 		return {
 		  has_documents: documentCount > 0,
-		  has_products: productCount > 0,
+		  has_products: productCounts > 0,
 		  document_count: documentCount,
-		  product_count: productCount
+		  product_count: productCounts
 		};
 
 	  } catch (error) {
