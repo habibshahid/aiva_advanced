@@ -58,9 +58,12 @@ class AgentService {
 			  kb.has_documents,
 			  kb.has_products,
 			  kb.document_count,
-			  kb.product_count
+			  kb.product_count,
+			  ss.shop_domain as shopify_store_url,
+			  ss.access_token as shopify_access_token
 			 FROM yovo_tbl_aiva_agents a
 			 LEFT JOIN yovo_tbl_aiva_knowledge_bases kb ON a.kb_id = kb.id
+			 LEFT JOIN yovo_tbl_aiva_shopify_stores ss ON ss.kb_id = kb.id
 			 WHERE a.id = ?`,
 			[agentId]
 		);
@@ -68,7 +71,6 @@ class AgentService {
         if (agents.length === 0) {
             return null;
         }
-        
         const agent = agents[0];
         
         // Get functions

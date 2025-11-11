@@ -177,8 +177,11 @@ async def search_images(request: ImageSearchRequest):
     try:
         start_time = time.time()
         
+        from app.main import get_image_processor
+        processor = get_image_processor()
+        
         # Initialize search service
-        search_service = ImageSearchService(request.kb_id)
+        search_service = ImageSearchService(request.kb_id, image_processor=processor)
         
         # Perform search based on type
         if request.search_type == "text":

@@ -98,60 +98,6 @@ class ImageProcessor:
             logger.error(f"Error generating text embedding: {e}")
             raise
     
-    async def generate_image_embedding_old(self, image: Image.Image) -> Dict[str, Any]:
-        """
-        Generate embedding for an image
-        
-        Args:
-            image: PIL Image object
-            
-        Returns:
-            Dict with embedding and metadata
-        """
-        start_time = time.time()
-        
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                
-            # Preprocess image
-            inputs = self.processor(
-                images=image,
-                return_tensors="pt",
-                padding=True
-            )
-            
-            # Move to GPU if available
-            if torch.cuda.is_available():
-                inputs = {k: v.to("cuda") for k, v in inputs.items()}
-            
-            # Generate image features
-            with torch.no_grad():
-                image_features = self.model.get_image_features(**inputs)
-                # Normalize
-                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            
-            # Convert to list
-            embedding = image_features.cpu().numpy().tolist()[0]
-            
-            del inputs, image_features
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                
-            processing_time = int((time.time() - start_time) * 1000)
-            
-            return {
-                "embedding": embedding,
-                "dimension": len(embedding),
-                "model": "openai/clip-vit-base-patch32",
-                "processing_time_ms": processing_time,
-                "image_size": image.size
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating image embedding: {e}")
-            raise
-    
     async def generate_image_embedding(self, image: Image.Image) -> Dict[str, Any]:
         """
         Generate embedding for an image - QUEUED

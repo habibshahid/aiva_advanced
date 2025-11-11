@@ -679,6 +679,148 @@ class ShopifyService {
     
     return stats;
   }
+  
+  /**
+   * Get products by their Shopify product IDs
+   * @param {Object} params
+   * @returns {Promise<Object>} Products
+   */
+
+  async getProductsByIds(tenantId, storeUrl, accessToken, productIds) {
+    try {
+      if (!productIds || productIds.length === 0) {
+        return { products: [] };
+      }
+
+      console.log(`Fetching ${productIds.length} products by ID from database...`);
+
+      // ✅ FIXED: Extract handle from shopify_metadata JSON
+      const [dbProducts] = await db.query(`
+        SELECT 
+          p.id,
+          p.shopify_product_id,
+          p.title,
+          p.description,
+          p.vendor,
+          p.product_type,
+          p.tags,
+          p.price,
+          p.compare_at_price,
+          p.status,
+          p.total_inventory,
+          p.shopify_metadata,
+          JSON_UNQUOTE(JSON_EXTRACT(p.shopify_metadata, '$.handle')) as handle,
+          s.shop_domain
+        FROM yovo_tbl_aiva_products p
+        LEFT JOIN yovo_tbl_aiva_shopify_stores s ON p.shopify_store_id = s.id
+        WHERE p.id IN (?)
+        AND p.tenant_id = ?
+        AND p.status = 'active'
+      `, [productIds, tenantId]);
+
+      if (dbProducts.length === 0) {
+        console.log('No products found in database');
+        return { products: [] };
+      }
+
+      console.log(`Found ${dbProducts.length} products in database`);
+
+      // Enrich with images and variants
+      const enrichedProducts = await Promise.all(
+        dbProducts.map(async (product) => {
+          // Get product images
+          const [images] = await db.query(`
+            SELECT 
+              pi.alt_text,
+              pi.shopify_image_id,
+              i.id as image_id,
+              i.metadata
+            FROM yovo_tbl_aiva_product_images pi
+            JOIN yovo_tbl_aiva_images i ON pi.image_id = i.id
+            WHERE pi.product_id = ?
+          `, [product.id]);
+
+          // Extract shopify_image_src from metadata JSON
+          const productImages = images.map(img => {
+            let metadata = img.metadata;
+            if (typeof metadata === 'string') {
+              metadata = JSON.parse(metadata);
+            }
+            
+            return {
+              src: metadata?.shopify_image_src || null,
+              position: img.position,
+              alt: img.alt_text
+            };
+          }).filter(img => img.src);
+
+          // Get variants
+          const [variants] = await db.query(`
+            SELECT 
+              shopify_variant_id as variant_id,
+              title,
+              price,
+              compare_at_price,
+              sku,
+              inventory_quantity
+            FROM yovo_tbl_aiva_product_variants
+            WHERE product_id = ?
+          `, [product.id]);
+
+          return {
+            id: product.id,
+            shopify_product_id: product.shopify_product_id,
+            title: product.title,
+            description: product.description,
+            vendor: product.vendor,
+            product_type: product.product_type,
+            tags: product.tags ? (typeof product.tags === 'string' ? JSON.parse(product.tags) : product.tags) : [],
+            handle: product.handle,  // ✅ Now extracted from JSON
+            shop_domain: product.shop_domain,  // ✅ Added shop domain
+            status: product.status,
+            images: productImages,
+            image_url: productImages[0]?.src || null,
+            variants: variants.map(v => ({
+              id: v.variant_id,
+              title: v.title,
+              price: v.price,
+              compare_at_price: v.compare_at_price,
+              sku: v.sku,
+              inventory_quantity: v.inventory_quantity,
+            }))
+          };
+        })
+      );
+
+      return { products: enrichedProducts };
+
+    } catch (error) {
+      console.error('Error getting products by IDs:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch single product by ID from Shopify (kept for fallback)
+   * @param {string} shopDomain
+   * @param {string} accessToken
+   * @param {string} productId
+   * @returns {Promise<Object>}
+   */
+  async fetchProductById(shopDomain, accessToken, productId) {
+    await this.rateLimiter();
+
+    const url = `https://${shopDomain}/admin/api/2024-01/products/${productId}.json`;
+    
+    const response = await axios.get(url, {
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return response.data.product;
+  }
 }
 
 module.exports = new ShopifyService();

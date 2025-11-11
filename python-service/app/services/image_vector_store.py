@@ -107,7 +107,8 @@ class ImageVectorStore:
             # Determine index type based on size
             if len(images) > 1000:
                 logger.info(f"Creating HNSW index for {len(images)} images")
-                self.index = faiss.IndexHNSWFlat(self.dimension, 32)
+                # ✅ FIX: Use Inner Product metric, not L2 distance!
+                self.index = faiss.IndexHNSWFlat(self.dimension, 32, faiss.METRIC_INNER_PRODUCT)
                 self.index.hnsw.efConstruction = 200
                 self.index.hnsw.efSearch = 50
             else:
@@ -164,7 +165,7 @@ class ImageVectorStore:
         try:
             # Convert to numpy array and normalize
             embedding_array = np.array([embedding], dtype=np.float32)
-            faiss.normalize_L2(embedding_array)
+            #faiss.normalize_L2(embedding_array)
             
             # Add to FAISS index
             self.index.add(embedding_array)
@@ -201,7 +202,7 @@ class ImageVectorStore:
         try:
             # Convert to numpy array and normalize
             query_array = np.array([query_embedding], dtype=np.float32)
-            faiss.normalize_L2(query_array)
+            #faiss.normalize_L2(query_array)
             
             # Search FAISS index
             k_search = min(k * 2, len(self.metadata))  # Get more candidates for filtering
@@ -328,9 +329,10 @@ class ImageVectorStore:
             embeddings = [json.loads(row['embedding']) for row in rows]
             embeddings_array = np.array(embeddings, dtype=np.float32)
             
-            # Create new index
+            # Create new index with proper metric
             if len(embeddings) > 1000:
-                self.index = faiss.IndexHNSWFlat(self.dimension, 32)
+                # ✅ FIX: Use Inner Product metric!
+                self.index = faiss.IndexHNSWFlat(self.dimension, 32, faiss.METRIC_INNER_PRODUCT)
                 self.index.hnsw.efConstruction = 200
                 self.index.hnsw.efSearch = 50
             else:

@@ -17,15 +17,23 @@ logger = logging.getLogger(__name__)
 class ImageSearchService:
     """Service for searching images"""
     
-    def __init__(self, kb_id: str):
+    def __init__(self, kb_id: str, image_processor: ImageProcessor = None):
         """
         Initialize image search service
         
         Args:
             kb_id: Knowledge base ID
+            image_processor: ImageProcessor instance (singleton). If None, creates new instance
         """
         self.kb_id = kb_id
-        self.image_processor = ImageProcessor()
+        
+        # Use provided processor or create new one (fallback for compatibility)
+        if image_processor is not None:
+            self.image_processor = image_processor
+        else:
+            logger.warning("ImageSearchService initialized without singleton processor - creating new instance")
+            self.image_processor = ImageProcessor()
+            
         self.vector_store = ImageVectorStore(kb_id)
     
     async def search_by_text(self, query_text: str, k: int = 5, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
@@ -226,6 +234,10 @@ class ImageSearchService:
                     else:
                         metadata = db_image['metadata']
                 
+                # ✅ REMOVE EMBEDDING FROM METADATA
+                if 'embedding' in metadata:
+                    del metadata['embedding']
+                    
                 # Generate image URL
                 image_url = f"/api/knowledge/{db_image['kb_id']}/images/{db_image['id']}/view"
                 thumbnail_url = db_image['thumbnail_url'] if db_image['thumbnail_url'] else None

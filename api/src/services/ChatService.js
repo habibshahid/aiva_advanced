@@ -8,7 +8,9 @@ const db = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const OpenAI = require('openai');
 const KnowledgeService = require('./KnowledgeService');
+const ShopifyService = require('./ShopifyService');
 const AgentService = require('./AgentService');
+const ProductService = require('./ProductService');
 const CostCalculator = require('../utils/cost-calculator');
 const markdown = require('../utils/markdown');
 
@@ -196,6 +198,10 @@ class ChatService {
   // 🖼️ IMAGE DETECTION - AUTOMATIC SEARCH PATH
   // ============================================
   
+  // ============================================
+  // 🖼️ IMAGE DETECTION - AUTOMATIC SEARCH PATH
+  // ============================================
+  
   if (image) {
     console.log('🖼️ IMAGE DETECTED - Using automatic search path (no LLM decision needed)');
     
@@ -223,7 +229,7 @@ class ChatService {
           tenantId: agent.tenant_id,
           query: message,
           imageBase64: imageBase64,
-          searchType: 'hybrid',
+          searchType: 'image',
           topK: 5,
           filters: {}
         });
@@ -276,10 +282,35 @@ class ChatService {
       try {
         console.log('🛍️ Shopify integration detected - Auto-triggering product search');
         
-        // Strategy 1: Use image search results to build query
+        // ✅ STRATEGY: Direct product lookup from image metadata
+        let productIds = [];
+        let productScores = {}; // Map: product_id → similarity score
         let searchQuery = message;
         
         if (imageSearchResults?.results && imageSearchResults.results.length > 0) {
+          console.log('📦 Extracting product IDs from image search results...');
+          
+          // Extract unique product IDs with their scores
+          imageSearchResults.results.forEach(result => {
+            if (result.metadata?.product_id) {
+              const productId = result.metadata.product_id;
+              
+              // Store the highest score for each product (in case multiple images per product)
+              if (!productScores[productId] || result.score > productScores[productId]) {
+                productScores[productId] = result.score;
+              }
+              
+              productIds.push(productId);
+            }
+          });
+          
+          // Remove duplicates
+          productIds = [...new Set(productIds)];
+          
+          console.log('✅ Found unique product IDs:', productIds);
+          console.log('📊 Product scores:', productScores);
+          
+          // Also build keyword search as fallback
           const topResult = imageSearchResults.results[0];
           const keywords = [];
           
@@ -292,34 +323,133 @@ class ChatService {
           
           if (keywords.length > 0) {
             searchQuery = keywords.join(' ');
-            console.log('📝 Enhanced search query from image metadata:', searchQuery);
+            console.log('📝 Backup search query from metadata:', searchQuery);
           }
         }
         
-        // Strategy 2: If no image results, use LLM to analyze image
-        if (!imageSearchResults?.results || imageSearchResults.results.length === 0) {
-          console.log('🤖 No image results - Using LLM to analyze image for product search');
-          
-          const analysisCompletion = await this.openai.chat.completions.create({
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: 'Extract product attributes from image. Return JSON: {"category":"","color":"","style":"","keywords":[]}'
-              },
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: 'Identify product attributes' },
-                  { type: 'image_url', image_url: { url: image, detail: 'low' }}
-                ]
-              }
-            ],
-            max_tokens: 150,
-            temperature: 0.3
-          });
+        // Strategy 1: Direct product lookup by IDs (if we have them)
+        if (productIds.length > 0) {
+          console.log('🎯 Fetching products directly by IDs:', productIds);
           
           try {
+            const productResults = await ShopifyService.getProductsByIds(
+              agent.tenant_id,
+              agent.shopify_store_url,
+              agent.shopify_access_token,
+              productIds
+            );
+            
+            let products = productResults.products || [];
+            console.log(`📦 Fetched ${products.length} products from database`);
+            
+            // ✅ FIX 1: ATTACH scores to ALL products BEFORE sorting
+            products = products.map(product => {
+              const score = productScores[product.id] || 0;
+              return {
+                ...product,
+                similarity_score: score,
+                match_percentage: Math.round(score * 100)
+              };
+            });
+            
+            // ✅ FIX 2: SORT by similarity_score (now attached to product)
+            products.sort((a, b) => {
+              return b.similarity_score - a.similarity_score; // Descending
+            });
+            
+            shopifyProducts = products;
+            
+            console.log('✅ Products sorted by similarity score');
+            console.log('🏆 Top matches:', shopifyProducts.slice(0, 3).map(p => ({
+              id: p.id,
+              title: p.title,
+              score: p.similarity_score,
+              match: p.match_percentage + '%'
+            })));
+            
+          } catch (directLookupError) {
+            console.error('❌ Direct product lookup failed:', directLookupError);
+            console.error('Stack:', directLookupError.stack);
+            // Fall through to keyword search
+          }
+        }
+        
+        // Strategy 2: Keyword search (if direct lookup didn't work or found nothing)
+        if (shopifyProducts.length === 0 && searchQuery) {
+          console.log('🔍 Falling back to keyword search:', searchQuery);
+          
+          try {
+            // ✅ FIXED: Use ProductService instead of ShopifyService
+            const ProductService = require('./ProductService');
+            
+            const searchResults = await ProductService.listProducts(agent.kb_id, {
+              search: searchQuery,
+              status: 'active',
+              limit: 10,
+              page: 1
+            });
+            
+            // Map products to expected format with handle extraction
+            shopifyProducts = searchResults.products.map(p => {
+              // Extract handle from shopify_metadata
+              let handle = null;
+              if (p.shopify_metadata) {
+                const metadata = typeof p.shopify_metadata === 'string' 
+                  ? JSON.parse(p.shopify_metadata) 
+                  : p.shopify_metadata;
+                handle = metadata.handle;
+              }
+              
+              return {
+                id: p.id,
+                shopify_product_id: p.shopify_product_id,
+                title: p.title,
+                description: p.description,
+                vendor: p.vendor,
+                product_type: p.product_type,
+                tags: p.tags || [],
+                handle: handle,
+                shop_domain: p.shop_domain,
+                status: p.status,
+                image_url: p.image_url || null,
+                variants: [], // listProducts doesn't return variants
+                similarity_score: 0,
+                match_percentage: 0
+              };
+            });
+            
+            console.log(`✅ Keyword search found ${shopifyProducts.length} products`);
+            
+          } catch (searchError) {
+            console.error('❌ Product search error:', searchError);
+            console.error('Stack:', searchError.stack);
+          }
+        }
+        
+        // Strategy 3: LLM image analysis (only if we have no results yet)
+        if (shopifyProducts.length === 0 && (!imageSearchResults?.results || imageSearchResults.results.length === 0)) {
+          console.log('🤖 No results yet - Using LLM to analyze image');
+          
+          try {
+            const analysisCompletion = await this.openai.chat.completions.create({
+              model: agent.chat_model,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'Extract product attributes from image. Return JSON: {"category":"","color":"","style":"","keywords":[]}'
+                },
+                {
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: 'Identify product attributes' },
+                    { type: 'image_url', image_url: { url: image, detail: 'low' }}
+                  ]
+                }
+              ],
+              max_tokens: 150,
+              temperature: 0.3
+            });
+            
             const analysisText = analysisCompletion.choices[0].message.content
               .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const imageAnalysis = JSON.parse(analysisText);
@@ -335,79 +465,112 @@ class ChatService {
             
             if (searchTerms.length > 0) {
               searchQuery = searchTerms.join(' ');
+              
+              // ✅ FIXED: Use ProductService
+              const ProductService = require('./ProductService');
+              
+              const searchResults = await ProductService.listProducts(agent.kb_id, {
+                search: searchQuery,
+                status: 'active',
+                limit: 10,
+                page: 1
+              });
+              
+              // Map products with handle extraction
+              shopifyProducts = searchResults.products.map(p => {
+                let handle = null;
+                if (p.shopify_metadata) {
+                  const metadata = typeof p.shopify_metadata === 'string' 
+                    ? JSON.parse(p.shopify_metadata) 
+                    : p.shopify_metadata;
+                  handle = metadata.handle;
+                }
+                
+                return {
+                  id: p.id,
+                  shopify_product_id: p.shopify_product_id,
+                  title: p.title,
+                  description: p.description,
+                  vendor: p.vendor,
+                  product_type: p.product_type,
+                  tags: p.tags || [],
+                  handle: handle,
+                  shop_domain: p.shop_domain,
+                  image_url: p.image_url || null,
+                  variants: [],
+                  similarity_score: 0,
+                  match_percentage: 0
+                };
+              });
             }
             
-            // Track LLM cost using your existing calculator
+            // Track LLM cost
             const analysisCost = CostCalculator.calculateChatCost(
               {
                 prompt_tokens: analysisCompletion.usage.prompt_tokens,
                 completion_tokens: analysisCompletion.usage.completion_tokens,
                 cached_tokens: 0
               },
-              'gpt-4o'
+              agent.chat_model
             );
             
             shopifySearchCost += analysisCost.final_cost;
             
           } catch (parseError) {
-            console.error('Failed to parse image analysis:', parseError);
+            console.error('❌ LLM analysis error:', parseError);
           }
         }
         
-        // Search Shopify products
-        console.log('🔍 Searching Shopify with query:', searchQuery);
-        
-        const shopifyResults = await ShopifyService.searchProducts({
-          tenantId: agent.tenant_id,
-          storeUrl: agent.shopify_store_url,
-          accessToken: agent.shopify_access_token,
-          query: searchQuery,
-          limit: 10
-        });
-        
-        shopifyProducts = shopifyResults.products || [];
-        
         console.log('✅ Shopify search completed:', {
-          products_found: shopifyProducts.length
+          products_found: shopifyProducts.length,
+          strategy_used: productIds.length > 0 ? 'direct_lookup' : 'keyword_search'
         });
         
         // Build context from Shopify products
         if (shopifyProducts.length > 0) {
           shopifySearchContext = '\n\n=== MATCHING PRODUCTS FROM SHOPIFY ===\n';
-          shopifySearchContext += 'Found these products matching the image:\n\n';
+          shopifySearchContext += `Found ${shopifyProducts.length} products matching the image:\n\n`;
           
           shopifyProducts.slice(0, 5).forEach((product, index) => {
             shopifySearchContext += `${index + 1}. **${product.title}**\n`;
             
+            // Add match percentage if available
+            if (product.match_percentage > 0) {
+              shopifySearchContext += `   🎯 Match: ${product.match_percentage}% similarity\n`;
+            }
+            
             if (product.variants && product.variants.length > 0) {
               const variant = product.variants[0];
               if (variant.price) {
-                shopifySearchContext += `   Price: $${variant.price}\n`;
+                shopifySearchContext += `   💰 Price: $${variant.price}\n`;
               }
               if (variant.sku) {
-                shopifySearchContext += `   SKU: ${variant.sku}\n`;
+                shopifySearchContext += `   🏷️  SKU: ${variant.sku}\n`;
               }
               if (variant.inventory_quantity !== undefined) {
-                shopifySearchContext += `   Stock: ${variant.inventory_quantity > 0 ? 'Available' : 'Out of Stock'}\n`;
+                shopifySearchContext += `   📦 Stock: ${variant.inventory_quantity > 0 ? 'Available' : 'Out of Stock'}\n`;
               }
             }
             
             if (product.product_type) {
-              shopifySearchContext += `   Category: ${product.product_type}\n`;
+              shopifySearchContext += `   📂 Category: ${product.product_type}\n`;
             }
             
-            if (product.handle) {
-              shopifySearchContext += `   URL: https://${agent.shopify_store_url}/products/${product.handle}\n`;
+            if (product.handle && product.shop_domain) {
+              shopifySearchContext += `   🔗 URL: https://${product.shop_domain}/products/${product.handle}\n`;
             }
             
             shopifySearchContext += '\n';
           });
           
           shopifySearchContext += `=== END OF SHOPIFY PRODUCTS (${shopifyProducts.length} total) ===\n`;
+        } else {
+          shopifySearchContext = '\n\n=== NO MATCHING PRODUCTS ===\nNo products found matching the image.\n';
         }
         
       } catch (error) {
         console.error('❌ Shopify search error:', error);
+        console.error('Error stack:', error.stack);
         shopifySearchContext = '\n\n=== SHOPIFY SEARCH ERROR ===\nUnable to search products.\n';
       }
     }
@@ -532,40 +695,22 @@ class ChatService {
     
     // Add image search cost if present
     if (imageSearchCost > 0) {
-      const imageSearchCostObj = {
+      costs.push({
         final_cost: imageSearchCost,
         base_cost: imageSearchCost,
         markup_cost: 0,
-        profit_margin: 0,
-        breakdown: {
-          operations: [{
-            operation: 'image_search',
-            base_cost: imageSearchCost,
-            markup_cost: 0,
-            total_cost: imageSearchCost
-          }]
-        }
-      };
-      costs.push(imageSearchCostObj);
+        profit_margin: 0
+      });
     }
     
     // Add Shopify search cost if present
     if (shopifySearchCost > 0) {
-      const shopifySearchCostObj = {
+      costs.push({
         final_cost: shopifySearchCost,
         base_cost: shopifySearchCost,
         markup_cost: 0,
-        profit_margin: 0,
-        breakdown: {
-          operations: [{
-            operation: 'shopify_search',
-            base_cost: shopifySearchCost,
-            markup_cost: 0,
-            total_cost: shopifySearchCost
-          }]
-        }
-      };
-      costs.push(shopifySearchCostObj);
+        profit_margin: 0
+      });
     }
 
     const totalCost = CostCalculator.combineCosts(costs);
@@ -663,18 +808,27 @@ class ChatService {
       })) || [],
       products: shopifyProducts.slice(0, 10).map(p => ({
         product_id: p.id,
+        shopify_product_id: p.shopify_product_id,
         title: p.title,
         description: p.description,
         image_url: p.image_url,
         price: p.variants?.[0]?.price,
         sku: p.variants?.[0]?.sku,
         inventory_quantity: p.variants?.[0]?.inventory_quantity,
-        available: p.variants?.[0]?.available,
-        product_type: p.product_type,
+        available: p.variants?.[0]?.inventory_quantity > 0,
+        similarity_score: p.similarity_score || null,
+        match_percentage: p.match_percentage || null,
+        handle: p.handle || null,
         vendor: p.vendor,
-        tags: p.tags,
-        handle: p.handle,
-        url: `https://${agent.shopify_store_url}/products/${p.handle}`,
+        product_type: p.product_type,
+        tags: p.tags || [],
+        // Use shop_domain from product if available, fallback to agent
+        url: (p.handle && (p.shop_domain || agent.shopify_store_url))
+          ? `https://${p.shop_domain || agent.shopify_store_url}/products/${p.handle}` 
+          : null,
+        purchase_url: (p.handle && (p.shop_domain || agent.shopify_store_url))
+          ? `https://${p.shop_domain || agent.shopify_store_url}/products/${p.handle}` 
+          : null,
         metadata: p.metadata || {}
       })),
       function_calls: [],
