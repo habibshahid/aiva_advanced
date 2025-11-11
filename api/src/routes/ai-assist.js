@@ -80,28 +80,37 @@ Generate the instructions:`;
 
                     console.log(`Generated instructions. Cost: $${totalCost.toFixed(6)}`);
 
-                    // Deduct credits
-                    await db.query(
-                        'UPDATE yovo_tbl_aiva_tenants SET credit_balance = credit_balance - ? WHERE id = ?',
-                        [totalCost, req.user.id]
-                    );
-
                     // Log transaction
-                    const logId = uuidv4();
-					const referenceId = uuidv4();
-					
+                  	
 					const [tenantDetails] = await db.query(
-						'select * from yovo_tbl_aiva_tenants where id = ?',
-						[req.user.id]
+						'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?',
+						[req.user.tenant_id]
 					);
-					
-					const balanceAfter = parseFloat(tenantDetails[0].credit_balance) - totalCost;
-					// Log transaction
+
+					// Line 91-93: Check if tenant exists
+					if (!tenantDetails || tenantDetails.length === 0) {
+						return res.status(404).json({ error: 'Tenant not found' });
+					}
+
+					// Line 95-96: Store balance BEFORE deduction
+					const balanceBefore = parseFloat(tenantDetails[0].credit_balance);
+					const balanceAfter = balanceBefore - totalCost;
+
+					// Line 98-102: Deduct credits
+					await db.query(
+						'UPDATE yovo_tbl_aiva_tenants SET credit_balance = credit_balance - ? WHERE id = ?',
+						[totalCost, req.user.tenant_id]
+					);
+
+					// Line 104-113: Log transaction with CORRECT balances
+					const logId = uuidv4();
+					const referenceId = uuidv4();
+
 					await db.query(
 						`INSERT INTO yovo_tbl_aiva_credit_transactions 
 						(id, tenant_id, amount, type, reference_type, note, reference_id, balance_before, balance_after) 
 						VALUES (?, ?, ?, 'deduct', 'AI Generator', ?, ?, ?, ?)`,
-						[logId, req.user.id, totalCost, `AI instruction generation for ${agent_name}`, referenceId, tenantDetails[0].credit_balance, balanceAfter]
+						[logId, req.user.tenant_id, totalCost, `AI instruction generation for ${agent_name}`, referenceId, balanceBefore, balanceAfter]
 					);
 
                     res.json({
