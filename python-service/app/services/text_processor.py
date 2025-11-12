@@ -1,6 +1,7 @@
 """
-Text Processor Service
-Clean, chunk, and analyze text
+Text Processor Service - ENHANCED VERSION
+- Preserves markdown formatting
+- Intelligent chunking that respects structure
 """
 
 import re
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class TextProcessor:
-    """Process and analyze text"""
+    """Process and analyze text with markdown preservation"""
     
     def __init__(self):
         self.roman_urdu_detector = RomanUrduDetector()
@@ -30,13 +31,24 @@ class TextProcessor:
         text: str,
         document_id: str,
         kb_id: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        preserve_formatting: bool = True  # NEW: Option to preserve markdown
     ) -> Dict[str, Any]:
         """
         Process text: clean, chunk, analyze
+        
+        Args:
+            text: Input text (may contain markdown)
+            document_id: Document ID
+            kb_id: Knowledge base ID
+            metadata: Document metadata
+            preserve_formatting: If True, preserve markdown formatting
         """
-        # Clean text
-        cleaned_text = self._clean_text(text)
+        # Clean text (but preserve markdown if requested)
+        if preserve_formatting:
+            cleaned_text = self._clean_text_preserve_markdown(text)
+        else:
+            cleaned_text = self._clean_text(text)
         
         # Detect languages
         languages = self._detect_languages(cleaned_text)
@@ -45,12 +57,15 @@ class TextProcessor:
         # Extract FAQs if present
         faqs = self._extract_faqs(cleaned_text)
         
-        # Create chunks
-        chunks = self.chunker.chunk_text(cleaned_text)
+        # Create chunks (respecting markdown structure if preserved)
+        if preserve_formatting:
+            chunks = self.chunker.chunk_markdown(cleaned_text)
+        else:
+            chunks = self.chunker.chunk_text(cleaned_text)
         
         # Build chunk objects
         chunk_objects = []
-        chunks_by_type = {"text": 0, "faq": 0, "table": 0}
+        chunks_by_type = {"text": 0, "faq": 0, "table": 0, "heading": 0}
         
         for idx, chunk_text in enumerate(chunks):
             chunk_type = self._classify_chunk(chunk_text)
@@ -61,12 +76,13 @@ class TextProcessor:
                 "document_id": document_id,
                 "kb_id": kb_id,
                 "chunk_index": idx,
-                "content": chunk_text,
+                "content": chunk_text,  # Contains markdown if preserve_formatting=True
                 "chunk_type": chunk_type,
                 "metadata": {
                     **metadata,
                     "word_count": len(chunk_text.split()),
-                    "char_count": len(chunk_text)
+                    "char_count": len(chunk_text),
+                    "has_markdown": self._has_markdown_syntax(chunk_text)  # NEW
                 }
             }
             chunk_objects.append(chunk_obj)
@@ -80,15 +96,12 @@ class TextProcessor:
         }
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text"""
+        """Clean and normalize text (removes formatting)"""
         if not text:
             return ""
         
         # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)
-        
-        # Remove special characters but keep Roman Urdu
-        # Don't be too aggressive with cleaning
         
         # Remove null bytes
         text = text.replace('\x00', '')
@@ -97,6 +110,51 @@ class TextProcessor:
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         
         return text.strip()
+    
+    def _clean_text_preserve_markdown(self, text: str) -> str:
+        """
+        Clean text while preserving markdown formatting
+        """
+        if not text:
+            return ""
+        
+        # Remove null bytes
+        text = text.replace('\x00', '')
+        
+        # Normalize line breaks
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Remove excessive blank lines (more than 2)
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
+        
+        # Clean up spaces around markdown syntax
+        # But preserve markdown structure (headers, lists, code blocks)
+        
+        # Remove trailing whitespace from lines
+        lines = text.split('\n')
+        lines = [line.rstrip() for line in lines]
+        text = '\n'.join(lines)
+        
+        return text.strip()
+    
+    def _has_markdown_syntax(self, text: str) -> bool:
+        """Check if text contains markdown syntax"""
+        markdown_patterns = [
+            r'^#+\s',  # Headers
+            r'\*\*.*?\*\*',  # Bold
+            r'\*.*?\*',  # Italic
+            r'`.*?`',  # Code
+            r'^\s*[-*+]\s',  # Lists
+            r'^\s*\d+\.\s',  # Numbered lists
+            r'\|.*\|',  # Tables
+            r'\[.*?\]\(.*?\)',  # Links
+        ]
+        
+        for pattern in markdown_patterns:
+            if re.search(pattern, text, re.MULTILINE):
+                return True
+        
+        return False
     
     def _detect_languages(self, text: str) -> List[str]:
         """Detect languages in text"""
@@ -131,10 +189,17 @@ class TextProcessor:
     
     def _classify_chunk(self, chunk: str) -> str:
         """Classify chunk type"""
-        # Simple classification
+        # Check for headings (markdown or page markers)
+        if re.match(r'^#+\s', chunk) or re.match(r'^\[Page \d+\]', chunk) or re.match(r'^## (Page|Slide|Sheet)', chunk):
+            return 'heading'
+        
+        # FAQ
         if 'Q:' in chunk and 'A:' in chunk:
             return 'faq'
-        elif '|' in chunk and chunk.count('|') > 3:
+        
+        # Table (markdown or pipe-separated)
+        if '|' in chunk and chunk.count('|') > 3:
             return 'table'
-        else:
-            return 'text'
+        
+        # Default
+        return 'text'

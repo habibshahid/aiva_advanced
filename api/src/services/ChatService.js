@@ -1302,7 +1302,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
   // Update session stats
   await this._updateSessionStats(sessionId, totalCost.final_cost);
-
+  const formattedSources = await this._formatKnowledgeSources(knowledgeResults);
+  
   return {
     session_id: sessionId,
     message_id: assistantMessageId,
@@ -1312,18 +1313,10 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
       html: formattedResponse.html,
       markdown: formattedResponse.markdown
     },
-    sources: knowledgeResults?.text_results?.map(r => ({
-      type: 'document',
-      source_id: r.source?.document_id,
-      title: r.source?.document_name,
-      content: r.content,
-      page: r.source?.page,
-      chunk_id: r.source?.chunk_id,
-      relevance_score: r.score,
-      url: r.source?.url,
-      metadata: r.source?.metadata || {}
-    })) || [],
-    images: knowledgeResults?.image_results?.map(img => ({
+    sources: formattedSources.text_results,
+    images: formattedSources.image_results,
+    products: formattedSources.product_results,
+    /*images: knowledgeResults?.image_results?.map(img => ({
       image_id: img.result_id,
       url: img.image_url,
       thumbnail_url: img.thumbnail_url,
@@ -1345,7 +1338,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
       metadata: p.metadata,
       url: p.url,
       purchase_url: p.purchase_url || null
-    })) || [],
+    })) || [],*/
     function_calls: functionCalls,
     llm_decision: {
       collecting_preferences: llmDecision.collecting_preferences,
@@ -1407,6 +1400,22 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	`;
 		systemPrompt += greetingInstructions;
 	  }
+	  
+	  const KNOWLEDGE_FORMATTING_INSTRUCTION = `
+KNOWLEDGE BASE FORMATTING:
+- Knowledge base content is provided with markdown formatting
+- Headers use # syntax (# Header, ## Subheader)
+- Lists use - or * for bullets, 1. 2. 3. for numbered
+- Tables use | pipe | syntax |
+- Bold text uses **bold**, italic uses *italic*
+- When referencing knowledge base content, maintain the structure in your response
+
+IMAGE REFERENCES:
+- Some knowledge base content includes [Image X: Page Y] references
+- When these are present, relevant images are provided separately in the images array
+- Reference these images when answering visual questions
+`;
+	  systemPrompt += KNOWLEDGE_FORMATTING_INSTRUCTION;
 	  
 	  // Determine KB content type
 	  const hasProducts = kbMetadata.has_products || false;
@@ -1912,6 +1921,99 @@ Adapt based on context and user behavior.
     // Inline functions would be handled here
     return { error: 'Function execution not implemented' };
   }
+  
+  async _formatKnowledgeSources(knowledgeResults) {
+	  if (!knowledgeResults || !knowledgeResults.text_results) {
+		return { text_results: [], image_results: [], product_results: [] };
+	  }
+
+	  // Format text results with markdown->HTML conversion
+	  const formattedTextResults = knowledgeResults.text_results.map(r => {
+		// Apply markdown formatting to the content
+		const formatted = formatResponse(r.content);
+		
+		return {
+		  type: 'document',
+		  source_id: r.source?.document_id,
+		  title: r.source?.document_name,
+		  
+		  // UPDATED: Include all three formats
+		  content: formatted.text,           // Plain text (backward compatible)
+		  content_html: formatted.html,      // NEW: HTML formatted
+		  content_markdown: formatted.markdown, // NEW: Markdown formatted
+		  
+		  page: r.source?.page,
+		  chunk_id: r.source?.chunk_id,
+		  relevance_score: r.score,
+		  url: r.source?.url,
+		  metadata: r.source?.metadata || {},
+		  
+		  // NEW: Add image references if present
+		  has_images: r.source?.metadata?.has_images || false,
+		  linked_images: r.source?.metadata?.linked_images || []
+		};
+	  });
+
+	  // Image results - add storage URL transformation
+	  const formattedImageResults = (knowledgeResults.image_results || []).map(img => ({
+		image_id: img.result_id,
+		url: this._getImageUrl(img.image_url),           // NEW: Transform to accessible URL
+		thumbnail_url: this._getThumbnailUrl(img.image_url), // NEW: Generate thumbnail
+		title: img.description,
+		description: img.description,
+		similarity_score: img.score,
+		source_document: img.source?.document_name,
+		page_number: img.metadata?.page_number,          // NEW: Show which page
+		metadata: img.metadata || {}
+	  }));
+
+	  // Product results (unchanged)
+	  const formattedProductResults = (knowledgeResults.product_results || []).map(p => ({
+		product_id: p.product_id,
+		name: p.name,
+		description: p.description,
+		image_url: p.image_url,
+		price: p.price,
+		availability: p.availability,
+		similarity_score: p.score,
+		match_reason: p.scoring_details,
+		metadata: p.metadata,
+		url: p.url,
+		purchase_url: p.purchase_url || null
+	  }));
+
+	  return {
+		text_results: formattedTextResults,
+		image_results: formattedImageResults,
+		product_results: formattedProductResults
+	  };
+	}
+
+	/**
+	 * NEW HELPER METHOD: Transform storage paths to accessible URLs
+	 */
+	_getImageUrl(storagePath) {
+	  if (!storagePath) return null;
+	  
+	  // Transform /etc/aiva-oai/storage/images/... to /api/images/...
+	  if (storagePath.startsWith('/etc/aiva-oai/storage/images/')) {
+		const relativePath = storagePath.replace('/etc/aiva-oai/storage/images/', '');
+		return `${process.env.MANAGEMENT_API_URL || 'http://localhost:62001'}/api/images/${relativePath}`;
+	  }
+	  
+	  return storagePath;
+	}
+
+	/**
+	 * NEW HELPER METHOD: Generate thumbnail URL
+	 */
+	_getThumbnailUrl(storagePath) {
+	  const imageUrl = this._getImageUrl(storagePath);
+	  if (!imageUrl) return null;
+	  
+	  // Add thumbnail parameter
+	  return `${imageUrl}?size=thumbnail`;
+	}
 }
 
 module.exports = new ChatService();

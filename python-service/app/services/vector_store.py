@@ -72,23 +72,23 @@ class VectorStore:
             # This should have been done in the document_processor, but let's handle it here too
             if not doc_exists:
                 logger.warning(f"Document {document_id} not found, creating record...")
-                cursor.execute("""
-                    INSERT INTO yovo_tbl_aiva_documents 
-                    (id, kb_id, tenant_id, filename, original_filename, file_type,
-                     file_size_bytes, storage_url, status, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                """, (
-                    document_id,
-                    kb_id,
-                    tenant_id,
-                    f"doc_{document_id}",
-                    "unknown",
-                    "text/plain",
-                    0,
-                    f"/storage/documents/{document_id}",
-                    "processing"
-                ))
-                logger.info(f"Created document record for {document_id}")
+                #cursor.execute("""
+                #    INSERT INTO yovo_tbl_aiva_documents 
+                #    (id, kb_id, tenant_id, filename, original_filename, file_type,
+                #     file_size_bytes, storage_url, status, created_at, updated_at)
+                #    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                #""", (
+                #    document_id,
+                #    kb_id,
+                #    tenant_id,
+                #    f"doc_{document_id}",
+                #    "unknown",
+                #    "text/plain",
+                #    0,
+                #    f"/storage/documents/{document_id}",
+                #    "processing"
+                #))
+                #logger.info(f"Created document record for {document_id}")
             
             # Create embedding lookup
             embedding_map = {emb["chunk_id"]: emb for emb in embeddings}
@@ -296,14 +296,119 @@ class VectorStore:
             "total_found": len(text_results) + len(product_results),
             "returned": len(text_results),
             "text_results": text_results,
-            "image_results": [],
-            "product_results": product_results,  # ✅ NOW WITH SEMANTIC RESULTS!
+            "image_results": [],  # Will populate below
+            "product_results": product_results,
             "query_tokens": query_tokens,
             "embedding_model": query_embedding_result["model"],
             "chunks_searched": chunks_searched,
             "search_time_ms": search_time,
             "cached": False
         }
+        
+        # ========== FETCH IMAGES FOR DOCUMENTS IN RESULTS ==========
+        image_results = []
+        
+        if text_results:
+            try:
+                # Extract unique document IDs from text results
+                doc_ids = []
+                for result in text_results:
+                    doc_id = None
+                    
+                    # Handle different result formats
+                    if hasattr(result, 'source'):
+                        source = result.source
+                        if isinstance(source, dict):
+                            doc_id = source.get('document_id')
+                        else:
+                            doc_id = getattr(source, 'document_id', None)
+                    elif isinstance(result, dict):
+                        doc_id = result.get('source', {}).get('document_id')
+                    
+                    if doc_id and doc_id not in doc_ids:
+                        doc_ids.append(doc_id)
+                
+                if doc_ids:
+                    import mysql.connector
+                    import os
+                    
+                    conn = mysql.connector.connect(
+                        host=settings.DB_HOST,
+                        port=settings.DB_PORT,
+                        user=settings.DB_USER,
+                        password=settings.DB_PASSWORD,
+                        database=settings.DB_NAME
+                    )
+                    cursor = conn.cursor(dictionary=True)
+                    
+                    try:
+                        # Query images for these documents
+                        placeholders = ','.join(['%s'] * len(doc_ids))
+                        query_sql = f"""
+                            SELECT 
+                                id as image_id,
+                                filename,
+                                width,
+                                height,
+                                storage_url,
+                                metadata,
+                                description
+                            FROM yovo_tbl_aiva_images
+                            WHERE kb_id = %s
+                            AND JSON_EXTRACT(metadata, '$.document_id') IN ({placeholders})
+                            ORDER BY 
+                                JSON_EXTRACT(metadata, '$.page_number'),
+                                JSON_EXTRACT(metadata, '$.image_index')
+                            LIMIT 20
+                        """
+                        
+                        cursor.execute(query_sql, (kb_id, *doc_ids))
+                        images = cursor.fetchall()
+                        
+                        # Generate image URLs
+                        base_url = os.getenv('MANAGEMENT_API_URL', 'http://localhost:5000')
+                        
+                        for img in images:
+                            # Parse metadata
+                            img_metadata = {}
+                            if img.get('metadata'):
+                                try:
+                                    img_metadata = json.loads(img['metadata']) if isinstance(img['metadata'], str) else img['metadata']
+                                except:
+                                    pass
+                            
+                            page_number = img_metadata.get('page_number', 0)
+                            document_id = img_metadata.get('document_id', '')
+                            
+                            image_results.append({
+                                "image_id": img['image_id'],
+                                "url": f"/aiva/api/knowledge/{kb_id}/images/{img['image_id']}/view",
+                                "thumbnail_url": f"/aiva/api/knowledge/{kb_id}/images/{img['image_id']}/view",
+                                "title": f"Image from page {page_number}",
+                                "description": img.get('description') or f"Image from document",
+                                "page_number": page_number,
+                                "width": img.get('width'),
+                                "height": img.get('height'),
+                                "similarity_score": 0.0,
+                                "source_document": img.get('filename', 'document'),
+                                "metadata": {
+                                    "document_id": document_id,
+                                    "page_number": page_number
+                                }
+                            })
+                        
+                        print(f"📷 Found {len(image_results)} images for search results")
+                        
+                    finally:
+                        cursor.close()
+                        conn.close()
+                        
+            except Exception as e:
+                print(f"Error fetching images: {e}")
+                # Don't fail the search if image fetching fails
+        
+        # Update search_results with images
+        search_results["image_results"] = image_results
         
         # CACHE THE RESULTS (if enabled and text search)
         if self.enable_cache and search_type == "text" and len(text_results) > 0:

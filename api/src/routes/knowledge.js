@@ -642,7 +642,7 @@ router.post('/search', authenticate, async (req, res) => {
 		returned: result.results?.returned || 0,
 		search_type: 'text',
 		text_results: result.results?.text_results || [],
-		image_results: [],
+		image_results: result.results?.image_results || [],
 		product_results: [],
 		query_tokens: result.results?.query_tokens,
 		embedding_model: result.results?.embedding_model,

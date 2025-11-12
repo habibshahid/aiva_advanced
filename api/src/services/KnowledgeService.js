@@ -173,6 +173,7 @@ class KnowledgeService {
     // Delete files from storage
     for (const doc of documents) {
       try {
+		console.log(doc.storage_url);
         await fs.unlink(process.env.APP_BASE_URL + doc.storage_url);
       } catch (error) {
         console.error(`Failed to delete file ${doc.storage_url}:`, error);
@@ -249,6 +250,7 @@ class KnowledgeService {
       const result = await PythonServiceClient.uploadDocument({
         kb_id: kbId,
         tenant_id: tenantId,
+		document_id: documentId,
         file: fileBuffer,
         filename: filename,
         file_type: path.extname(filename).substring(1),

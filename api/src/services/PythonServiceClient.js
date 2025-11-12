@@ -80,14 +80,16 @@ class PythonServiceClient {
    * @param {Object} params.metadata - Additional metadata
    * @returns {Promise<Object>} Processing result
    */
-  async uploadDocument({ kb_id, tenant_id, file, filename, file_type, metadata = {} }) {
+   
+  async uploadDocument({ kb_id, tenant_id, document_id, file, filename, file_type, metadata = {} }) {
     try {
       const FormData = require('form-data');
       const formData = new FormData();
       
+      formData.append('file', file, filename);
       formData.append('kb_id', kb_id);
       formData.append('tenant_id', tenant_id);
-      formData.append('file', file, filename);
+	  formData.append('document_id', document_id);
       formData.append('metadata', JSON.stringify(metadata));
 
       const response = await this.client.post('/api/v1/documents/upload', formData, {

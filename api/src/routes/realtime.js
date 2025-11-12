@@ -51,7 +51,7 @@ router.post('/token/deepgram', verifyToken, async (req, res) => {
                 voice: agent.deepgram_voice || 'aura-asteria-en',
                 language: agent.deepgram_language || 'en',
                 instructions: agent.instructions,
-				greeting: agent.greeting
+                greeting: agent.greeting
             }
         });
         
@@ -66,8 +66,8 @@ router.post('/token', verifyToken, async (req, res) => {
         const { agent_id } = req.body;
         // Get agent to determine model
         const agent = await db.query(
-            'SELECT model, voice FROM yovo_tbl_aiva_agents WHERE id = ?',
-            [agent_id]
+            'SELECT model, voice FROM yovo_tbl_aiva_agents WHERE id = ? AND tenant_id = ?',
+            [agent_id, req.user.id]
         );
         
         if (!agent || agent.length === 0) {
@@ -101,18 +101,18 @@ router.post('/token', verifyToken, async (req, res) => {
             
             response.on('end', async () => {
                 const jsonData = JSON.parse(data);
-				const session_id = uuidv4();
-				
-				await db.query(
+                const session_id = uuidv4();
+                
+                await db.query(
                     `INSERT INTO yovo_tbl_aiva_call_logs 
                     (id, session_id, tenant_id, agent_id, caller_id, start_time, status, asterisk_port) 
                     VALUES (?, ?, ?, ?, ?, NOW(), ?, ?)`,
                     [session_id, session_id, req.user.id, agent_id, 'web-test', 'in_progress', 0]
                 );
-				
+                
                 res.json({
                     ephemeral_key: jsonData.client_secret.value,
-					session_id: session_id
+                    session_id: session_id
                 });
             });
         });
@@ -141,6 +141,21 @@ router.post('/finalize', verifyToken, async (req, res) => {
         const durationMinutes = duration_ms / 60000;
         const estimatedCost = durationMinutes * 0.024; // Using mini pricing
         
+        // FIXED: Get tenant details BEFORE deduction to get correct balance_before
+        const [tenantDetails] = await db.query(
+            'SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?',
+            [req.user.id]
+        );
+        
+        // FIXED: Check if tenant exists
+        if (!tenantDetails || tenantDetails.length === 0) {
+            return res.status(404).json({ error: 'Tenant not found' });
+        }
+        
+        // FIXED: Calculate balances correctly
+        const balanceBefore = parseFloat(tenantDetails[0].credit_balance);
+        const balanceAfter = balanceBefore - estimatedCost;
+        
         // Update call log
         await db.query(
             `UPDATE yovo_tbl_aiva_call_logs 
@@ -148,11 +163,12 @@ router.post('/finalize', verifyToken, async (req, res) => {
                 duration_seconds = ?,
                 final_cost = ?,
                 status = 'completed'
-            WHERE session_id = ? AND tenant_id = ?`,
+            WHERE session_id = ?
+            AND tenant_id = ?`,
             [Math.floor(duration_ms / 1000), estimatedCost, session_id, req.user.tenant_id]
         );
         
-        // Deduct credits
+        // FIXED: Deduct credits
         await db.query(
             `UPDATE yovo_tbl_aiva_tenants 
             SET credit_balance = credit_balance - ? 
@@ -160,19 +176,14 @@ router.post('/finalize', verifyToken, async (req, res) => {
             [estimatedCost, req.user.tenant_id]
         );
         
-		const logId = uuidv4();
-        // Log transaction
-		const [tenantDetails] = await db.query(
-			'select * from yovo_tbl_aiva_tenants where id = ?',
-			[req.user.id]
-		);
-		const balanceAfter = parseFloat(tenantDetails[0].credit_balance) - estimatedCost;
-		
+        // FIXED: Log transaction with correct balance_before and balance_after
+        const logId = uuidv4();
+        
         await db.query(
             `INSERT INTO yovo_tbl_aiva_credit_transactions 
             (id, tenant_id, amount, type, reference_type, note, reference_id, balance_before, balance_after) 
-            VALUES (?, ?, ?, 'deduct', 'test call', ?, (SELECT id FROM yovo_tbl_aiva_call_logs WHERE session_id = ?), (SELECT credit_balance FROM yovo_tbl_aiva_tenants WHERE id = ?), ?)`,
-            [logId, req.user.id, estimatedCost, 'Test call charge', session_id, req.user.tenant_id, balanceAfter]
+            VALUES (?, ?, ?, 'deduct', 'test call', ?, (SELECT id FROM yovo_tbl_aiva_call_logs WHERE session_id = ?), ?, ?)`,
+            [logId, req.user.id, estimatedCost, 'Test call charge', session_id, balanceBefore, balanceAfter]
         );
         
         res.json({ 

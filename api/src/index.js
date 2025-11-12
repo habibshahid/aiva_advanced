@@ -20,6 +20,7 @@ const conversationStrategyRoutes = require('./routes/conversationStrategy');
 const usersRoutes = require('./routes/users');
 const publicChatRoutes = require('./routes/public-chat');
 const widgetRoutes = require('./routes/widget');
+const imagesRoutes = require('./routes/images');
 
 const app = express();
 const PORT = process.env.API_PORT || 62001;
@@ -113,6 +114,7 @@ app.use('/api/knowledge', knowledgeRoutes);
 app.use('/api/shopify', shopifyRoutes);
 app.use('/api/conversation-strategy', conversationStrategyRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/images', imagesRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {

@@ -47,6 +47,7 @@ async def upload_document(
     file: UploadFile = File(...),
     kb_id: str = Form(...),
     tenant_id: str = Form(...),
+    document_id: str = Form(...),
     metadata: Optional[str] = Form("{}")
 ):
     """
@@ -69,7 +70,7 @@ async def upload_document(
             )
         
         # Generate document ID
-        document_id = str(uuid.uuid4())
+        #document_id = str(uuid.uuid4())
         
         # Process document
         result = await document_processor.process_document(
