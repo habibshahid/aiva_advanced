@@ -33,6 +33,7 @@ from app.config import settings
 from app.services.text_processor import TextProcessor
 from app.services.embeddings import EmbeddingService
 from app.services.vector_store import VectorStore
+from app.services.pdf_image_extractor import PDFImageExtractor
 from app.models.responses import DocumentProcessingResult, EmbeddingResult
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class DocumentProcessor:
         self.text_processor = TextProcessor()
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore()
+        self.pdf_image_extractor = PDFImageExtractor()
         
         # NEW: Check if image processor available
         try:
@@ -136,7 +138,14 @@ class DocumentProcessor:
         #)
         
         # NEW: Extract text AND images
-        extraction_result = await self._extract_content(file_content, filename, content_type, document_id, kb_id, tenant_id)
+        extraction_result = await self._extract_content(
+            file_content, 
+            filename, 
+            content_type,
+            document_id=document_id,  # ✅ Added
+            kb_id=kb_id,              # ✅ Added
+            tenant_id=tenant_id       # ✅ Added
+        )
         
         # Process text with markdown preservation
         processed = await self.text_processor.process_text(
@@ -148,7 +157,7 @@ class DocumentProcessor:
                 "filename": filename,
                 "content_type": content_type,
                 "pages": extraction_result.get("pages", 0),
-                "has_images": extraction_result.get("images", 0) > 0  # NEW
+                "extracted_images": extraction_result.get("images", 0)  # ✅ Added
             },
             preserve_formatting=True  # NEW: Preserve markdown
         )
@@ -201,15 +210,31 @@ class DocumentProcessor:
         file_content: bytes,
         filename: str,
         content_type: str,
-        document_id: str,  # NEW
-        kb_id: str,  # NEW
-        tenant_id: str  # NEW
+        document_id: str = None,  # ✅ Added
+        kb_id: str = None,        # ✅ Added
+        tenant_id: str = None     # ✅ Added
     ) -> Dict[str, Any]:
-        """Extract content from different file types"""
+        """
+        Extract content from different file types
+        
+        Args:
+            file_content: File content as bytes
+            filename: Original filename
+            content_type: MIME type
+            document_id: Document ID (for image extraction)
+            kb_id: Knowledge base ID (for image extraction)
+            tenant_id: Tenant ID (for image extraction)
+        """
         file_ext = filename.lower().split('.')[-1]
         
         if file_ext == 'pdf' or 'pdf' in content_type:
-            return await self._extract_pdf(file_content, document_id, kb_id, tenant_id)
+            # ✅ Pass IDs to PDF extraction for image handling
+            return await self._extract_pdf(
+                file_content,
+                document_id=document_id,
+                kb_id=kb_id,
+                tenant_id=tenant_id
+            )
         elif file_ext in ['docx', 'doc'] or 'word' in content_type:
             return await self._extract_docx(file_content)
         elif file_ext in ['pptx', 'ppt'] or 'presentation' in content_type:
@@ -223,241 +248,190 @@ class DocumentProcessor:
         else:
             raise ValueError(f"Unsupported file type: {file_ext}")
     
+    
     async def _extract_pdf(
         self, 
-        file_content: bytes,
-        document_id: str,
-        kb_id: str,
-        tenant_id: str
+        file_content: bytes, 
+        document_id: str = None, 
+        kb_id: str = None, 
+        tenant_id: str = None
     ) -> Dict[str, Any]:
         """
-        Extract text AND images from PDF with markdown formatting
+        Extract text AND images from PDF
+        
+        Args:
+            file_content: PDF file bytes
+            document_id: Document ID (required for image extraction)
+            kb_id: Knowledge base ID (required for image extraction)
+            tenant_id: Tenant ID (required for image extraction)
         """
-        
-        # ========== ADD THESE DEBUG LINES AT THE START ==========
-        print(f"**********_extract_pdf*********** {document_id}")
-        print(f"="*80)
-        print(f"🔍 DEBUG: Starting PDF extraction")
-        print(f"  Document ID: {document_id}")
-        print(f"  KB ID: {kb_id}")
-        print(f"  File size: {len(file_content)} bytes")
-        print(f"  PYMUPDF_AVAILABLE: {PYMUPDF_AVAILABLE}")
-        print(f"  self.image_processor exists: {self.image_processor is not None}")
-        print(f"="*80)
-        # ========== END DEBUG ==========
-        
         try:
+            import fitz  # PyMuPDF
+            from pypdf import PdfReader
+            
+            # Extract text using PyPDF2
+            pdf_file = io.BytesIO(file_content)
+            reader = PdfReader(pdf_file)
+            
             text_parts = []
-            total_pages = 0
-            images_extracted = 0
-            image_metadata_list = []
+            total_pages = len(reader.pages)
             
-            if PYMUPDF_AVAILABLE:
-                # ========== ADD THIS DEBUG ==========
-                print(f"✓ Using PyMuPDF for PDF processing")
-                # ========== END DEBUG ==========
-                
-                # Use PyMuPDF for better text extraction and image support
-                pdf_document = fitz.open(stream=file_content, filetype="pdf")
-                total_pages = len(pdf_document)
-                
-                # ========== ADD THIS DEBUG ==========
-                print(f"  Total pages in PDF: {total_pages}")
-                # ========== END DEBUG ==========
-                
-                for page_num in range(total_pages):
-                    page = pdf_document[page_num]
-                    page_number = page_num + 1
+            for page_num, page in enumerate(reader.pages, 1):
+                text = page.extract_text()
+                if text:
+                    text_parts.append(f"[Page {page_num}]\n{text}")
+            
+            full_text = "\n\n".join(text_parts)
+            
+            # Extract images if document_id, kb_id, and tenant_id are provided
+            extracted_images = []
+            image_count = 0
+            
+            if document_id and kb_id and tenant_id:
+                try:
+                    logger.info(f"Extracting images from PDF document {document_id}...")
                     
-                    # Extract text with structure
-                    text = page.get_text("text")
+                    # Extract images using PyMuPDF
+                    extracted_images = await self.pdf_image_extractor.extract_pdf_images(
+                        pdf_content=file_content,
+                        document_id=document_id,
+                        kb_id=kb_id,
+                        tenant_id=tenant_id
+                    )
                     
-                    # Format with markdown
-                    if text.strip():
-                        formatted_text = f"## Page {page_number}\n\n{text}"
-                        text_parts.append(formatted_text)
+                    image_count = len(extracted_images)
+                    logger.info(f"✅ Extracted {image_count} images from PDF")
                     
-                    # NEW: Extract images from this page
-                    if self.image_processor:
-                        # ========== ADD THIS DEBUG ==========
-                        print(f"  Page {page_number}: Checking for images...")
-                        # ========== END DEBUG ==========
+                    # Process each extracted image for embeddings
+                    if image_count > 0:
+                        await self._process_extracted_images(extracted_images, kb_id, tenant_id)
                         
-                        image_list = page.get_images(full=True)
-                        
-                        # ========== ADD THIS DEBUG ==========
-                        print(f"  Page {page_number}: Found {len(image_list)} images")
-                        # ========== END DEBUG ==========
-                        
-                        for img_index, img in enumerate(image_list):
-                            try:
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"    Processing image {img_index + 1}/{len(image_list)} on page {page_number}...")
-                                # ========== END DEBUG ==========
-                                
-                                xref = img[0]
-                                base_image = pdf_document.extract_image(xref)
-                                image_bytes = base_image["image"]
-                                image_ext = base_image["ext"]
-                                
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      Image extracted: format={image_ext}, size={len(image_bytes)} bytes")
-                                # ========== END DEBUG ==========
-                                
-                                # Create PIL Image
-                                pil_image = Image.open(io.BytesIO(image_bytes))
-                                
-                                # Skip tiny images (likely spacers/icons)
-                                if pil_image.width < 10 or pil_image.height < 10 or len(image_bytes) < 500:
-                                    print(f"      ⚠ Skipping tiny/icon image ({pil_image.width}x{pil_image.height}, {len(image_bytes)} bytes)", flush=True)
-                                    continue
-
-                                # Simple RGB conversion
-                                if pil_image.mode != 'RGB':
-                                    print(f"      Converting {pil_image.mode} → RGB", flush=True)
-                                    # Handle transparency
-                                    if pil_image.mode in ('RGBA', 'LA', 'PA', 'P'):
-                                        background = Image.new('RGB', pil_image.size, (255, 255, 255))
-                                        if 'A' in pil_image.mode:
-                                            background.paste(pil_image, mask=pil_image.split()[-1])
-                                        else:
-                                            pil_image = pil_image.convert('RGBA')
-                                            background.paste(pil_image, mask=pil_image.split()[-1])
-                                        pil_image = background
-                                    else:
-                                        pil_image = pil_image.convert('RGB')
-                                
-                                # Generate unique image ID
-                                image_id = str(uuid.uuid4())
-                                
-                                # Save image to storage
-                                storage_dir = Path(settings.STORAGE_PATH) / "images" / kb_id
-                                storage_dir.mkdir(parents=True, exist_ok=True)
-                                image_path = storage_dir / f"{image_id}.{image_ext}"
-                                
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      Saving to: {image_path}")
-                                # ========== END DEBUG ==========
-                                
-                                pil_image.save(str(image_path))
-                                
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      ✓ Image saved successfully")
-                                print(f"      Generating CLIP embedding...")
-                                # ========== END DEBUG ==========
-                                
-                                try:
-                                    # Generate CLIP embedding
-                                    embedding_result = await self.image_processor.generate_image_embedding(pil_image)
-                                except Exception as clip_error:
-                                    print(f"      ⚠ CLIP failed: {clip_error}, using dummy embedding", flush=True)
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      ✓ CLIP embedding generated (dimension: {embedding_result['dimension']})")
-                                # ========== END DEBUG ==========
-                                
-                                # Store image metadata
-                                image_metadata = {
-                                    "image_id": image_id,
-                                    "document_id": document_id,
-                                    "page_number": page_number,
-                                    "image_index": img_index,
-                                    "width": pil_image.width,
-                                    "height": pil_image.height,
-                                    "format": image_ext,
-                                    "storage_path": str(image_path),
-                                    "embedding": embedding_result["embedding"],
-                                    "embedding_dimension": embedding_result["dimension"]
-                                }
-                                
-                                image_metadata_list.append(image_metadata)
-                                images_extracted += 1
-                                
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      ✓ Image {img_index + 1} complete. Total extracted so far: {images_extracted}")
-                                # ========== END DEBUG ==========
-                                
-                                # Add image reference to text
-                                image_ref = f"\n\n*[Image {images_extracted}: Page {page_number}]*\n\n"
-                                if text_parts:
-                                    text_parts[-1] += image_ref
-                                
-                            except Exception as img_error:
-                                # ========== ADD THIS DEBUG ==========
-                                print(f"      ✗ ERROR processing image {img_index + 1}: {img_error}")
-                                import traceback
-                                print(f"      Traceback: {traceback.format_exc()}")
-                                # ========== END DEBUG ==========
-                                continue
-                    else:
-                        # ========== ADD THIS DEBUG ==========
-                        print(f"  Page {page_number}: Skipping image extraction (no image_processor)")
-                        # ========== END DEBUG ==========
-                
-                pdf_document.close()
-                
-                # ========== ADD THIS DEBUG ==========
-                print(f"✓ PDF processing complete")
-                print(f"  Total images extracted: {images_extracted}")
-                print(f"  Image metadata entries: {len(image_metadata_list)}")
-                # ========== END DEBUG ==========
-                
+                except Exception as e:
+                    logger.error(f"Error extracting images from PDF: {e}")
+                    # Don't fail the whole document processing if image extraction fails
+                    image_count = 0
             else:
-                # ========== ADD THIS DEBUG ==========
-                logger.error("⚠ Using pypdf fallback (no image extraction)")
-                # ========== END DEBUG ==========
-                
-                # Fallback to pypdf (no image extraction)
-                logger.warning("Using pypdf fallback - images will not be extracted")
-                pdf_file = io.BytesIO(file_content)
-                reader = PdfReader(pdf_file)
-                total_pages = len(reader.pages)
-                
-                for page_num, page in enumerate(reader.pages, 1):
-                    text = page.extract_text()
-                    if text:
-                        formatted_text = f"## Page {page_num}\n\n{text}"
-                        text_parts.append(formatted_text)
-            
-            full_text = "\n\n---\n\n".join(text_parts)
-            
-            # NEW: Store images in database if extracted
-            if image_metadata_list:
-                # ========== ADD THIS DEBUG ==========
-                print(f"Storing {len(image_metadata_list)} images in database...")
-                # ========== END DEBUG ==========
-                
-                await self._store_images_in_db(image_metadata_list, kb_id, tenant_id)
-                
-                # ========== ADD THIS DEBUG ==========
-                print(f"✓ Images stored in database")
-                # ========== END DEBUG ==========
-            
-            # ========== ADD THIS DEBUG ==========
-            logger.error("="*80)
-            print(f"FINAL RESULT:")
-            print(f"  Pages: {total_pages}")
-            print(f"  Images: {images_extracted}")
-            print(f"  Text length: {len(full_text)} characters")
-            logger.error("="*80)
-            # ========== END DEBUG ==========
+                logger.warning("Skipping image extraction: document_id, kb_id, or tenant_id not provided")
             
             return {
                 "text": full_text,
                 "pages": total_pages,
-                "images": images_extracted,  # UPDATED: Real count
-                "tables": 0,
-                "image_metadata": image_metadata_list  # NEW
+                "images": image_count,
+                "extracted_images": extracted_images,  # Image metadata list
+                "tables": 0  # TODO: Detect tables
             }
             
         except Exception as e:
-            # ========== ADD THIS DEBUG ==========
-            print(f"✗ PDF extraction FAILED: {e}")
-            import traceback
-            print(f"Full traceback: {traceback.format_exc()}")
-            # ========== END DEBUG ==========
+            logger.error(f"PDF extraction error: {e}")
             raise
 
 
+    async def _process_extracted_images(
+        self, 
+        extracted_images: List[Dict[str, Any]], 
+        kb_id: str, 
+        tenant_id: str
+    ):
+        """
+        Process extracted PDF images: generate embeddings and save to database
+        
+        Args:
+            extracted_images: List of extracted image metadata
+            kb_id: Knowledge base ID
+            tenant_id: Tenant ID
+        """
+        try:
+            from app.main import get_image_processor
+            from app.services.image_vector_store import ImageVectorStore
+            import mysql.connector
+            from app.config import settings
+            from PIL import Image
+            
+            processor = get_image_processor()
+            vector_store = ImageVectorStore(kb_id)
+            
+            # Database connection
+            conn = mysql.connector.connect(
+                host=settings.DB_HOST,
+                user=settings.DB_USER,
+                password=settings.DB_PASSWORD,
+                database=settings.DB_NAME
+            )
+            cursor = conn.cursor()
+            
+            logger.info(f"Processing {len(extracted_images)} extracted images...")
+            
+            for img_meta in extracted_images:
+                try:
+                    # Read image file from disk
+                    image_path = img_meta["storage_path"]
+                    
+                    with open(image_path, "rb") as f:
+                        image_bytes = f.read()
+                    
+                    # Verify file was saved correctly
+                    if len(image_bytes) == 0:
+                        logger.error(f"Image file is empty: {image_path}")
+                        continue
+                    
+                    # Open image with PIL
+                    pil_image = Image.open(io.BytesIO(image_bytes))
+                    
+                    # Convert to RGB if necessary for CLIP
+                    if pil_image.mode != "RGB":
+                        pil_image = pil_image.convert("RGB")
+                    
+                    # Generate embedding
+                    embedding_result = await processor.generate_image_embedding(pil_image)
+                    
+                    # Save to vector store
+                    await vector_store.store_image(
+                        image_id=img_meta["id"],
+                        embedding=embedding_result["embedding"],
+                        metadata=img_meta
+                    )
+                    
+                    # Save to MySQL database
+                    cursor.execute(
+                        """INSERT INTO yovo_tbl_aiva_images (
+                            id, kb_id, tenant_id, filename, storage_url, content_type,
+                            width, height, file_size_bytes, metadata, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
+                        (
+                            img_meta["id"],
+                            kb_id,
+                            tenant_id,
+                            img_meta["filename"],
+                            img_meta["storage_url"],
+                            img_meta["content_type"],
+                            img_meta["width"],
+                            img_meta["height"],
+                            img_meta["file_size_bytes"],
+                            json.dumps({
+                                "document_id": img_meta["document_id"],
+                                "page_number": img_meta["page_number"],
+                                "image_index": img_meta["image_index"],
+                                "embedding_dimension": img_meta["embedding_dimension"]
+                            })
+                        )
+                    )
+                    
+                    logger.info(f"✅ Processed image {img_meta['id']} from page {img_meta['page_number']}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing image {img_meta.get('id', 'unknown')}: {e}")
+                    continue
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.info(f"✅ Successfully processed all extracted images")
+            
+        except Exception as e:
+            logger.error(f"Error in _process_extracted_images: {e}")
+            raise
+            
     
     async def _store_images_in_db(
         self, 
