@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader, ExternalLink, ShoppingBag } from 'lucide-react';
+import { Send, Loader, ExternalLink, ShoppingBag, Image as ImageIcon } from 'lucide-react';
 import axios from 'axios';
 
 /**
@@ -174,6 +174,7 @@ const ChatPage = () => {
 			role: msg.role,
 			content: msg.content,
 			html: msg.content_html,
+			formatted_html: msg.formatted_html,
 			sources: msg.sources || [],
 			images: msg.images || [],
 			products: msg.products || [],
@@ -228,6 +229,7 @@ const ChatPage = () => {
           role: 'assistant',
           content: data.response.text || data.response,
           html: data.response.html,
+		  formatted_html: data.formatted_html,
           sources: data.sources || [],
           images: data.images || [],
           products: data.products || [],
@@ -276,7 +278,9 @@ const ChatPage = () => {
         {/* Main text content */}
         <div 
           className="text-sm whitespace-pre-wrap"
-          dangerouslySetInnerHTML={{ __html: message.html || message.content }}
+          dangerouslySetInnerHTML={{ 
+            __html: message.formatted_html || message.html || message.content 
+          }}
         />
 
         {/* Sources */}
@@ -335,22 +339,43 @@ const ChatPage = () => {
         {/* Images */}
         {message.images && message.images.length > 0 && (
           <div className="mt-4 pt-4 border-t border-gray-200">
-            <div className="text-xs font-semibold text-gray-600 mb-3">
-              🖼️ Images ({message.images.length})
+            <div className="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1">
+              <ImageIcon className="w-4 h-4" />
+              Related Images ({message.images.length})
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {message.images.map((image, idx) => (
-                <div key={idx} className="rounded-lg overflow-hidden">
-                  <img 
-                    src={image.url}
-                    alt={image.description || 'Image'}
-                    className="w-full h-auto"
-                  />
-                  {image.description && (
-                    <div className="bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                      {image.description}
-                    </div>
-                  )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {message.images.map((img, idx) => (
+                <div
+                  key={img.image_id || idx}
+                  className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md hover:border-primary-300 transition-all cursor-pointer group"
+                  onClick={() => window.open(img.url, '_blank')}
+                >
+                  <div className="aspect-square bg-gray-100 overflow-hidden">
+                    <img
+                      src={img.thumbnail_url || img.url}
+                      alt={img.title || 'Image'}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
+                      loading="lazy"
+                      onError={(e) => {
+                        e.target.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22200%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2220%22%3EImage%3C/text%3E%3C/svg%3E';
+                      }}
+                    />
+                  </div>
+                  <div className="p-2 bg-white">
+                    <p className="text-xs font-medium text-gray-900 truncate" title={img.title || 'Image'}>
+                      {img.title || 'Image'}
+                    </p>
+                    {img.page_number && (
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Page {img.page_number}
+                      </p>
+                    )}
+                    {img.similarity_score && (
+                      <p className="text-xs text-green-600 font-medium mt-0.5">
+                        {Math.round(img.similarity_score * 100)}% match
+                      </p>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

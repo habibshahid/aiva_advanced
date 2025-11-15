@@ -140,19 +140,48 @@
 	function formatImages(images) {
 	  if (!images || images.length === 0) return '';
 	  
-	  return `
-		<div class="aiva-images">
-		  <div class="aiva-images-header">🖼️ Images (${images.length})</div>
-		  <div class="aiva-images-grid">
-			${images.map(image => `
-			  <div class="aiva-image-item">
-				<img src="${image.url}" alt="${escapeHtml(image.description || 'Image')}" class="aiva-message-image">
-				${image.description ? `<div class="aiva-image-caption">${escapeHtml(image.description)}</div>` : ''}
-			  </div>
-			`).join('')}
-		  </div>
-		</div>
-	  `;
+	  let html = '<div class="aiva-images" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb;">';
+	  html += '<div style="font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">';
+	  html += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>';
+	  html += 'Related Images (' + images.length + ')';
+	  html += '</div>';
+	  
+	  html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;">';
+	  
+	  images.forEach(function(img) {
+		const title = img.title || 'Image';
+		const pageNum = img.page_number || null;
+		const relevance = img.similarity_score ? Math.round(img.similarity_score * 100) : null;
+		const url = img.url || '';
+		const thumbnailUrl = img.thumbnail_url || img.url || '';
+		
+		html += '<div class="aiva-image-item" onclick="window.open(\'' + url + '\', \'_blank\')" style="border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; cursor: pointer; transition: all 0.2s;">';
+		
+		// Image
+		html += '<div style="width: 100%; height: 100px; background: #f3f4f6; overflow: hidden;">';
+		html += '<img src="' + thumbnailUrl + '" alt="' + escapeHtml(title) + '" style="width: 100%; height: 100%; object-fit: cover; display: block;" loading="lazy" onerror="this.src=\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2214%22%3EImage%3C/text%3E%3C/svg%3E\'" />';
+		html += '</div>';
+		
+		// Info
+		html += '<div style="padding: 6px; background: white;">';
+		html += '<div style="font-weight: 500; color: #1f2937; font-size: 10px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</div>';
+		
+		if (pageNum) {
+		  html += '<div style="color: #6b7280; font-size: 9px;">Page ' + pageNum + '</div>';
+		}
+		
+		if (relevance) {
+		  html += '<div style="color: #10b981; font-weight: 500; font-size: 9px;">' + relevance + '% match</div>';
+		}
+		
+		html += '</div>';
+		html += '</div>';
+	  });
+	  
+	  html += '</div>';
+	  html += '</div>';
+	  
+	  return html;
 	}
   // Configuration
   let config = {
@@ -806,6 +835,20 @@
 		  padding-top: 12px;
 		  border-top: 1px solid #e5e7eb;
 		}
+		.aiva-image-item:hover {
+		  border-color: ${config.primaryColor} !important;
+		  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+		  transform: translateY(-2px);
+		}
+
+		.aiva-image-item img {
+		  transition: transform 0.2s;
+		}
+
+		.aiva-image-item:hover img {
+		  transform: scale(1.05);
+		}
+
 		.aiva-images-header {
 		  font-weight: 600;
 		  font-size: 12px;
@@ -1120,7 +1163,7 @@
 		  }
 		  
 		  // Build rich message content
-		  const responseText = data.data.response.html || data.data.response.text || data.data.response;
+		  const responseText = data.data.formatted_html || data.data.response.html || data.data.response.text || data.data.response;
 		  const sources = formatSources(data.data.sources);
 		  const products = formatProducts(data.data.products);
 		  const images = formatImages(data.data.images);

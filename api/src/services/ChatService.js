@@ -13,6 +13,7 @@ const AgentService = require('./AgentService');
 const ProductService = require('./ProductService');
 const CostCalculator = require('../utils/cost-calculator');
 const markdown = require('../utils/markdown');
+const knowledgeFormatter = require('../utils/knowledge-formatter');
 
 class ChatService {
   constructor() {
@@ -993,6 +994,17 @@ class ChatService {
         searchType: 'text'
       });
 
+	  console.log('🔍 Knowledge search results:', {
+		  text_results: searchResult.results?.text_results?.length || 0,
+		  image_results: searchResult.results?.image_results?.length || 0,
+		  product_results: searchResult.results?.product_results?.length || 0
+		});
+
+		// Log first image result to see structure
+		if (searchResult.results?.image_results && searchResult.results.image_results.length > 0) {
+		  console.log('📸 First image result structure:', JSON.stringify(searchResult.results.image_results[0], null, 2));
+		}
+
       knowledgeResults = searchResult.results;
       knowledgeCost = searchResult.cost_breakdown;
       
@@ -1108,6 +1120,16 @@ CRITICAL: Present these products naturally to the user.
       knowledgeResults = searchResult.results;
       knowledgeCost = searchResult.cost_breakdown;
       
+	  console.log('🔍 Knowledge search results:', {
+		  text_results: searchResult.results?.text_results?.length || 0,
+		  image_results: searchResult.results?.image_results?.length || 0,
+		  product_results: searchResult.results?.product_results?.length || 0
+		});
+
+		// Log first image result to see structure
+		if (searchResult.results?.image_results && searchResult.results.image_results.length > 0) {
+		  console.log('📸 First image result structure:', JSON.stringify(searchResult.results.image_results[0], null, 2));
+		}
       console.log(`✅ Found ${knowledgeResults?.text_results?.length || 0} knowledge chunks`);
       
       // ✅ Call LLM AGAIN with search results
@@ -1313,6 +1335,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
       html: formattedResponse.html,
       markdown: formattedResponse.markdown
     },
+	formatted_html: formattedSources.formatted_html || null,
+    formatted_markdown: formattedSources.formatted_markdown || null,
+    formatted_text: formattedSources.formatted_text || null,
     sources: formattedSources.text_results,
     images: formattedSources.image_results,
     products: formattedSources.product_results,
@@ -1923,71 +1948,114 @@ Adapt based on context and user behavior.
   }
   
   async _formatKnowledgeSources(knowledgeResults) {
-	  if (!knowledgeResults || !knowledgeResults.text_results) {
-		return { text_results: [], image_results: [], product_results: [] };
-	  }
+  if (!knowledgeResults || !knowledgeResults.text_results) {
+    return { 
+      text_results: [], 
+      image_results: [], 
+      product_results: [],
+      formatted_html: '',
+      formatted_markdown: '',
+      formatted_text: ''
+    };
+  }
 
-	  // Format text results with markdown->HTML conversion
-	  const formattedTextResults = knowledgeResults.text_results.map(r => {
-		// Apply markdown formatting to the content
-		const formatted = formatResponse(r.content);
-		
-		return {
-		  type: 'document',
-		  source_id: r.source?.document_id,
-		  title: r.source?.document_name,
-		  
-		  // UPDATED: Include all three formats
-		  content: formatted.text,           // Plain text (backward compatible)
-		  content_html: formatted.html,      // NEW: HTML formatted
-		  content_markdown: formatted.markdown, // NEW: Markdown formatted
-		  
-		  page: r.source?.page,
-		  chunk_id: r.source?.chunk_id,
-		  relevance_score: r.score,
-		  url: r.source?.url,
-		  metadata: r.source?.metadata || {},
-		  
-		  // NEW: Add image references if present
-		  has_images: r.source?.metadata?.has_images || false,
-		  linked_images: r.source?.metadata?.linked_images || []
-		};
-	  });
+  const formatted = knowledgeFormatter.formatKnowledgeResponse(knowledgeResults, {
+    includeImages: true,
+    imagePosition: 'inline',
+    maxImages: 10,
+    imageSize: 'medium',
+    includeMetadata: true,
+    baseUrl: process.env.API_BASE_URL || ''
+  });
+    
+  // Format text results with markdown->HTML conversion
+  const formattedTextResults = knowledgeResults.text_results.map(r => {
+    // Apply markdown formatting to THIS result's content
+    const resultFormatted = markdown.formatResponse(r.content);
+    
+    return {
+      type: 'document',
+      source_id: r.source?.document_id,
+      title: r.source?.document_name,
+      
+      // ✅ Use individual result's formatted content
+      content: resultFormatted.text,
+      content_html: resultFormatted.html,
+      content_markdown: resultFormatted.markdown,
+      
+      page: r.source?.page,
+      chunk_id: r.source?.chunk_id,
+      relevance_score: r.score,
+      url: r.source?.url,
+      metadata: r.source?.metadata || {},
+      
+      // NEW: Add image references if present
+      has_images: r.source?.metadata?.has_images || false,
+      linked_images: r.source?.metadata?.linked_images || []
+    };
+  });
 
-	  // Image results - add storage URL transformation
-	  const formattedImageResults = (knowledgeResults.image_results || []).map(img => ({
-		image_id: img.result_id,
-		url: this._getImageUrl(img.image_url),           // NEW: Transform to accessible URL
-		thumbnail_url: this._getThumbnailUrl(img.image_url), // NEW: Generate thumbnail
-		title: img.description,
-		description: img.description,
-		similarity_score: img.score,
-		source_document: img.source?.document_name,
-		page_number: img.metadata?.page_number,          // NEW: Show which page
-		metadata: img.metadata || {}
-	  }));
+  // ✅ FIXED: Image results with comprehensive property fallbacks
+  const formattedImageResults = (knowledgeResults.image_results || []).map(img => {
+    console.log('📸 Formatting image result:', JSON.stringify(img, null, 2));  // DEBUG
+    
+    // Extract properties with fallbacks for different response formats
+    const imageId = img.image_id || img.result_id || img.id;
+    const imageUrl = img.image_url || img.url;
+    const description = img.description || img.title || img.filename || 'Image';
+    const pageNumber = img.page_number || img.metadata?.page_number || img.source?.page;
+    const score = img.similarity_score || img.score || 0;
+    const sourceDoc = img.source_document || img.source?.document_name || img.metadata?.document_name;
+    
+    const formatted = {
+      image_id: imageId,
+      url: this._getImageUrl(imageUrl),
+      thumbnail_url: this._getThumbnailUrl(imageUrl),
+      title: description,
+      description: description,
+      similarity_score: score,
+      source_document: sourceDoc,
+      page_number: pageNumber,
+      width: img.width,
+      height: img.height,
+      metadata: img.metadata || {}
+    };
+    
+    console.log('📸 Formatted to:', JSON.stringify(formatted, null, 2));  // DEBUG
+    return formatted;
+  });
 
-	  // Product results (unchanged)
-	  const formattedProductResults = (knowledgeResults.product_results || []).map(p => ({
-		product_id: p.product_id,
-		name: p.name,
-		description: p.description,
-		image_url: p.image_url,
-		price: p.price,
-		availability: p.availability,
-		similarity_score: p.score,
-		match_reason: p.scoring_details,
-		metadata: p.metadata,
-		url: p.url,
-		purchase_url: p.purchase_url || null
-	  }));
+  console.log(`📸 Formatted ${formattedImageResults.length} images total`);  // DEBUG
 
-	  return {
-		text_results: formattedTextResults,
-		image_results: formattedImageResults,
-		product_results: formattedProductResults
-	  };
-	}
+  // Product results
+  const formattedProductResults = (knowledgeResults.product_results || []).map(p => ({
+    product_id: p.product_id,
+    name: p.name,
+    description: p.description,
+    image_url: p.image_url,
+    price: p.price,
+    availability: p.availability,
+    similarity_score: p.score,
+    match_reason: p.scoring_details,
+    metadata: p.metadata,
+    url: p.url,
+    purchase_url: p.purchase_url || null
+  }));
+
+  return {
+    text_results: formattedTextResults,
+    image_results: formattedImageResults,
+    product_results: formattedProductResults,
+    
+    // ✅ Return the complete formatted response (includes images)
+    formatted_html: formatted.html,
+    formatted_markdown: formatted.markdown,
+    formatted_text: formatted.text,
+    has_images: formatted.hasImages,
+    has_products: formatted.hasProducts,
+    stats: formatted.stats
+  };
+}
 
 	/**
 	 * NEW HELPER METHOD: Transform storage paths to accessible URLs
@@ -1995,11 +2063,13 @@ Adapt based on context and user behavior.
 	_getImageUrl(storagePath) {
 	  if (!storagePath) return null;
 	  
+	
 	  // Transform /etc/aiva-oai/storage/images/... to /api/images/...
 	  if (storagePath.startsWith('/etc/aiva-oai/storage/images/')) {
 		const relativePath = storagePath.replace('/etc/aiva-oai/storage/images/', '');
 		return `${process.env.MANAGEMENT_API_URL || 'http://localhost:62001'}/api/images/${relativePath}`;
 	  }
+	  
 	  
 	  return storagePath;
 	}

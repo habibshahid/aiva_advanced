@@ -11,6 +11,22 @@ import { getAgents, getAgent } from '../services/api';
 import { sendChatMessage, getChatHistory, endChatSession } from '../services/chatApi';
 
 const AgentTestChat = () => {
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      .knowledge-formatted-content img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+        margin: 8px 0;
+      }
+      .knowledge-formatted-content .inline-page-images {
+        margin-top: 15px;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
   const navigate = useNavigate();
   const messagesEndRef = useRef(null);
   
@@ -123,6 +139,7 @@ const AgentTestChat = () => {
         content: result.response.text,
         html: result.response.html,
         markdown: result.response.markdown,
+		formatted_html: result.formatted_html,  
         timestamp: new Date().toISOString(),
         sources: result.sources || [],
         images: result.images || [],
@@ -333,10 +350,17 @@ const AgentTestChat = () => {
                             : 'bg-white border border-gray-200'
                         }`}>
                           <div className="prose prose-sm max-w-none">
-                            <p className={`whitespace-pre-wrap ${message.role === 'user' ? 'text-white' : 'text-gray-900'}`}>
-                              {message.content}
-                            </p>
-                          </div>
+							  {message.formatted_html ? (
+								<div 
+								  className="knowledge-formatted-content"
+								  dangerouslySetInnerHTML={{ __html: message.formatted_html }}
+								/>
+							  ) : (
+								<p className={`whitespace-pre-wrap ${message.role === 'user' ? 'text-white' : 'text-gray-900'}`}>
+								  {message.content}
+								</p>
+							  )}
+							</div>
 
                           {/* Sources */}
                           {message.sources && message.sources.length > 0 && (
@@ -369,15 +393,38 @@ const AgentTestChat = () => {
                               </div>
                               <div className="grid grid-cols-2 gap-2">
                                 {message.images.slice(0, 4).map((img, idx) => (
-                                  <div key={idx} className="relative">
-                                    <img 
-                                      src={img.thumbnail_url || img.url} 
-                                      alt={img.title}
-                                      className="w-full h-24 object-cover rounded"
-                                    />
+                                  <div
+                                    key={img.image_id || idx}
+                                    className="border border-gray-200 rounded overflow-hidden hover:border-primary-300 transition-colors cursor-pointer group"
+                                    onClick={() => window.open(img.url, '_blank')}
+                                  >
+                                    <div className="aspect-square bg-gray-50 overflow-hidden">
+                                      <img
+                                        src={img.thumbnail_url || img.url}
+                                        alt={img.title || 'Image'}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                        loading="lazy"
+                                        onError={(e) => {
+                                          e.target.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2214%22%3EImage%3C/text%3E%3C/svg%3E';
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="p-1.5 bg-gray-50">
+                                      <p className="text-xs text-gray-700 truncate" title={img.title || 'Image'}>
+                                        {img.title || 'Image'}
+                                      </p>
+                                      {img.page_number && (
+                                        <p className="text-xs text-gray-500">Page {img.page_number}</p>
+                                      )}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
+                              {message.images.length > 4 && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  +{message.images.length - 4} more image{message.images.length - 4 !== 1 ? 's' : ''}
+                                </p>
+                              )}
                             </div>
                           )}
 
