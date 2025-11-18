@@ -14,6 +14,7 @@ const PERMISSIONS = {
         'agents.create',
         'agents.update',
         'agents.view',
+		'agents.manage',
         'agents.delete',
         'functions.*',
         'calls.view',

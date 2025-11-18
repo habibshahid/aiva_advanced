@@ -48,14 +48,8 @@ class DocumentProcessor:
         self.vector_store = VectorStore()
         self.pdf_image_extractor = PDFImageExtractor()
         
-        # NEW: Check if image processor available
-        try:
-            from app.services.image_processor import ImageProcessor
-            self.image_processor = ImageProcessor()
-            logger.info("Image processor initialized")
-        except Exception as e:
-            self.image_processor = None
-            logger.warning(f"Image processor not available: {e}")
+        self.image_processor = None  # Will use get_image_processor() when needed
+        logger.info("DocumentProcessor initialized (will use singleton ImageProcessor)")
     
     async def _create_document_record(
         self,
@@ -287,6 +281,8 @@ class DocumentProcessor:
             extracted_images = []
             image_count = 0
             
+            print(f"Extracting PDF")
+            
             if document_id and kb_id and tenant_id:
                 try:
                     logger.info(f"Extracting images from PDF document {document_id}...")
@@ -301,6 +297,7 @@ class DocumentProcessor:
                     
                     image_count = len(extracted_images)
                     logger.info(f"✅ Extracted {image_count} images from PDF")
+                    print(f"✅ Extracted {image_count} images from PDF")
                     
                     # Process each extracted image for embeddings
                     if image_count > 0:
@@ -360,18 +357,21 @@ class DocumentProcessor:
             cursor = conn.cursor()
             
             logger.info(f"Processing {len(extracted_images)} extracted images...")
-            
+            print(f"Processing {len(extracted_images)} extracted images...")
+            #print(f"{extracted_images}")
             for img_meta in extracted_images:
                 try:
                     # Read image file from disk
+                    #print(f"Processed image {img_meta}...")
                     image_path = img_meta["storage_path"]
-                    
+            
                     with open(image_path, "rb") as f:
                         image_bytes = f.read()
                     
                     # Verify file was saved correctly
                     if len(image_bytes) == 0:
                         logger.error(f"Image file is empty: {image_path}")
+                        print(f"Image file is empty: {image_path}")
                         continue
                     
                     # Open image with PIL
@@ -385,7 +385,7 @@ class DocumentProcessor:
                     embedding_result = await processor.generate_image_embedding(pil_image)
                     
                     # Save to vector store
-                    await vector_store.store_image(
+                    await vector_store.add_image(
                         image_id=img_meta["id"],
                         embedding=embedding_result["embedding"],
                         metadata=img_meta
@@ -394,32 +394,38 @@ class DocumentProcessor:
                     # Save to MySQL database
                     cursor.execute(
                         """INSERT INTO yovo_tbl_aiva_images (
-                            id, kb_id, tenant_id, filename, storage_url, content_type,
-                            width, height, file_size_bytes, metadata, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
+                            id, kb_id, tenant_id, document_id, filename, storage_url, image_type,
+                            width, height, file_size_bytes, page_number, metadata, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
                         (
                             img_meta["id"],
                             kb_id,
                             tenant_id,
+                            img_meta["document_id"],  # ✅ Added document_id
                             img_meta["filename"],
                             img_meta["storage_url"],
-                            img_meta["content_type"],
+                            img_meta["content_type"],  # Maps to image_type column
                             img_meta["width"],
                             img_meta["height"],
                             img_meta["file_size_bytes"],
+                            img_meta["page_number"],  # ✅ Added page_number as column (not just in metadata)
                             json.dumps({
                                 "document_id": img_meta["document_id"],
                                 "page_number": img_meta["page_number"],
                                 "image_index": img_meta["image_index"],
-                                "embedding_dimension": img_meta["embedding_dimension"]
+                                "embedding_dimension": img_meta["embedding_dimension"],
+                                "format": img_meta.get("format"),
+                                "mode": img_meta.get("mode")
                             })
                         )
                     )
                     
                     logger.info(f"✅ Processed image {img_meta['id']} from page {img_meta['page_number']}")
+                    print(f"✅ Processed image {img_meta['id']} from page {img_meta['page_number']}")
                     
                 except Exception as e:
                     logger.error(f"Error processing image {img_meta.get('id', 'unknown')}: {e}")
+                    print(f"Error processing image {img_meta.get('id', 'unknown')}: {e}")
                     continue
             
             conn.commit()
