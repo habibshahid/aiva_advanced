@@ -125,7 +125,7 @@ router.get('/cache/stats', authenticate, async (req, res) => {
  * @desc Clear semantic cache
  * @access Private
  */
-router.delete('/cache/clear', authenticate, checkPermission('agents.manage'), async (req, res) => {
+router.delete('/cache/clear', authenticate, checkPermission('agents.update'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -1355,7 +1355,11 @@ router.get('/:kb_id/images/:image_id/view', async (req, res) => {
     }
     
     const image = images[0];
-    const imagePath = image.storage_url;
+    let imagePath = image.storage_url;
+    
+	if(!imagePath.includes('/etc/aiva-oai')){
+		imagePath = `/etc/aiva-oai/${imagePath}`;
+	}
     
     // Check if file exists
     if (!fs.existsSync(imagePath)) {
@@ -1386,7 +1390,7 @@ router.get('/:kb_id/images/:image_id/view', async (req, res) => {
       'Content-Disposition': `inline; filename="${image.filename}"`,
       'Content-Length': image.file_size_bytes
     });
-    
+	
     // Stream file
     const fileStream = fs.createReadStream(imagePath);
     
