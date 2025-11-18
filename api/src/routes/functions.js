@@ -26,7 +26,7 @@ router.get('/agent/:agentId', authenticate, checkPermission('functions.view'), a
             return res.status(404).json({ error: 'Agent not found' });
         }
         
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
@@ -47,7 +47,7 @@ router.post('/agent/:agentId', authenticate, checkPermission('functions.create')
             return res.status(404).json({ error: 'Agent not found' });
         }
         
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
@@ -70,7 +70,7 @@ router.put('/:id', authenticate, checkPermission('functions.update'), async (req
         
         // Check agent ownership
         const agent = await AgentService.getAgent(func.agent_id);
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
@@ -93,7 +93,7 @@ router.delete('/:id', authenticate, checkPermission('functions.delete'), async (
         
         // Check agent ownership
         const agent = await AgentService.getAgent(func.agent_id);
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         

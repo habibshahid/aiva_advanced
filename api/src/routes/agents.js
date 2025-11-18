@@ -107,7 +107,7 @@ router.get('/:id', authenticate, checkPermission('agents.view'), async (req, res
         }
         
         // Check ownership (super_admin can access any agent)
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
@@ -139,7 +139,7 @@ router.put('/:id', authenticate, checkPermission('agents.update'), validateProvi
         }
         
         // Check ownership
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
@@ -161,7 +161,7 @@ router.delete('/:id', authenticate, checkPermission('agents.delete'), async (req
         }
         
         // Check ownership
-        if (agent.tenant_id !== req.user.id && req.user.role !== 'super_admin') {
+        if (agent.tenant_id !== req.user.tenant_id && req.user.role !== 'super_admin') {
             return res.status(403).json({ error: 'Access denied' });
         }
         
