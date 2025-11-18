@@ -11,12 +11,25 @@ from datetime import datetime
 
 from app.config import settings
 from app.routes import health, documents, search, images
+import sys
 
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Explicitly output to stdout
+    ],
+    force=True  # Python 3.8+: Force reconfiguration
 )
+
+# Set root logger level explicitly
+root_logger = logging.getLogger()
+root_logger.setLevel(getattr(logging, settings.LOG_LEVEL))
+
+# Ensure all app loggers inherit from root
+logging.getLogger('app').setLevel(getattr(logging, settings.LOG_LEVEL))
+
 logger = logging.getLogger(__name__)
 
 # Global image processor instance (singleton)

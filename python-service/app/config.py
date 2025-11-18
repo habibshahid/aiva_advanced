@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     IMAGE_PROCESSING_CONCURRENCY: int = int(os.getenv('IMAGE_PROCESSING_CONCURRENCY', '1'))
     
     # Logging
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
     
     class Config:
         env_file = ".env"
