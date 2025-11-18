@@ -1,14 +1,14 @@
 {
   "files": {
-    "main.css": "/aiva/static/css/main.2e6957de.css",
-    "main.js": "/aiva/static/js/main.b74a60de.js",
+    "main.css": "/aiva/static/css/main.96f29564.css",
+    "main.js": "/aiva/static/js/main.aa97b2ca.js",
     "static/media/intellicon-logo.png": "/aiva/static/media/intellicon-logo.6628b3eecdda0677306b.png",
     "index.html": "/aiva/index.html",
-    "main.2e6957de.css.map": "/aiva/static/css/main.2e6957de.css.map",
-    "main.b74a60de.js.map": "/aiva/static/js/main.b74a60de.js.map"
+    "main.96f29564.css.map": "/aiva/static/css/main.96f29564.css.map",
+    "main.aa97b2ca.js.map": "/aiva/static/js/main.aa97b2ca.js.map"
   },
   "entrypoints": [
-    "static/css/main.2e6957de.css",
-    "static/js/main.b74a60de.js"
+    "static/css/main.96f29564.css",
+    "static/js/main.aa97b2ca.js"
   ]
 }
