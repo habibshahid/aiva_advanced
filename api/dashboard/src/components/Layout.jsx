@@ -13,7 +13,9 @@ import {
   BookOpen,
   MessageSquare,
   Store,
-  Users
+  Users,
+  HelpCircle,
+  Settings
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -73,6 +75,18 @@ const Layout = () => {
         icon: Users,
         roles: ['super_admin', 'admin'] // User management only for admins
       },
+	  { 
+		name: 'System Settings', 
+		href: '/settings/system', 
+		icon: Settings,
+		roles: ['super_admin'] // Only super_admin can see this
+	  },
+	  { 
+		name: 'Notifications', 
+		href: '/settings/notifications', 
+		icon: Settings,
+		roles: ['super_admin', 'admin'] // Admin and super_admin
+	  },
       { 
         name: 'Test Call', 
         href: '/test', 
@@ -84,7 +98,13 @@ const Layout = () => {
         href: '/agent-test', 
         icon: MessageSquare,
         roles: ['super_admin', 'admin', 'agent_manager'] // Testing tools
-      }
+      },
+	  { 
+		name: 'Help', 
+		href: '/help', 
+		icon: HelpCircle,
+		roles: ['super_admin', 'admin', 'agent_manager', 'client']
+	  }
     ];
 
     // Filter based on user role

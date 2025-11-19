@@ -36,6 +36,12 @@ import UserManagement from './pages/Users/UserManagement';
 import ChatIntegration from './pages/ChatIntegration';
 import ChatPage from './pages/Public/ChatPage';
 
+import HelpCenter from './pages/HelpCenter';
+import HelpArticle from './pages/HelpArticle';
+
+import SystemSettings from './pages/SystemSettings';
+import NotificationSettings from './pages/NotificationSettings';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -92,6 +98,12 @@ function App() {
             <Route path="knowledge/:id/stats" element={<KnowledgeStats />} />
             <Route path="knowledge/:id/chat" element={<KnowledgeChat />} />
             
+			<Route path="settings/system" element={<SystemSettings />} />
+			<Route path="settings/notifications" element={<NotificationSettings />} />
+	
+			<Route path="help" element={<HelpCenter />} />
+			<Route path="help/:articleId" element={<HelpArticle />} />
+
             {/* Shopify Routes */}
             <Route path="shopify" element={<ShopifyIntegration />} />
             <Route path="shopify/connect" element={<ConnectStore />} />

@@ -1,6 +1,7 @@
 /* ================================
    INTELLICON LOGIN PAGE STYLES
    Scoped with .intellicon-login-wrapper
+   IMPROVED MOBILE RESPONSIVE VERSION
    ================================ */
 
 /* Root wrapper - ensures full viewport and proper positioning */
@@ -379,43 +380,223 @@
     cursor: not-allowed;
 }
 
-/* Mobile Responsive */
+/* ================================
+   MOBILE RESPONSIVE STYLES
+   ================================ */
+
+/* Tablets and below (768px) */
 @media (max-width: 768px) {
+    /* Container adjustments */
     .intellicon-login-wrapper .login-container {
+        padding: 10px;
+        width: calc(100% - 20px);
+    }
+    
+    /* Stack card vertically */
+    .intellicon-login-wrapper .login-card {
+        flex-direction: column;
+        max-width: 100%;
+        border-radius: 24px;
+        max-height: calc(100vh - 20px);
+        overflow-y: auto;
+    }
+    
+    /* Hide visual side on small screens for more space */
+    .intellicon-login-wrapper .visual-side {
+        display: none;
+    }
+    
+    /* Form takes full width */
+    .intellicon-login-wrapper .form-side {
+        padding: 40px 30px;
+    }
+    
+    /* Smaller logo */
+    .intellicon-login-wrapper .login-logo {
+        width: 200px;
+        height: 60px;
+    }
+    
+    /* Adjust font sizes */
+    .intellicon-login-wrapper .form-title {
+        font-size: 28px;
+    }
+    
+    .intellicon-login-wrapper .form-subtitle {
+        font-size: 14px;
+    }
+    
+    /* Reduce orb sizes */
+    .login-orb1 {
+        width: 300px;
+        height: 300px;
+    }
+    
+    .login-orb2 {
+        width: 250px;
+        height: 250px;
+    }
+    
+    .login-orb3 {
+        width: 200px;
+        height: 200px;
+    }
+}
+
+/* Small tablets (640px) */
+@media (max-width: 640px) {
+    .intellicon-login-wrapper .form-side {
+        padding: 30px 24px;
+    }
+    
+    .intellicon-login-wrapper .form-title {
+        font-size: 24px;
+    }
+    
+    .intellicon-login-wrapper .login-logo {
+        width: 180px;
+        height: 55px;
+    }
+}
+
+/* Mobile phones (480px) */
+@media (max-width: 480px) {
+    /* Tighter spacing */
+    .intellicon-login-wrapper .login-container {
+        padding: 8px;
+        width: calc(100% - 16px);
+    }
+    
+    .intellicon-login-wrapper .login-card {
+        border-radius: 20px;
+    }
+    
+    .intellicon-login-wrapper .form-side {
+        padding: 24px 20px;
+    }
+    
+    .intellicon-login-wrapper .form-header {
+        margin-bottom: 30px;
+    }
+    
+    /* Logo */
+    .intellicon-login-wrapper .login-logo {
+        width: 160px;
+        height: 50px;
+        margin-bottom: 20px;
+    }
+    
+    /* Form title */
+    .intellicon-login-wrapper .form-title {
+        font-size: 22px;
+        margin-bottom: 6px;
+    }
+    
+    .intellicon-login-wrapper .form-subtitle {
+        font-size: 13px;
+    }
+    
+    /* Input spacing */
+    .intellicon-login-wrapper .input-group {
+        margin-bottom: 20px;
+    }
+    
+    /* Smaller inputs */
+    .intellicon-login-wrapper input[type="email"],
+    .intellicon-login-wrapper input[type="password"] {
+        padding: 14px 16px 14px 50px;
+        font-size: 14px;
+    }
+    
+    .intellicon-login-wrapper .input-icon {
+        font-size: 18px;
+        left: 16px;
+    }
+    
+    .intellicon-login-wrapper .input-label {
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+    
+    /* Form options */
+    .intellicon-login-wrapper .form-options {
+        margin-bottom: 20px;
+        font-size: 13px;
+    }
+    
+    /* Button */
+    .intellicon-login-wrapper .login-button {
+        padding: 14px;
+        font-size: 15px;
+    }
+    
+    /* Even smaller orbs */
+    .login-orb1 {
+        width: 200px;
+        height: 200px;
+    }
+    
+    .login-orb2 {
+        width: 180px;
+        height: 180px;
+    }
+    
+    .login-orb3 {
+        width: 150px;
+        height: 150px;
+    }
+}
+
+/* Very small phones (360px) */
+@media (max-width: 360px) {
+    .intellicon-login-wrapper .login-container {
+        padding: 5px;
+        width: calc(100% - 10px);
+    }
+    
+    .intellicon-login-wrapper .form-side {
+        padding: 20px 16px;
+    }
+    
+    .intellicon-login-wrapper .form-title {
+        font-size: 20px;
+    }
+    
+    .intellicon-login-wrapper .form-subtitle {
+        font-size: 12px;
+    }
+    
+    .intellicon-login-wrapper .login-logo {
+        width: 140px;
+        height: 45px;
+    }
+}
+
+/* Landscape orientation fix for mobile */
+@media (max-width: 768px) and (orientation: landscape) {
+    .intellicon-login-wrapper .login-container {
+        position: relative;
+        top: auto;
+        left: auto;
+        transform: none;
+        max-width: 600px;
+        margin: 10px auto;
         padding: 10px;
     }
     
     .intellicon-login-wrapper .login-card {
-        flex-direction: column;
-        max-width: 100%;
-    }
-    
-    .intellicon-login-wrapper .visual-side {
-        padding: 40px 20px;
+        max-height: none;
     }
     
     .intellicon-login-wrapper .form-side {
-        padding: 40px 20px;
+        padding: 30px 40px;
     }
     
-    .intellicon-login-wrapper .cube-container {
-        width: 150px;
-        height: 150px;
+    .intellicon-login-wrapper .form-header {
+        margin-bottom: 25px;
     }
     
-    .intellicon-login-wrapper .cube-face {
-        width: 150px;
-        height: 150px;
-    }
-    
-    .intellicon-login-wrapper .face-front { transform: translateZ(75px); }
-    .intellicon-login-wrapper .face-back { transform: rotateY(180deg) translateZ(75px); }
-    .intellicon-login-wrapper .face-right { transform: rotateY(90deg) translateZ(75px); }
-    .intellicon-login-wrapper .face-left { transform: rotateY(-90deg) translateZ(75px); }
-    .intellicon-login-wrapper .face-top { transform: rotateX(90deg) translateZ(75px); }
-    .intellicon-login-wrapper .face-bottom { transform: rotateX(-90deg) translateZ(75px); }
-    
-    .intellicon-login-wrapper .stats {
-        gap: 20px;
+    .intellicon-login-wrapper .input-group {
+        margin-bottom: 18px;
     }
 }
