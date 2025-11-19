@@ -138,6 +138,116 @@ class ChatService {
     };
   }
 
+	/**
+	 * Check if agent has order processing capability
+	 * @private
+	 */
+	_checkOrderCapability(agent) {
+	  // Check for order functions
+	  const hasOrderFunction = agent.functions && agent.functions.length > 0 && 
+		agent.functions.some(fn => 
+		  fn.name.toLowerCase().includes('order') ||
+		  fn.name.toLowerCase().includes('purchase') ||
+		  fn.name.toLowerCase().includes('checkout')
+		);
+	  
+	  if (hasOrderFunction) {
+		return {
+		  canProcess: true,
+		  method: 'function',
+		  reason: 'Has order processing functions'
+		};
+	  }
+	  
+	  // Check if instructions mention order process
+	  const instructionsMentionOrders = agent.instructions && (
+		agent.instructions.toLowerCase().includes('place order') ||
+		agent.instructions.toLowerCase().includes('to order') ||
+		agent.instructions.toLowerCase().includes('checkout process')
+	  );
+	  
+	  if (instructionsMentionOrders) {
+		return {
+		  canProcess: true,
+		  method: 'instructions',
+		  reason: 'Instructions contain order process'
+		};
+	  }
+	  
+	  // Check for Shopify integration
+	  const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
+	  const hasProducts = agent.kb_id; // Assuming KB has products
+	  
+	  if (hasShopify && hasProducts) {
+		return {
+		  canProcess: false,
+		  method: 'shopify_url',
+		  reason: 'Can share purchase URLs but cannot process orders directly',
+		  hasShopifyProducts: true
+		};
+	  }
+	  
+	  return {
+		canProcess: false,
+		method: 'none',
+		reason: 'No order processing capability',
+		hasShopifyProducts: false
+	  };
+	}
+
+	/**
+	 * Detect if response contains fake order numbers
+	 * @private
+	 */
+	_containsFakeOrderNumber(response) {
+	  if (!response) return false;
+	  
+	  const lowerResponse = response.toLowerCase();
+	  
+	  // Patterns that indicate fake order generation
+	  const fakeOrderPatterns = [
+		/order number[:\s]+[a-z0-9]{6,}/i,
+		/order id[:\s]+[a-z0-9]{6,}/i,
+		/tracking (number|id)[:\s]+[a-z0-9]{6,}/i,
+		/confirmation (number|code|id)[:\s]+[a-z0-9]{6,}/i,
+		/transaction (id|number)[:\s]+[a-z0-9]{6,}/i,
+		/order placed.*#[a-z0-9]+/i,
+		/your order.*[a-z0-9]{8,}/i
+	  ];
+	  
+	  // Check for patterns
+	  const hasFakePattern = fakeOrderPatterns.some(pattern => 
+		pattern.test(response)
+	  );
+	  
+	  if (hasFakePattern) {
+		console.log('🚫 Detected fake order number pattern in response');
+		return true;
+	  }
+	  
+	  // Check for specific phrases
+	  const fakeOrderPhrases = [
+		'order has been placed',
+		'order is confirmed',
+		'order placed successfully',
+		'aapka order place ho gaya',
+		'order confirm ho gaya',
+		'tracking number',
+		'order number'
+	  ];
+	  
+	  const hasFakePhrase = fakeOrderPhrases.some(phrase => 
+		lowerResponse.includes(phrase)
+	  );
+	  
+	  if (hasFakePhrase) {
+		console.log('🚫 Detected fake order phrase in response');
+		return true;
+	  }
+	  
+	  return false;
+	}
+
   /**
    * End chat session
    * @param {string} sessionId - Session ID
@@ -585,7 +695,8 @@ class ChatService {
       agent.conversation_strategy,
       agent.greeting,
       isFirstMessage,
-      agent.kb_metadata
+      agent.kb_metadata,
+	  agent
     );
     
     // Add all search contexts
@@ -669,9 +780,58 @@ class ChatService {
         response: aiMessage.content,
         product_search_needed: false,
         knowledge_search_needed: false,
-        agent_transfer: false
+        agent_transfer: false,
+		order_intent_detected: false,
+		"conversation_complete": false, 
+		"user_wants_to_end": false
       };
     }
+
+	let shouldCloseSession = false;
+
+	if (llmDecision.conversation_complete && llmDecision.user_wants_to_end) {
+	  console.log('👋 User wants to end conversation - closing session');
+	  shouldCloseSession = true;
+	  
+	  // Check if agent has custom goodbye message in instructions
+	  const hasGoodbyeInInstructions = agent.instructions && 
+		(agent.instructions.toLowerCase().includes('allah hafiz') ||
+		 agent.instructions.toLowerCase().includes('goodbye') ||
+		 agent.instructions.toLowerCase().includes('closing'));
+	  
+	  // If no custom goodbye in LLM response and no instructions, add default
+	  if (!llmDecision.response.toLowerCase().includes('allah hafiz') && 
+		  !llmDecision.response.toLowerCase().includes('thank') &&
+		  !hasGoodbyeInInstructions) {
+		llmDecision.response += "\n\nThank you for choosing Wear Ego. Allah Hafiz!";
+	  }
+	}
+
+	if (llmDecision.order_intent_detected) {
+	  console.log('🛒 Order intent detected');
+	  
+	  // Check if agent has order processing capability
+	  const hasOrderCapability = this._checkOrderCapability(agent);
+	  
+	  if (!hasOrderCapability.canProcess) {
+		console.log('⚠️ No order capability:', hasOrderCapability.reason);
+		
+		// Override response if LLM generated fake order number
+		if (this._containsFakeOrderNumber(llmDecision.response)) {
+		  console.log('🚫 Fake order number detected, overriding response');
+		  
+		  if (hasOrderCapability.hasShopifyProducts) {
+			// Has products but no order function - share purchase URL
+			llmDecision.response = "Main aapko product ka purchase link share kar sakti hoon jahan se aap order place kar sakte hain. Kya aap product dekhna chahenge?";
+			llmDecision.product_search_needed = true;
+		  } else {
+			// No capability at all - offer transfer
+			llmDecision.response = "Mujhe maaf kariye, lekin main directly orders process nahi kar sakti. Kya main aapko ek human agent se connect kar doon jo aapki order place karne mein madad kar sakenge?";
+			llmDecision.agent_transfer = true;
+		  }
+		}
+	  }
+	}
 
     // Calculate LLM cost
     const llmCost = CostCalculator.calculateChatCost(
@@ -744,6 +904,11 @@ class ChatService {
     // Update session stats
     await this._updateSessionStats(sessionId, totalCost.final_cost);
 
+	if (shouldCloseSession) {
+	  console.log('🔒 Closing session:', sessionId);
+	  await this.endSession(sessionId);
+	}
+
     // Build operations array for cost_breakdown
     const operations = [];
     
@@ -786,6 +951,7 @@ class ChatService {
       session_id: sessionId,
       message_id: assistantMessageId,
       agent_transfer: llmDecision.agent_transfer || false,
+	  interaction_closed: shouldCloseSession,
       response: {
         text: formattedResponse.text,
         html: formattedResponse.html,
@@ -838,7 +1004,9 @@ class ChatService {
         preferences_collected: {},
         ready_to_search: false,
         product_search_needed: false,
-        knowledge_search_needed: false
+        knowledge_search_needed: false,
+		conversation_complete: llmDecision.conversation_complete || false,  // ✅ ADD
+		user_wants_to_end: llmDecision.user_wants_to_end || false   
       },
       context_used: {
         knowledge_base_chunks: 0,
@@ -875,7 +1043,8 @@ class ChatService {
     agent.conversation_strategy,
     agent.greeting,
     isFirstMessage,
-    agent.kb_metadata
+    agent.kb_metadata,
+	agent  
   );
   
   // Build messages for OpenAI
@@ -935,9 +1104,32 @@ class ChatService {
       collecting_preferences: false,
       preferences_collected: {},
       ready_to_search: false,
-      agent_transfer: false
+      agent_transfer: false,
+	  order_intent_detected: false,
+	  conversation_complete: false,
+      user_wants_to_end: false
     };
   }
+
+	let shouldCloseSession = false;
+
+	if (llmDecision.conversation_complete && llmDecision.user_wants_to_end) {
+	  console.log('👋 User wants to end conversation - closing session');
+	  shouldCloseSession = true;
+	  
+	  // Check if agent has custom goodbye message in instructions
+	  const hasGoodbyeInInstructions = agent.instructions && 
+		(agent.instructions.toLowerCase().includes('allah hafiz') ||
+		 agent.instructions.toLowerCase().includes('goodbye') ||
+		 agent.instructions.toLowerCase().includes('closing'));
+	  
+	  // If no custom goodbye in LLM response and no instructions, add default
+	  if (!llmDecision.response.toLowerCase().includes('allah hafiz') && 
+		  !llmDecision.response.toLowerCase().includes('thank') &&
+		  !hasGoodbyeInInstructions) {
+		llmDecision.response += "\n\nThank you for choosing Wear Ego. Allah Hafiz!";
+	  }
+	}
 
   let llmCost = CostCalculator.calculateChatCost(
     {
@@ -991,7 +1183,8 @@ class ChatService {
         query: searchQuery,
         image: null,
         topK: 5,
-        searchType: 'text'
+        searchType: 'text',
+		filters: { include_products: true }
       });
 
 	  console.log('🔍 Knowledge search results:', {
@@ -1114,7 +1307,8 @@ CRITICAL: Present these products naturally to the user.
         query: searchQuery,
         image: null,
         topK: 5,
-        searchType: 'text'
+        searchType: 'text',
+		filters: { include_products: false }
       });
 
       knowledgeResults = searchResult.results;
@@ -1324,12 +1518,19 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
   // Update session stats
   await this._updateSessionStats(sessionId, totalCost.final_cost);
+  
+  if (shouldCloseSession) {
+	  console.log('🔒 Closing session:', sessionId);
+	  await this.endSession(sessionId);
+	}
+  
   const formattedSources = await this._formatKnowledgeSources(knowledgeResults);
   
   return {
     session_id: sessionId,
     message_id: assistantMessageId,
     agent_transfer: agentTransferRequested,
+	interaction_closed: shouldCloseSession, 
     response: {
       text: formattedResponse.text,
       html: formattedResponse.html,
@@ -1370,7 +1571,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
       preferences_collected: llmDecision.preferences_collected,
       ready_to_search: llmDecision.ready_to_search,
       product_search_needed: llmDecision.product_search_needed,
-      knowledge_search_needed: llmDecision.knowledge_search_needed
+      knowledge_search_needed: llmDecision.knowledge_search_needed,
+	  conversation_complete: llmDecision.conversation_complete || false,  // ✅ ADD
+	  user_wants_to_end: llmDecision.user_wants_to_end || false 
     },
     context_used: {
       knowledge_base_chunks: (knowledgeResults?.text_results?.length || 0) + (knowledgeResults?.product_results?.length || 0),
@@ -1394,7 +1597,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	 * Build system prompt with conversation strategy based on KB content type
 	 * @private
 	 */
-	_buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false, kbMetadata = {}) {
+	_buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false, kbMetadata = {}, agent = null) {
 	  // Start with base instructions
 	  let systemPrompt = baseInstructions || '';
 	  
@@ -1427,27 +1630,27 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  }
 	  
 	  const KNOWLEDGE_FORMATTING_INSTRUCTION = `
-KNOWLEDGE BASE FORMATTING:
-- Knowledge base content is provided with markdown formatting
-- Headers use # syntax (# Header, ## Subheader)
-- Lists use - or * for bullets, 1. 2. 3. for numbered
-- Tables use | pipe | syntax |
-- Bold text uses **bold**, italic uses *italic*
-- When referencing knowledge base content, maintain the structure in your response
+	KNOWLEDGE BASE FORMATTING:
+	- Knowledge base content is provided with markdown formatting
+	- Headers use # syntax (# Header, ## Subheader)
+	- Lists use - or * for bullets, 1. 2. 3. for numbered
+	- Tables use | pipe | syntax |
+	- Bold text uses **bold**, italic uses *italic*
+	- When referencing knowledge base content, maintain the structure in your response
 
-IMAGE REFERENCES:
-- Some knowledge base content includes [Image X: Page Y] references
-- When these are present, relevant images are provided separately in the images array
-- Reference these images when answering visual questions
-`;
-	  systemPrompt += KNOWLEDGE_FORMATTING_INSTRUCTION;
-	  
-	  // Determine KB content type
-	  const hasProducts = kbMetadata.has_products || false;
-	  const hasDocuments = kbMetadata.has_documents || false;
-	  
-	  // Add JSON response format instructions - ALWAYS INCLUDE THIS
-	  const jsonFormatInstructions = `
+	IMAGE REFERENCES:
+	- Some knowledge base content includes [Image X: Page Y] references
+	- When these are present, relevant images are provided separately in the images array
+	- Reference these images when answering visual questions
+	`;
+		  systemPrompt += KNOWLEDGE_FORMATTING_INSTRUCTION;
+		  
+		  // Determine KB content type
+		  const hasProducts = kbMetadata.has_products || false;
+		  const hasDocuments = kbMetadata.has_documents || false;
+		  
+		  // Add JSON response format instructions - ALWAYS INCLUDE THIS
+		  const jsonFormatInstructions = `
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	CRITICAL: JSON RESPONSE FORMAT (RFC 8259 COMPLIANT)
@@ -1464,54 +1667,90 @@ IMAGE REFERENCES:
 	  ${hasProducts ? '"collecting_preferences": true/false,' : ''}
 	  ${hasProducts ? '"preferences_collected": { "preference_name": "value or null" },' : ''}
 	  ${hasProducts ? '"ready_to_search": true/false,' : ''}
-	  "agent_transfer": true/false
+	  "agent_transfer": true/false,
+	  "order_intent_detected": true/false
 	}
-
-	DECISION LOGIC:
-
-	${hasProducts ? `
-	SET product_search_needed = true WHEN:
-	✓ User requests to see/find products
-	✓ You have collected enough preferences (based on strategy below)
-	✓ ready_to_search must also be true
-	` : ''}
-
-	${hasDocuments ? `
-	SET knowledge_search_needed = true WHEN:
-	✓ User asks questions about policies, information, or documentation
-	✓ You need to retrieve factual information from knowledge base
-	✓ Question requires specific domain knowledge you don't have
-	` : ''}
-
-	${hasProducts ? `
-	SET collecting_preferences = true WHEN:
-	✓ Following preference collection strategy
-	✓ Still gathering required information from user
-	✓ Haven't collected minimum required preferences yet
-
-	SET ready_to_search = true WHEN:
-	✓ All required preferences collected
-	✓ OR minimum preferences threshold met
-	✓ Have enough information to make meaningful search
-	` : ''}
-
-	SET agent_transfer = true WHEN:
-	✓ User explicitly requests human agent
-	✓ User shows frustration or dissatisfaction
-	✓ You cannot answer their question
-	✓ Question is outside your knowledge/scope
-	✓ After failed attempts to help
-
-	${!hasProducts && !hasDocuments ? `
-	⚠️ IMPORTANT: This agent has NO knowledge base or product catalog.
-	You can only answer based on your base instructions and general knowledge.
-	For anything outside your scope, offer to transfer to a human agent.
-	` : ''}
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	`;
 
-	  systemPrompt += jsonFormatInstructions;
+	systemPrompt += jsonFormatInstructions;
+
+	const closureInstructions = `
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🔚 CONVERSATION CLOSURE DETECTION
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	DETECT WHEN CONVERSATION IS NATURALLY COMPLETE:
+
+	SET conversation_complete = true WHEN:
+	✅ You've answered user's question completely
+	✅ Products have been shown and user seems satisfied
+	✅ Order/purchase has been explained/completed
+	✅ Information request has been fulfilled
+	✅ User's needs appear to be met
+
+	WHEN conversation_complete = true:
+	- Ask: "Kya main aur kisi tarah se aapki madad kar sakti hoon?" (or English equivalent)
+	- Or: "Is there anything else I can help you with?"
+	- Be natural and friendly
+	- Wait for user response
+
+	USER CLOSURE PHRASES (set user_wants_to_end = true):
+
+	English:
+	- "No thanks" / "No, thank you" / "That's all"
+	- "Nothing else" / "I'm good" / "I'm done"
+	- "Goodbye" / "Bye" / "Thanks, bye"
+	- "That's it" / "That's everything"
+
+	Urdu/Roman Urdu:
+	- "Nahi shukriya" / "Bas itna hi"
+	- "Aur kuch nahi" / "Theek hai"
+	- "Allah Hafiz" / "Khuda Hafiz"
+	- "Shukriya, bas" / "Bas"
+
+	WHEN user_wants_to_end = true:
+	- Respond with warm closing message
+	- Thank them for their time
+	- Use "Allah Hafiz" or "Thank you for shopping with Wear Ego"
+	- Keep it brief and friendly
+	- Set BOTH conversation_complete = true AND user_wants_to_end = true
+
+	EXAMPLE FLOW:
+
+	User: "Show me dresses"
+	Assistant: [Shows products]
+	{
+	  "response": "Here are our beautiful dresses... Kya main aur kisi tarah se aapki madad kar sakti hoon?",
+	  "conversation_complete": true,
+	  "user_wants_to_end": false
+	}
+
+	User: "No, that's all"
+	Assistant: [Closing message]
+	{
+	  "response": "Thank you for visiting Wear Ego! Allah Hafiz!",
+	  "conversation_complete": true,
+	  "user_wants_to_end": true
+	}
+
+	IMPORTANT:
+	- Don't ask "anything else" too early (wait until task is complete)
+	- Don't ask multiple times in same conversation
+	- Be natural - if user asks new question, continue helping
+	- Only close when user explicitly indicates they're done
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	`;
+
+	systemPrompt += closureInstructions;
+
+	// ✅ ADD THIS NEW SECTION: Order/Purchase Intent Handling
+	const orderHandlingInstructions = this._getOrderHandlingInstructions(agent, hasProducts);
+	systemPrompt += orderHandlingInstructions;
+
 	  
 	  // Add conversation strategy ONLY if products exist
 	  if (hasProducts && conversationStrategy?.preference_collection) {
@@ -1593,6 +1832,187 @@ IMAGE REFERENCES:
 	  return systemPrompt;
 	}
 
+
+	/**
+	 * Get order/purchase handling instructions based on agent capabilities
+	 * @private
+	 */
+	_getOrderHandlingInstructions(agent, hasProducts) {
+	  // Check if agent has order-related functions
+	  const hasOrderFunction = agent.functions && agent.functions.length > 0 && 
+		agent.functions.some(fn => 
+		  fn.name.toLowerCase().includes('order') ||
+		  fn.name.toLowerCase().includes('purchase') ||
+		  fn.name.toLowerCase().includes('checkout') ||
+		  fn.name.toLowerCase().includes('cart')
+		);
+	  
+	  // Check if instructions mention order process
+	  const instructionsMentionOrders = agent.instructions && (
+		agent.instructions.toLowerCase().includes('order') ||
+		agent.instructions.toLowerCase().includes('purchase') ||
+		agent.instructions.toLowerCase().includes('checkout') ||
+		agent.instructions.toLowerCase().includes('buy')
+	  );
+	  
+	  // Check if agent has Shopify integration
+	  const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
+	  
+	  let instructions = `
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🛒 ORDER/PURCHASE REQUEST HANDLING
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	`;
+
+	  if (hasOrderFunction) {
+		// Agent HAS order functions - can process orders
+		instructions += `
+	✅ YOU HAVE ORDER PROCESSING FUNCTIONS AVAILABLE
+
+	When user wants to buy/order:
+	1. Use the available order functions to process the request
+	2. Follow the function parameters exactly
+	3. Return the function result to user
+	4. Set order_intent_detected = true
+
+	Available order functions:
+	${agent.functions.filter(fn => 
+	  fn.name.toLowerCase().includes('order') ||
+	  fn.name.toLowerCase().includes('purchase') ||
+	  fn.name.toLowerCase().includes('checkout')
+	).map(fn => `- ${fn.name}: ${fn.description}`).join('\n')}
+
+	DO:
+	✅ Use order functions when user wants to buy
+	✅ Collect required information (size, color, address, etc.)
+	✅ Confirm details before processing
+	✅ Call the appropriate function
+
+	DON'T:
+	❌ Generate fake order numbers yourself
+	❌ Claim order is placed without calling function
+	❌ Skip collecting required information
+	`;
+	  } else if (instructionsMentionOrders) {
+		// Instructions mention order process - follow them
+		instructions += `
+	⚠️ NO ORDER FUNCTIONS, BUT INSTRUCTIONS MENTION ORDER PROCESS
+
+	Your instructions contain information about orders/purchases.
+	Follow those instructions exactly.
+
+	When user wants to buy/order:
+	1. Check your base instructions for order process details
+	2. Follow the process mentioned in your instructions
+	3. If instructions say to transfer → set agent_transfer = true
+	4. If instructions give a URL/website → share that with user
+	5. Set order_intent_detected = true
+
+	DO:
+	✅ Follow order instructions from your base prompt
+	✅ Guide user through the specified process
+	✅ Share any URLs/links mentioned in instructions
+	✅ Transfer to human if instructions say so
+
+	DON'T:
+	❌ Generate fake order numbers
+	❌ Process orders without proper authorization
+	❌ Claim order is placed when it's not
+	`;
+	  } else if (hasShopify && hasProducts) {
+		// Has Shopify + products - share purchase URLs
+		instructions += `
+	🛍️ SHOPIFY STORE INTEGRATION AVAILABLE
+
+	You have access to a Shopify store with products.
+	When user wants to buy/order:
+
+	1. Search for the requested product (if not already shown)
+	2. Share the product's purchase URL from Shopify
+	3. Explain user can click the link to complete purchase
+	4. Set order_intent_detected = true
+
+	RESPONSE TEMPLATE:
+	"Main aapko yeh product ka link share kar rahi hoon. Aap is link par click karke 
+	product dekh sakte hain aur order place kar sakte hain:
+
+	[Product Name]
+	Price: Rs. [price]
+	🔗 Purchase Link: [product purchase URL]
+
+	Kya aapko kisi aur product ki zarurat hai?"
+
+	DO:
+	✅ Search and show the requested product
+	✅ Share direct purchase URL from Shopify
+	✅ Explain how to complete purchase on website
+	✅ Offer to help find more products
+
+	DON'T:
+	❌ Generate order numbers yourself
+	❌ Claim you can process the order directly
+	❌ Say "order placed" without user going to website
+	❌ Make up fake tracking IDs
+	`;
+	  } else {
+		// No order capability - offer agent transfer
+		instructions += `
+	❌ NO ORDER PROCESSING CAPABILITY
+
+	You have NO functions, NO order instructions, and NO store integration.
+	When user wants to buy/order:
+
+	1. Politely explain you cannot process orders directly
+	2. Offer to transfer to a human agent who can help
+	3. Set agent_transfer = true
+	4. Set order_intent_detected = true
+
+	RESPONSE TEMPLATE:
+	"Mujhe maaf kariye, lekin main directly orders process nahi kar sakti. 
+	Agar aap order place karna chahte hain, toh main aapko ek human agent 
+	se connect kar sakti hoon jo aapki madad kar sakenge. 
+
+	Kya main aapko human agent se connect kar doon?"
+
+	DO:
+	✅ Be honest about limitations
+	✅ Offer human agent transfer
+	✅ Set agent_transfer = true
+	✅ Be helpful and polite
+
+	DON'T:
+	❌ Generate fake order numbers
+	❌ Pretend you can process orders
+	❌ Give false hope about order placement
+	❌ Make up confirmation IDs
+	`;
+	  }
+
+	  instructions += `
+
+	🚨 CRITICAL: ORDER INTENT DETECTION
+
+	SET order_intent_detected = true WHEN:
+	- User says "I want to buy/order/purchase"
+	- User asks "How do I order?"
+	- User says "Place order for this"
+	- User asks for checkout/payment
+	- Any clear purchase/buying intent
+
+	When order_intent_detected = true:
+	- Follow the appropriate process above
+	- NEVER generate fake order numbers
+	- NEVER claim order is placed without proper authorization
+	- NEVER create transaction IDs, tracking numbers, etc.
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	`;
+
+	  return instructions;
+	}
+
 	/**
 	 * Get anti-hallucination instructions based on content type
 	 * @private
@@ -1608,30 +2028,53 @@ IMAGE REFERENCES:
 	❌ Answer questions outside your ${hasDocuments ? 'knowledge base' : 'instructions'} ${hasProducts ? 'or product catalog' : ''}
 	❌ Make up information, facts, statistics, ${hasProducts ? 'product details, ' : ''}or prices
 	${hasProducts ? '❌ Claim products are available without searching first' : ''}
+	❌ Create fake order numbers, tracking IDs, or transaction references
+	❌ Say "order placed" or "order confirmed" without proper authorization
+	❌ Generate confirmation codes, booking IDs, or receipt numbers
+	❌ Process payments or transactions (you have NO such capability)
+	❌ Claim you can complete checkout process yourself
 	❌ Provide information that contradicts your instructions
 	❌ Discuss topics not related to your role and purpose
 	❌ Claim capabilities or knowledge you don't have
 	❌ Speculate or guess when you don't have information
 
+	🛒 ORDER PROCESSING RULES:
+	1. Check if you have order functions → Use them
+	2. Check your instructions for order process → Follow them
+	3. If you have Shopify products → Share purchase URLs
+	4. If none of above → Offer human agent transfer
+	5. NEVER generate fake order confirmation yourself
+	6. Set order_intent_detected = true when user wants to buy
+
+	🚨 STRICTLY OFF-LIMITS TOPICS:
+	- Politics, politicians, current events (e.g., "Imran Khan")
+	- Religious, controversial, or sensitive topics
+	- Medical, legal, or financial advice
+	- Personal information about real people
+	- Topics unrelated to fashion/clothing/Wear Ego
+
 	${hasDocuments ? `
 	WHEN YOU DON'T KNOW (set knowledge_search_needed = true):
-	- User asks about topics that might be in your knowledge base
+	- User asks about Wear Ego policies, store info, or FAQs
 	- You need specific information to answer accurately
-	- Question requires domain-specific knowledge
+	- Question requires domain-specific knowledge about fashion/brand
+	- ONLY if the query is relevant to fashion/Wear Ego
 	` : ''}
 
 	${hasProducts ? `
 	WHEN SEARCHING PRODUCTS (set product_search_needed = true):
-	- User requests to see/find products
+	- User requests to see/find fashion items
 	- After collecting sufficient preferences
 	- When ready_to_search = true
+	- ONLY for fashion/clothing-related queries
 	` : ''}
 
 	WHEN TO TRANSFER TO HUMAN (set agent_transfer = true):
-	- Question is outside your ${hasDocuments || hasProducts ? 'knowledge base/catalog' : 'scope'}
+	- Question is completely outside fashion/Wear Ego domain
 	- User explicitly requests human agent
 	- User shows frustration (3+ failed attempts)
-	- You cannot answer accurately
+	- You cannot answer accurately within your scope
+	- User asks about politics, religion, or controversial topics
 
 	${!hasDocuments && !hasProducts ? `
 	⚠️ CRITICAL: You have NO knowledge base and NO product catalog.
@@ -1639,9 +2082,19 @@ IMAGE REFERENCES:
 	For anything else, transfer to human immediately.
 	` : ''}
 
+	🎯 YOUR SCOPE: Fashion, clothing, Wear Ego products/services ONLY
+	🚫 OUT OF SCOPE: Politics, news, general knowledge, personal questions
+
+	IF USER ASKS IRRELEVANT QUESTION:
+	- Politely decline to answer
+	- Explain you only handle fashion/Wear Ego queries
+	- Offer to transfer to human if they need help with something else
+	- DO NOT search knowledge base for irrelevant topics
+	- DO NOT set knowledge_search_needed = true for off-topic queries
+
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	`;
-  }
+	}
 
   /**
    * Generate preference collection instructions based on strategy
@@ -1959,75 +2412,33 @@ Adapt based on context and user behavior.
     };
   }
 
-  const formatted = knowledgeFormatter.formatKnowledgeResponse(knowledgeResults, {
-    includeImages: true,
-    imagePosition: 'inline',
-    maxImages: 10,
-    imageSize: 'medium',
-    includeMetadata: true,
-    baseUrl: process.env.API_BASE_URL || ''
-  });
-    
-  // Format text results with markdown->HTML conversion
-  const formattedTextResults = knowledgeResults.text_results.map(r => {
-    // Apply markdown formatting to THIS result's content
-    const resultFormatted = markdown.formatResponse(r.content);
-    
-    return {
-      type: 'document',
-      source_id: r.source?.document_id,
-      title: r.source?.document_name,
-      
-      // ✅ Use individual result's formatted content
-      content: resultFormatted.text,
-      content_html: resultFormatted.html,
-      content_markdown: resultFormatted.markdown,
-      
-      page: r.source?.page,
-      chunk_id: r.source?.chunk_id,
-      relevance_score: r.score,
-      url: r.source?.url,
-      metadata: r.source?.metadata || {},
-      
-      // NEW: Add image references if present
-      has_images: r.source?.metadata?.has_images || false,
-      linked_images: r.source?.metadata?.linked_images || []
-    };
-  });
+  // Text results
+  const formattedTextResults = (knowledgeResults.text_results || []).map(r => ({
+    result_id: r.result_id,
+    type: r.type,
+    content: r.content,
+    source: r.source,
+    score: r.score,
+    scoring_details: r.scoring_details,
+    metadata: r.metadata
+  }));
 
-  // ✅ FIXED: Image results with comprehensive property fallbacks
-  const formattedImageResults = (knowledgeResults.image_results || []).map(img => {
-    console.log('📸 Formatting image result:', JSON.stringify(img, null, 2));  // DEBUG
-    
-    // Extract properties with fallbacks for different response formats
-    const imageId = img.image_id || img.result_id || img.id;
-    const imageUrl = img.image_url || img.url;
-    const description = img.description || img.title || img.filename || 'Image';
-    const pageNumber = img.page_number || img.metadata?.page_number || img.source?.page;
-    const score = img.similarity_score || img.score || 0;
-    const sourceDoc = img.source_document || img.source?.document_name || img.metadata?.document_name;
-    
-    const formatted = {
-      image_id: imageId,
-      url: this._getImageUrl(imageUrl),
-      thumbnail_url: this._getThumbnailUrl(imageUrl),
-      title: description,
-      description: description,
-      similarity_score: score,
-      source_document: sourceDoc,
-      page_number: pageNumber,
-      width: img.width,
-      height: img.height,
-      metadata: img.metadata || {}
-    };
-    
-    console.log('📸 Formatted to:', JSON.stringify(formatted, null, 2));  // DEBUG
-    return formatted;
-  });
+  // Image results
+  const formattedImageResults = (knowledgeResults.image_results || []).map(img => ({
+    image_id: img.image_id || img.result_id,
+    url: this._getImageUrl(img.image_url || img.url),
+    thumbnail_url: this._getThumbnailUrl(img.thumbnail_url || img.url),
+    title: img.title || img.description || 'Image',
+    description: img.description,
+    similarity_score: img.similarity_score || img.score,
+    source_document: img.source_document || img.metadata?.document_name,
+    page_number: img.page_number || img.metadata?.page_number,
+    width: img.width,
+    height: img.height,
+    metadata: img.metadata || {}
+  }));
 
-  console.log(`📸 Formatted ${formattedImageResults.length} images total`);  // DEBUG
-
-  // Product results
+  // ✅ FIXED: Product results (was truncated)
   const formattedProductResults = (knowledgeResults.product_results || []).map(p => ({
     product_id: p.product_id,
     name: p.name,
@@ -2042,12 +2453,26 @@ Adapt based on context and user behavior.
     purchase_url: p.purchase_url || null
   }));
 
+  console.log(`📝 Formatted ${formattedTextResults.length} text results`);
+  console.log(`📸 Formatted ${formattedImageResults.length} images`);
+  console.log(`📦 Formatted ${formattedProductResults.length} products`);  // ✅ NOW WORKS
+
+  // Generate formatted response (from knowledge-formatter.js)
+  const formatted = knowledgeFormatter.formatKnowledgeResponse(knowledgeResults, {
+    includeImages: true,
+    imagePosition: 'inline',
+    maxImages: 10,
+    imageSize: 'medium',
+    includeMetadata: true,
+    baseUrl: process.env.API_BASE_URL || ''
+  });
+
   return {
     text_results: formattedTextResults,
     image_results: formattedImageResults,
-    product_results: formattedProductResults,
+    product_results: formattedProductResults,  // ✅ NOW PROPERLY RETURNED
     
-    // ✅ Return the complete formatted response (includes images)
+    // Formatted responses (for inline image display)
     formatted_html: formatted.html,
     formatted_markdown: formatted.markdown,
     formatted_text: formatted.text,

@@ -6,12 +6,15 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "echo \"No tests yet\"",
     "test:utils": "node src/utils/__tests__/response-builder.test.js",
     "test:cost": "node src/utils/__tests__/cost-calculator.test.js",
     "test:markdown": "node src/utils/__tests__/markdown.test.js",
     "test:validators": "node src/utils/__tests__/validators.test.js",
-    "test:python": "node src/services/__tests__/python-service-client.test.js"
+    "test:python": "node src/services/__tests__/python-service-client.test.js",
+	"test:mysql": "node test-connection.js",
+    "migrate": "node run-migration.js",
+    "migrate:prod": "NODE_ENV=production CONFIRM_MIGRATION=true node run-migration.js"
+  
   },
   "dependencies": {
     "@shopify/shopify-api": "^9.0.0",
@@ -33,6 +36,7 @@
     "marked": "^15.0.12",
     "multer": "^2.0.2",
     "mysql2": "^3.6.5",
+    "nodemailer": "^7.0.10",
     "openai": "^6.7.0",
     "redis": "^4.6.12",
     "sharp": "^0.34.5",

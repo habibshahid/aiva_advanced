@@ -14,8 +14,8 @@ const { v4: uuidv4 } = require('uuid');
 
 // CONFIGURATION
 const CONFIG = {
-  shop_domain: '',
-  access_token: '',
+  shop_domain: 'cod-testing-1122.myshopify.com',
+  access_token: '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',
   // Use existing tenant or create new one
   use_existing_tenant: true, // Set to false to create new tenant
   tenant_id: '8903395d-a021-11f0-bf05-005056b138bb', // Will be set during test

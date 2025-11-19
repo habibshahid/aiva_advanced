@@ -37,6 +37,10 @@ async def search_knowledge(request: SearchRequest):
         
         logger.info(f"Search request: kb_id={kb_id}, query={query[:50]}, top_k={top_k}")
         
+        include_products = False
+        if request.filters:
+            include_products = request.filters.get('include_products', False)
+            
         # Perform search (vector_store handles caching internally)
         results = await vector_store.search(
             kb_id=kb_id,
@@ -44,7 +48,8 @@ async def search_knowledge(request: SearchRequest):
             image=request.image,
             top_k=top_k,
             search_type=search_type,
-            filters=request.filters or {}
+            filters=request.filters or {},
+            include_products=include_products
         )
         
         processing_time = int((time.time() - start_time) * 1000)

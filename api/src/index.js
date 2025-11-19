@@ -21,6 +21,9 @@ const usersRoutes = require('./routes/users');
 const publicChatRoutes = require('./routes/public-chat');
 const widgetRoutes = require('./routes/widget');
 const imagesRoutes = require('./routes/images');
+const settingsRoutes = require('./routes/settings');
+
+const sessionCleanup = require('./jobs/session-cleanup');
 
 const app = express();
 const PORT = process.env.API_PORT || 62001;
@@ -115,6 +118,7 @@ app.use('/api/shopify', shopifyRoutes);
 app.use('/api/conversation-strategy', conversationStrategyRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/images', imagesRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {
@@ -147,6 +151,19 @@ app.listen(PORT, () => {
   console.log(`📚 Swagger: http://localhost:${PORT}/swagger/api-docs`);
   console.log('='.repeat(60));
   console.log('');
+  sessionCleanup.start();
+});
+
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing server...');
+  sessionCleanup.stop();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, closing server...');
+  sessionCleanup.stop();
+  process.exit(0);
 });
 
 module.exports = app;

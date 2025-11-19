@@ -1,0 +1,27 @@
+[Unit]
+Description=AIVA Shopify Sync Worker
+Documentation=https://github.com/your-repo/aiva
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/aiva-oai/api
+Environment="NODE_ENV=production"
+Environment="PATH=/usr/bin:/usr/local/bin"
+ExecStart=/usr/bin/node /etc/aiva-oai/api/worker.js
+Restart=always
+RestartSec=10s
+StandardOutput=append:/etc/aiva-oai/api/logs/worker-out.log
+StandardError=append:/etc/aiva-oai/api/logs/worker-error.log
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=2G
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

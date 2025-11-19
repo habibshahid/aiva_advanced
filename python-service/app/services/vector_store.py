@@ -159,7 +159,8 @@ class VectorStore:
         image: Optional[str] = None,
         top_k: int = 5,
         search_type: str = "hybrid",
-        filters: Dict[str, Any] = None
+        filters: Dict[str, Any] = None,
+        include_products: bool = False
     ) -> Dict[str, Any]:
         """
         Search vectors using cosine similarity with semantic caching
@@ -276,18 +277,22 @@ class VectorStore:
             chunks_searched = len(document_keys)
         
         # ✅ 2. Search products (NEW!)
-        try:
-            from app.services.product_search import product_search_service
-            product_results = await product_search_service.search_products(
-                kb_id=kb_id,
-                query_embedding=query_embedding,
-                top_k=top_k,
-                filters=filters
-            )
-            logger.info(f"Found {len(product_results)} matching products")
-        except Exception as e:
-            logger.error(f"Product search failed: {e}")
-            product_results = []
+        product_results = []
+        if include_products:
+            try:
+                from app.services.product_search import product_search_service
+                product_results = await product_search_service.search_products(
+                    kb_id=kb_id,
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                    filters=filters
+                )
+                logger.info(f"Found {len(product_results)} matching products")
+            except Exception as e:
+                logger.error(f"Product search failed: {e}")
+                product_results = []
+        else:
+            logger.info("Skipping product search (include_products=False)")
         
         search_time = int((time.time() - search_start) * 1000)
         

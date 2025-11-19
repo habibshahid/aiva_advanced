@@ -562,21 +562,32 @@ npm run build
 ```json
 {
   "dependencies": {
+    "@shopify/shopify-api": "^9.0.0",
+    "axios": "^1.12.2",
+    "bcryptjs": "^2.4.3",
+    "bull": "^4.12.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
     "express": "^4.18.2",
-    "mysql2": "^3.6.5",
-    "redis": "^4.6.12",
-    "axios": "^1.6.5",
-    "dotenv": "^16.3.1",
-    "bcrypt": "^5.1.1",
-    "jsonwebtoken": "^9.0.2",
-    "uuid": "^9.0.1",
-    "multer": "^1.4.5-lts.1",
-    "swagger-ui-express": "^5.0.0",
-    "swagger-jsdoc": "^6.2.8",
-    "winston": "^3.11.0",
     "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "fetch": "^1.1.0",
+    "form-data": "^4.0.4",
     "helmet": "^7.1.0",
-    "cors": "^2.8.5"
+    "https": "^1.0.0",
+    "ioredis": "^5.3.2",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "marked": "^15.0.12",
+    "multer": "^2.0.2",
+    "mysql2": "^3.6.5",
+    "nodemailer": "^7.0.10",
+    "openai": "^6.7.0",
+    "redis": "^4.6.12",
+    "sharp": "^0.34.5",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^9.0.1"
   }
 }
 ```
@@ -615,6 +626,17 @@ FLUSH PRIVILEGES;
 # Exit MySQL
 exit;
 ```
+
+And run 
+cd /etc/aiva-oai/api/
+```bash
+npm run migrate 
+exit
+```
+Or
+```bash
+node run-migration.js 
+exit
 
 **Import Database Schema:**
 

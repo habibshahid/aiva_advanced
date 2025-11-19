@@ -202,29 +202,32 @@ router.post('/message', async (req, res) => {
     }
 
     res.json({
-      success: true,
-      data: {
-        session_id: sessionId,
-        message_id: result.message_id,
-        agent_transfer: result.agent_transfer || false,
-        response: result.response, // { text, html, markdown }
-        sources: result.sources || [],
-        images: result.images || [],
-        products: result.products || [],
-        function_calls: result.function_calls || [],
-        llm_decision: result.llm_decision || {},
-        context_used: result.context_used || {},
-        agent_metadata: {
-          agent_id: result.agent_metadata?.agent_id,
-          agent_name: result.agent_metadata?.agent_name,
-          provider: result.agent_metadata?.provider,
-          model: result.agent_metadata?.model,
-          temperature: result.agent_metadata?.temperature
-        },
-        created_at: new Date().toISOString(),
-        new_session_created: session_id !== sessionId
-      }
-    });
+	  success: true,
+	  data: {
+		session_id: sessionId,
+		message_id: result.message_id,
+		agent_transfer: result.agent_transfer || false,
+		response: result.response,
+		formatted_html: result.formatted_html || null,  // ✅ ADD THIS
+		formatted_markdown: result.formatted_markdown || null,  // ✅ ADD THIS
+		formatted_text: result.formatted_text || null,  // ✅ ADD THIS
+		sources: result.sources || [],
+		images: result.images || [],
+		products: result.products || [],
+		function_calls: result.function_calls || [],
+		llm_decision: result.llm_decision || {},
+		context_used: result.context_used || {},
+		agent_metadata: {
+		  agent_id: result.agent_metadata?.agent_id,
+		  agent_name: result.agent_metadata?.agent_name,
+		  provider: result.agent_metadata?.provider,
+		  model: result.agent_metadata?.model,
+		  temperature: result.agent_metadata?.temperature
+		},
+		created_at: new Date().toISOString(),
+		new_session_created: session_id !== sessionId
+	  }
+	});
 
   } catch (error) {
     console.error('Send message error:', error);
