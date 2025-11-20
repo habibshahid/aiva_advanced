@@ -185,49 +185,118 @@ router.post('/message', async (req, res) => {
       userId: null
     });
 
-    // Deduct credits
-    if (result.cost > 0) {
-      await CreditService.deductCredits(
-        session.tenant_id,
-        result.cost,
-        'public_chat_message',
-        {
-          session_id: sessionId,
-          message_id: result.message_id,
-          agent_id: session.agent_id,
-          public_chat: true
-        },
-        sessionId
+    console.log('🔍 [PUBLIC CHAT] Result received:', {
+      cost: result.cost,
+      has_cost_breakdown: !!result.cost_breakdown,
+      operations_count: result.cost_breakdown?.operations?.length || 0,
+      user_analysis_cost: result.user_analysis_cost
+    });
+
+    // ============================================
+    // 💰 DEDUCT CREDITS (LLM + ANALYSIS)
+    // ============================================
+
+    // 1. Check for KB search cost (if any)
+    if (result.cost_breakdown && result.cost_breakdown.operations) {
+      const kbOperation = result.cost_breakdown.operations.find(
+        op => op.operation === 'knowledge_search' || 
+              op.operation === 'knowledge_retrieval' ||
+              op.operation === 'embedding'
       );
+      
+      if (kbOperation && kbOperation.total_cost > 0) {
+        console.log('💰 [PUBLIC CHAT] Deducting KB search cost:', kbOperation.total_cost);
+        await CreditService.deductCredits(
+          session.tenant_id,
+          kbOperation.total_cost,
+          'knowledge_search',
+          {
+            session_id: sessionId,
+            message_id: result.message_id,
+            agent_id: session.agent_id,
+            public_chat: true,
+            query: message.substring(0, 100),
+            kb_id: result.agent_metadata?.kb_id || 'unknown',
+            chunks_retrieved: result.context_used?.knowledge_base_chunks || 0
+          },
+          sessionId
+        );
+      }
     }
 
+    // 2. Calculate total cost (LLM + Analysis)
+    const llmOperation = result.cost_breakdown?.operations?.find(
+      op => op.operation === 'llm_completion' || op.operation === 'llm_generation' || op.operation === 'chat_completion'
+    );
+
+    const analysisOperation = result.cost_breakdown?.operations?.find(
+      op => op.operation === 'message_analysis'
+    );
+
+    const llmCost = llmOperation?.total_cost || result.cost;
+    const analysisCost = analysisOperation?.total_cost || result.user_analysis_cost || 0.0;
+    const totalCost = llmCost + analysisCost;
+
+    console.log('💰 [PUBLIC CHAT] Cost breakdown:', {
+      llm_cost: llmCost,
+      analysis_cost: analysisCost,
+      total_cost: totalCost,
+      llm_operation_found: !!llmOperation,
+      analysis_operation_found: !!analysisOperation
+    });
+
+    console.log('💰 [PUBLIC CHAT] Deducting total cost:', totalCost);
+
+    // 3. Deduct combined cost
+    await CreditService.deductCredits(
+      session.tenant_id,
+      totalCost,
+      'public_chat_message',
+      {
+        session_id: sessionId,
+        message_id: result.message_id,
+        agent_id: session.agent_id,
+        public_chat: true,
+        model: result.agent_metadata?.model || 'gpt-4o-mini',
+        message_length: message.length,
+        response_length: result.response?.text?.length || 0,
+        input_tokens: result.context_used?.total_context_tokens || 0,
+        output_tokens: result.response?.text?.length || 0,
+        analysis_cost: analysisCost,
+        includes_analysis: analysisCost > 0
+      },
+      sessionId
+    );
+
+    console.log('✅ [PUBLIC CHAT] Credit deduction complete');
+
     res.json({
-	  success: true,
-	  data: {
-		session_id: sessionId,
-		message_id: result.message_id,
-		agent_transfer: result.agent_transfer || false,
-		response: result.response,
-		formatted_html: result.formatted_html || null,  // ✅ ADD THIS
-		formatted_markdown: result.formatted_markdown || null,  // ✅ ADD THIS
-		formatted_text: result.formatted_text || null,  // ✅ ADD THIS
-		sources: result.sources || [],
-		images: result.images || [],
-		products: result.products || [],
-		function_calls: result.function_calls || [],
-		llm_decision: result.llm_decision || {},
-		context_used: result.context_used || {},
-		agent_metadata: {
-		  agent_id: result.agent_metadata?.agent_id,
-		  agent_name: result.agent_metadata?.agent_name,
-		  provider: result.agent_metadata?.provider,
-		  model: result.agent_metadata?.model,
-		  temperature: result.agent_metadata?.temperature
-		},
-		created_at: new Date().toISOString(),
-		new_session_created: session_id !== sessionId
-	  }
-	});
+      success: true,
+      data: {
+        session_id: sessionId,
+        message_id: result.message_id,
+        agent_transfer: result.agent_transfer || false,
+        response: result.response,
+        formatted_html: result.formatted_html || null,
+        formatted_markdown: result.formatted_markdown || null,
+        formatted_text: result.formatted_text || null,
+        sources: result.sources || [],
+        images: result.images || [],
+        products: result.products || [],
+        function_calls: result.function_calls || [],
+        llm_decision: result.llm_decision || {},
+        context_used: result.context_used || {},
+        agent_metadata: {
+          agent_id: result.agent_metadata?.agent_id,
+          agent_name: result.agent_metadata?.agent_name,
+          provider: result.agent_metadata?.provider,
+          model: result.agent_metadata?.model,
+          temperature: result.agent_metadata?.temperature
+        },
+        created_at: new Date().toISOString(),
+        new_session_created: session_id !== sessionId
+      }
+    });
 
   } catch (error) {
     console.error('Send message error:', error);

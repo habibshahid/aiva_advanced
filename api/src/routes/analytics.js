@@ -9,6 +9,131 @@ const { verifyToken } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const db = require('../config/database');
 const ResponseBuilder = require('../utils/response-builder');
+const TranscriptionService = require('../services/TranscriptionService');
+
+/**
+ * @route POST /api/analytics/call/:callLogId/generate
+ * @desc Generate session-level analytics for a call
+ * @access Private (called by bridge service)
+ */
+router.post('/call/:callLogId/generate', async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { callLogId } = req.params;
+
+    const analyticsId = await TranscriptionService.generateCallAnalytics(callLogId);
+
+    if (!analyticsId) {
+      return res.status(404).json(
+        rb.error('No transcriptions found for this call', 'NOT_FOUND')
+      );
+    }
+
+    res.status(201).json(
+      rb.success({ analytics_id: analyticsId }, 'Analytics generated')
+    );
+
+  } catch (error) {
+    console.error('Error generating call analytics:', error);
+    res.status(500).json(
+      rb.error('Failed to generate analytics', 'SERVER_ERROR')
+    );
+  }
+});
+
+/**
+ * @route POST /api/analytics/chat/:sessionId/generate
+ * @desc Generate session-level analytics for a chat
+ * @access Private
+ */
+router.post('/chat/:sessionId/generate', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { sessionId } = req.params;
+
+    const analyticsId = await TranscriptionService.generateChatAnalytics(sessionId);
+
+    if (!analyticsId) {
+      return res.status(404).json(
+        rb.error('No messages found for this session', 'NOT_FOUND')
+      );
+    }
+
+    res.status(201).json(
+      rb.success({ analytics_id: analyticsId }, 'Analytics generated')
+    );
+
+  } catch (error) {
+    console.error('Error generating chat analytics:', error);
+    res.status(500).json(
+      rb.error('Failed to generate analytics', 'SERVER_ERROR')
+    );
+  }
+});
+
+/**
+ * @route GET /api/analytics/call/:callLogId
+ * @desc Get analytics for a call
+ * @access Private
+ */
+router.get('/call/:callLogId', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { callLogId } = req.params;
+
+    const analytics = await TranscriptionService.getCallAnalytics(callLogId);
+
+    if (!analytics) {
+      return res.status(404).json(
+        rb.error('Analytics not found', 'NOT_FOUND')
+      );
+    }
+
+    res.json(
+      rb.success({ analytics })
+    );
+
+  } catch (error) {
+    console.error('Error fetching call analytics:', error);
+    res.status(500).json(
+      rb.error('Failed to fetch analytics', 'SERVER_ERROR')
+    );
+  }
+});
+
+/**
+ * @route GET /api/analytics/chat/:sessionId
+ * @desc Get analytics for a chat session
+ * @access Private
+ */
+router.get('/chat/:sessionId', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { sessionId } = req.params;
+
+    const analytics = await TranscriptionService.getChatAnalytics(sessionId);
+
+    if (!analytics) {
+      return res.status(404).json(
+        rb.error('Analytics not found', 'NOT_FOUND')
+      );
+    }
+
+    res.json(
+      rb.success({ analytics })
+    );
+
+  } catch (error) {
+    console.error('Error fetching chat analytics:', error);
+    res.status(500).json(
+      rb.error('Failed to fetch analytics', 'SERVER_ERROR')
+    );
+  }
+});
 
 /**
  * @route GET /api/reports/dashboard

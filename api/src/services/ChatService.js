@@ -279,7 +279,7 @@ class ChatService {
 		try {
 			await TranscriptionService.generateChatAnalytics(sessionId);
 		} catch (error) {
-			logger.error('Error generating chat analytics:', error);
+			console.error('Error generating chat analytics:', error);
 		}
     }
 
@@ -318,13 +318,20 @@ class ChatService {
         }
 
         // Save user message
-        const userMessageId = await this._saveMessage({
+        const userMessageResult = await this._saveMessage({
             sessionId,
             role: 'user',
             content: message,
             image
         });
 
+		const userMessageId = userMessageResult.messageId || userMessageResult; // Handle both old/new format
+
+		// Track user message analysis cost
+		const userAnalysisCost = typeof userMessageResult === 'object' 
+			? (userMessageResult.analysisCost + userMessageResult.translationCost)
+			: 0.0;
+			
         // Get agent with full configuration
         const agent = await AgentService.getAgent(session.agent_id);
 
@@ -913,6 +920,40 @@ class ChatService {
             }
 
             const totalCost = CostCalculator.combineCosts(costs);
+
+			// ============================================
+			// 💰 ADD ANALYSIS COST TO TOTAL COST (IMAGE PATH)
+			// ============================================
+			if (userAnalysisCost > 0) {
+				console.log(`💰 [IMAGE PATH] Adding user analysis cost: $${userAnalysisCost.toFixed(6)}`);
+				
+				// Ensure operations array exists
+				if (!totalCost.operations) {
+					totalCost.operations = [];
+				}
+				
+				// Add analysis as an operation
+				totalCost.operations.push({
+					operation: 'message_analysis',
+					quantity: 1,
+					unit_cost: userAnalysisCost,
+					total_cost: userAnalysisCost,
+					details: {
+						sentiment_analysis: true,
+						language_detection: true,
+						profanity_detection: true,
+						intent_detection: true
+					}
+				});
+				
+				// Update cost breakdown totals
+				const baseAnalysisCost = userAnalysisCost / 1.2; // Remove 20% profit margin
+				totalCost.base_cost = (totalCost.base_cost || 0) + baseAnalysisCost;
+				totalCost.profit_amount = (totalCost.profit_amount || 0) + (userAnalysisCost - baseAnalysisCost);
+				totalCost.final_cost = (totalCost.final_cost || 0) + userAnalysisCost;
+				
+				console.log(`💰 [IMAGE PATH] Updated total cost with analysis: $${totalCost.final_cost.toFixed(6)}`);
+			}
 
             // Save assistant message
             const assistantMessageId = await this._saveMessage({
@@ -1532,6 +1573,36 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
         const totalCost = CostCalculator.combineCosts(costs);
 
+		// ============================================
+		// 💰 ADD ANALYSIS COST TO OPERATIONS
+		// ============================================
+		if (userAnalysisCost > 0) {
+			// Ensure operations array exists
+			if (!totalCost.operations) {
+				totalCost.operations = [];
+			}
+			
+			// Add analysis as an operation
+			totalCost.operations.push({
+				operation: 'message_analysis',
+				quantity: 1,
+				unit_cost: userAnalysisCost,
+				total_cost: userAnalysisCost,
+				details: {
+					sentiment_analysis: true,
+					language_detection: true,
+					profanity_detection: true,
+					intent_detection: true
+				}
+			});
+			
+			// Update cost breakdown totals
+			const baseAnalysisCost = userAnalysisCost / 1.2; // Remove profit margin to get base
+			totalCost.base_cost = (totalCost.base_cost || 0) + baseAnalysisCost;
+			totalCost.profit_amount = (totalCost.profit_amount || 0) + (userAnalysisCost - baseAnalysisCost);
+			totalCost.final_cost = (totalCost.final_cost || 0) + userAnalysisCost;
+		}
+
         // Save assistant message
         const assistantMessageId = await this._saveMessage({
             sessionId,
@@ -1630,7 +1701,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
                 temperature: agent.temperature || 0.7
             },
             cost: totalCost.final_cost,
-            cost_breakdown: totalCost
+            cost_breakdown: totalCost,
+			user_analysis_cost: userAnalysisCost
         };
     }
 
@@ -2348,55 +2420,115 @@ Adapt based on context and user behavior.
      * @private
      */
     async _saveMessage(messageData) {
-        const messageId = uuidv4();
-
-        await db.query(
-            `INSERT INTO yovo_tbl_aiva_chat_messages (
-			id, session_id, role, content, content_html, content_markdown,
-			sources, images, products, function_calls, cost, cost_breakdown,
-			tokens_input, tokens_output, processing_time_ms, agent_transfer_requested
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                messageId,
-                messageData.sessionId,
-                messageData.role,
-                messageData.content,
-                messageData.contentHtml || null,
-                messageData.contentMarkdown || null,
-                messageData.sources ? JSON.stringify(messageData.sources) : null,
-                messageData.images ? JSON.stringify(messageData.images) : null,
-                messageData.products ? JSON.stringify(messageData.products) : null,
-                messageData.functionCalls ? JSON.stringify(messageData.functionCalls) : null,
-                messageData.cost || 0,
-                messageData.costBreakdown ? JSON.stringify(messageData.costBreakdown) : null,
-                messageData.tokensInput || 0,
-                messageData.tokensOutput || 0,
-                messageData.processingTimeMs || 0,
-                messageData.agentTransferRequested || false
-            ]
-        );
+		const messageId = uuidv4();
 		
-		TranscriptionAnalysisService.analyzeMessage(message, 'customer')
-			.then(analysis => {
-				// Check if translation needed
-				if (analysis.language_detected && analysis.language_detected !== 'en') {
-					return TranscriptionAnalysisService.translateToEnglish(message, analysis.language_detected)
-						.then(translation => ({
-							...analysis,
-							translated_message: translation.translated_text
-						}));
+		try {
+			// ============================================
+			// 🎯 AUTOMATIC ANALYSIS FOR USER MESSAGES
+			// ============================================
+			let analysis = null;
+			let translatedMessage = null;
+			
+			// Only analyze user messages (not assistant responses)
+			if (messageData.role === 'user' && messageData.content) {
+				try {
+					console.info(`Analyzing chat message: ${messageId}`);
+					
+					// Analyze the message
+					analysis = await TranscriptionAnalysisService.analyzeMessage(
+						messageData.content,
+						'customer',
+						{}
+					);
+					
+					// Translate if not English
+					if (analysis.language_detected && analysis.language_detected !== 'en') {
+						const translation = await TranscriptionAnalysisService.translateToEnglish(
+							messageData.content,
+							analysis.language_detected
+						);
+						translatedMessage = translation.translated_text;
+					}
+					
+					console.info(`Message analysis complete: sentiment=${analysis.sentiment}, intent=${analysis.primary_intent}`);
+					
+				} catch (analysisError) {
+					console.error('Error analyzing chat message:', analysisError);
+					analysis = null;
 				}
-				return analysis;
-			})
-			.then(analysis => {
-				return TranscriptionService.updateChatMessageAnalysis(messageId, analysis);
-			})
-			.catch(error => {
-				logger.error('Error analyzing chat message:', error);
-			});
+			}
 
-        return messageId;
-    }
+			// ============================================
+			// 💾 SAVE MESSAGE WITH ANALYSIS DATA
+			// ============================================
+			// Count: 31 columns = 31 values
+			await db.query(
+				`INSERT INTO yovo_tbl_aiva_chat_messages (
+					id, session_id, role, content, content_html, content_markdown,
+					sources, images, products, function_calls, 
+					cost, cost_breakdown, tokens_input, tokens_output, processing_time_ms,
+					agent_transfer_requested,
+					language_detected, translated_message,
+					sentiment, sentiment_score, sentiment_confidence,
+					profanity_detected, profanity_score, profane_words,
+					intents, primary_intent, intent_confidence,
+					topics, keywords, emotion_tags,
+					analyzed_at, analysis_model, analysis_cost
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				[
+					// Basic message data (16 values)
+					messageId,
+					messageData.sessionId,
+					messageData.role,
+					messageData.content,
+					messageData.contentHtml || null,
+					messageData.contentMarkdown || null,
+					messageData.sources ? JSON.stringify(messageData.sources) : null,
+					messageData.images ? JSON.stringify(messageData.images) : null,
+					messageData.products ? JSON.stringify(messageData.products) : null,
+					messageData.functionCalls ? JSON.stringify(messageData.functionCalls) : null,
+					messageData.cost || 0,
+					messageData.costBreakdown ? JSON.stringify(messageData.costBreakdown) : null,
+					messageData.tokensInput || 0,
+					messageData.tokensOutput || 0,
+					messageData.processingTimeMs || null,
+					messageData.agentTransferRequested ? 1 : 0,
+					
+					// Analysis fields (17 values)
+					analysis?.language_detected || null,
+					translatedMessage || null,
+					analysis?.sentiment || null,
+					analysis?.sentiment_score || null,
+					analysis?.sentiment_confidence || null,
+					analysis?.profanity_detected ? 1 : 0,
+					analysis?.profanity_score || 0.0,
+					analysis?.profane_words ? JSON.stringify(analysis.profane_words) : null,
+					analysis?.intents ? JSON.stringify(analysis.intents) : null,
+					analysis?.primary_intent || null,
+					analysis?.intent_confidence || null,
+					analysis?.topics ? JSON.stringify(analysis.topics) : null,
+					analysis?.keywords ? JSON.stringify(analysis.keywords) : null,
+					analysis?.emotion_tags ? JSON.stringify(analysis.emotion_tags) : null,
+					analysis ? new Date() : null,
+					analysis?.analysis_metadata?.model || null,
+					analysis?.analysis_metadata?.cost || 0.0
+					
+					// TOTAL: 16 + 17 = 33 values to match 33 placeholders
+				]
+			);
+
+			console.info(`Chat message saved with analysis: ${messageId}`);
+			return {
+				messageId: messageId,
+				analysisCost: analysis?.analysis_metadata?.cost || 0.0,
+				translationCost: translatedMessage ? (analysis?.translation_cost || 0.0) : 0.0
+			};
+			
+		} catch (error) {
+			console.error('Error saving chat message:', error);
+			throw error;
+		}
+	}
 
     /**
      * Update session statistics
