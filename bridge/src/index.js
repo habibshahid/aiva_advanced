@@ -479,6 +479,17 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 						logger.info(`Cleaned up Redis key: ${redisKey}`);
 					}
 				}
+				
+				if (connectionData && connectionData.callLogId) {
+					try {
+						await TranscriptionService.generateSessionAnalytics(
+							connectionData.sessionId,
+							connectionData.callLogId
+						);
+					} catch (error) {
+						logger.error('Failed to generate session analytics:', error);
+					}
+				}
 			} else {
 				// Call ended but no cost data - log as failed
 				if (connectionData && this.callLogger) {

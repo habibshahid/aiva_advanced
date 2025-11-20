@@ -4,10 +4,13 @@
 
 const mongoClient = require('../config/mongodb-config');
 const logger = require('../utils/logger');
+const axios = require('axios');
 
 class TranscriptionService {
     constructor() {
         this.collection = null;
+		this.apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+        this.sequenceCounters = new Map(); // Track message sequence per session
     }
     
     async initialize() {
@@ -80,7 +83,28 @@ class TranscriptionService {
 				{ upsert: true }
 			);
 			
-			logger.debug(`Transcription saved: ${interactionId} | ${speakerId} | "${originalText}"`);
+			logger.debug(`Transcription saved in Mongo: ${interactionId} | ${speakerId} | "${originalText}"`);
+			
+			
+			// Get or initialize sequence number for this session
+			if (!this.sequenceCounters.has(interactionId)) {
+				this.sequenceCounters.set(interactionId, 0);
+			}
+			const sequenceNumber = this.sequenceCounters.get(interactionId) + 1;
+			this.sequenceCounters.set(interactionId, sequenceNumber);
+			
+			// Call API to save transcription
+			await axios.post(`${this.apiBaseUrl}/api/transcriptions/call`, {
+				session_id: interactionId,
+				speaker: speaker,
+				speaker_id: speakerId,
+				sequence_number: sequenceNumber,
+				original_message: originalText,
+				timestamp: timestamp,
+				analyze_now: true // Enable real-time analysis
+			});
+			
+			logger.debug(`Transcription saved in MySQL: ${interactionId} | ${speakerId} | #${sequenceNumber} | "${originalText}"`);
 			
 			return result;
 			
@@ -128,6 +152,27 @@ class TranscriptionService {
             return [];
         }
     }
+	
+	/**
+	 * Trigger session analytics generation when call ends
+	 * @param {string} sessionId - Session ID
+	 * @param {string} callLogId - Call log ID
+	 */
+	async generateSessionAnalytics(sessionId, callLogId) {
+		try {
+			logger.info(`Generating session analytics for call: ${callLogId}`);
+			
+			await axios.post(`${this.apiBaseUrl}/api/analytics/call/${callLogId}/generate`);
+			
+			// Clean up sequence counter
+			this.sequenceCounters.delete(sessionId);
+			
+			logger.info(`Session analytics generated for call: ${callLogId}`);
+			
+		} catch (error) {
+			logger.error('Error generating session analytics:', error.message);
+		}
+	}
 }
 
 module.exports = new TranscriptionService();

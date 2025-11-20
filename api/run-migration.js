@@ -324,7 +324,7 @@ async function runMigration() {
     
     // Execute migration
     logSection('Running Migration');
-    const sqlFilePath = path.join(__dirname, 'aiva_database_migration.sql');
+    const sqlFilePath = path.join(__dirname, 'migrations', 'aiva_database_migration.sql');
     await executeSQLFile(connection, sqlFilePath);
     
     // Verify tables
@@ -345,6 +345,39 @@ async function runMigration() {
       log('⚠ Migration completed but verification failed', 'yellow');
       log('Please check the database manually', 'yellow');
     }
+	
+	logSection('AIVA Database Migrations');
+    
+    log('Configuration:', 'cyan');
+    log(`  Host:     ${DB_CONFIG.host}:${DB_CONFIG.port}`, 'cyan');
+    log(`  Database: ${DB_CONFIG.database}`, 'cyan');
+    log(`  User:     ${DB_CONFIG.user}`, 'cyan');
+    
+    // Connect
+    connection = await mysql.createConnection(DB_CONFIG);
+    log('\n✓ Connected to database', 'green');
+    
+    // Get pending migrations
+    const pending = await getPendingMigrations(connection);
+    
+    if (pending.length === 0) {
+      log('\n✓ No pending migrations', 'green');
+      return;
+    }
+    
+    log(`\nFound ${pending.length} pending migration(s):`, 'yellow');
+    pending.forEach(m => log(`  - ${m.name}`, 'yellow'));
+    
+    // Execute each migration
+    logSection('Executing Migrations');
+    
+    for (const migration of pending) {
+      await executeMigration(connection, migration);
+    }
+    
+    logSection('Migration Complete');
+    log('✓ All migrations executed successfully!', 'green');
+	return;
     
   } catch (error) {
     logSection('Migration Failed');
@@ -402,6 +435,315 @@ Requirements:
   - mysql2 package: npm install mysql2
   - aiva_database_migration.sql file in the same directory
 `);
+}
+
+/**
+ * Ensure migrations tracking table exists
+ */
+async function ensureMigrationsTable(connection) {
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS yovo_tbl_aiva_migrations (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL UNIQUE,
+      executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_name (name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+}
+
+/**
+ * Get list of executed migrations
+ */
+async function getExecutedMigrations(connection) {
+  await ensureMigrationsTable(connection);
+  
+  const [rows] = await connection.query(
+    'SELECT name FROM yovo_tbl_aiva_migrations ORDER BY id ASC'
+  );
+  
+  return rows.map(row => row.name);
+}
+
+/**
+ * Mark migration as executed
+ */
+async function markMigrationExecuted(connection, migrationName) {
+  await connection.query(
+    'INSERT INTO yovo_tbl_aiva_migrations (name) VALUES (?)',
+    [migrationName]
+  );
+}
+
+/**
+ * Remove migration from executed list
+ */
+async function unmarkMigration(connection, migrationName) {
+  await connection.query(
+    'DELETE FROM yovo_tbl_aiva_migrations WHERE name = ?',
+    [migrationName]
+  );
+}
+
+/**
+ * Get list of available migration files
+ */
+async function getAvailableMigrations() {
+  const migrationsDir = path.join(__dirname, 'migrations');
+  
+  try {
+    const files = await fs.readdir(migrationsDir);
+    const migrationFiles = files
+      .filter(f => f.endsWith('.js'))
+      .sort(); // Sort alphabetically (001-xxx.js, 002-xxx.js, etc.)
+    
+    return migrationFiles.map(f => ({
+      name: f,
+      path: path.join(migrationsDir, f)
+    }));
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      log('Migrations directory not found. Creating it...', 'yellow');
+      await fs.mkdir(migrationsDir, { recursive: true });
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get pending migrations
+ */
+async function getPendingMigrations(connection) {
+  const available = await getAvailableMigrations();
+  const executed = await getExecutedMigrations(connection);
+  
+  return available.filter(m => !executed.includes(m.name));
+}
+
+/**
+ * Execute a single migration
+ */
+async function executeMigration(connection, migration) {
+  log(`Running migration: ${migration.name}`, 'cyan');
+  
+  const migrationModule = require(migration.path);
+  
+  if (!migrationModule.up || typeof migrationModule.up !== 'function') {
+    throw new Error(`Migration ${migration.name} does not export an 'up' function`);
+  }
+  
+  // Create Sequelize-like queryInterface
+  const queryInterface = {
+    sequelize: connection,
+    
+    createTable: async (tableName, attributes, options = {}) => {
+      let sql = `CREATE TABLE IF NOT EXISTS \`${tableName}\` (`;
+      const columns = [];
+      
+      for (const [colName, colDef] of Object.entries(attributes)) {
+        let colSql = `\`${colName}\` `;
+        
+        // Handle type
+        if (colDef.type) {
+          colSql += colDef.type.toString().replace('Sequelize.', '').toUpperCase();
+        }
+        
+        // Handle constraints
+        if (colDef.primaryKey) colSql += ' PRIMARY KEY';
+        if (colDef.autoIncrement) colSql += ' AUTO_INCREMENT';
+        if (colDef.unique) colSql += ' UNIQUE';
+        if (colDef.allowNull === false) colSql += ' NOT NULL';
+        if (colDef.defaultValue !== undefined) {
+          if (colDef.defaultValue.val) {
+            colSql += ` DEFAULT ${colDef.defaultValue.val}`;
+          } else if (typeof colDef.defaultValue === 'string') {
+            colSql += ` DEFAULT '${colDef.defaultValue}'`;
+          } else if (typeof colDef.defaultValue === 'boolean') {
+            colSql += ` DEFAULT ${colDef.defaultValue ? 1 : 0}`;
+          } else {
+            colSql += ` DEFAULT ${colDef.defaultValue}`;
+          }
+        }
+        if (colDef.comment) colSql += ` COMMENT '${colDef.comment}'`;
+        
+        columns.push(colSql);
+        
+        // Handle foreign keys
+        if (colDef.references) {
+          const fkName = `fk_${tableName}_${colName}`;
+          let fkSql = `CONSTRAINT \`${fkName}\` FOREIGN KEY (\`${colName}\`) `;
+          fkSql += `REFERENCES \`${colDef.references.model}\`(\`${colDef.references.key}\`)`;
+          if (colDef.onDelete) fkSql += ` ON DELETE ${colDef.onDelete}`;
+          if (colDef.onUpdate) fkSql += ` ON UPDATE ${colDef.onUpdate}`;
+          columns.push(fkSql);
+        }
+      }
+      
+      sql += columns.join(', ');
+      sql += ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci';
+      
+      await connection.query(sql);
+    },
+    
+    dropTable: async (tableName, options = {}) => {
+      await connection.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+    },
+    
+    addColumn: async (tableName, columnName, attributes, options = {}) => {
+      let sql = `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` `;
+      
+      sql += attributes.type.toString().replace('Sequelize.', '').toUpperCase();
+      
+      if (attributes.allowNull === false) sql += ' NOT NULL';
+      if (attributes.defaultValue !== undefined) {
+        if (attributes.defaultValue.val) {
+          sql += ` DEFAULT ${attributes.defaultValue.val}`;
+        } else if (typeof attributes.defaultValue === 'string') {
+          sql += ` DEFAULT '${attributes.defaultValue}'`;
+        } else if (typeof attributes.defaultValue === 'boolean') {
+          sql += ` DEFAULT ${attributes.defaultValue ? 1 : 0}`;
+        } else {
+          sql += ` DEFAULT ${attributes.defaultValue}`;
+        }
+      }
+      if (attributes.comment) sql += ` COMMENT '${attributes.comment}'`;
+      if (attributes.after) sql += ` AFTER \`${attributes.after}\``;
+      
+      try {
+        await connection.query(sql);
+      } catch (error) {
+        // If column already exists, that's okay
+        if (error.code !== 'ER_DUP_FIELDNAME') {
+          throw error;
+        }
+      }
+    },
+    
+    removeColumn: async (tableName, columnName, options = {}) => {
+      try {
+        await connection.query(
+          `ALTER TABLE \`${tableName}\` DROP COLUMN \`${columnName}\``
+        );
+      } catch (error) {
+        // If column doesn't exist, that's okay
+        if (error.code !== 'ER_CANT_DROP_FIELD_OR_KEY') {
+          throw error;
+        }
+      }
+    },
+    
+    addIndex: async (tableName, columns, options = {}) => {
+      const indexName = options.name || `idx_${columns.join('_')}`;
+      const indexType = options.unique ? 'UNIQUE INDEX' : 'INDEX';
+      const columnList = Array.isArray(columns) ? columns.map(c => `\`${c}\``).join(', ') : `\`${columns}\``;
+      
+      try {
+        await connection.query(
+          `ALTER TABLE \`${tableName}\` ADD ${indexType} \`${indexName}\` (${columnList})`
+        );
+      } catch (error) {
+        // If index already exists, that's okay
+        if (error.code !== 'ER_DUP_KEYNAME') {
+          throw error;
+        }
+      }
+    },
+    
+    removeIndex: async (tableName, indexName, options = {}) => {
+      try {
+        await connection.query(
+          `ALTER TABLE \`${tableName}\` DROP INDEX \`${indexName}\``
+        );
+      } catch (error) {
+        // If index doesn't exist, that's okay
+        if (error.code !== 'ER_CANT_DROP_FIELD_OR_KEY') {
+          throw error;
+        }
+      }
+    }
+  };
+  
+  // Mock Sequelize types
+  const Sequelize = {
+    STRING: (length) => `VARCHAR(${length || 255})`,
+    TEXT: 'TEXT',
+    INTEGER: 'INT',
+    BIGINT: 'BIGINT',
+    DECIMAL: (precision, scale) => `DECIMAL(${precision || 10},${scale || 2})`,
+    BOOLEAN: 'TINYINT(1)',
+    DATE: 'TIMESTAMP',
+    DATEONLY: 'DATE',
+    ENUM: (...values) => `ENUM(${values.map(v => `'${v}'`).join(',')})`,
+    JSON: 'JSON',
+    literal: (val) => ({ val }),
+    fn: (name, ...args) => ({ val: `${name}(${args.join(',')})` })
+  };
+  
+  // Execute migration
+  await migrationModule.up(queryInterface, Sequelize);
+  
+  // Mark as executed
+  await markMigrationExecuted(connection, migration.name);
+  
+  log(`✓ Migration ${migration.name} completed`, 'green');
+}
+
+/**
+ * Rollback a single migration
+ */
+async function rollbackMigration(connection, migration) {
+  log(`Rolling back migration: ${migration.name}`, 'cyan');
+  
+  const migrationModule = require(migration.path);
+  
+  if (!migrationModule.down || typeof migrationModule.down !== 'function') {
+    throw new Error(`Migration ${migration.name} does not export a 'down' function`);
+  }
+  
+  // Use same queryInterface as executeMigration
+  const queryInterface = {
+    sequelize: connection,
+    createTable: async () => {},
+    dropTable: async (tableName) => {
+      await connection.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+    },
+    addColumn: async () => {},
+    removeColumn: async (tableName, columnName) => {
+      try {
+        await connection.query(`ALTER TABLE \`${tableName}\` DROP COLUMN \`${columnName}\``);
+      } catch (error) {
+        if (error.code !== 'ER_CANT_DROP_FIELD_OR_KEY') throw error;
+      }
+    },
+    addIndex: async () => {},
+    removeIndex: async (tableName, indexName) => {
+      try {
+        await connection.query(`ALTER TABLE \`${tableName}\` DROP INDEX \`${indexName}\``);
+      } catch (error) {
+        if (error.code !== 'ER_CANT_DROP_FIELD_OR_KEY') throw error;
+      }
+    }
+  };
+  
+  const Sequelize = {
+    STRING: (length) => `VARCHAR(${length || 255})`,
+    TEXT: 'TEXT',
+    INTEGER: 'INT',
+    BIGINT: 'BIGINT',
+    DECIMAL: (precision, scale) => `DECIMAL(${precision || 10},${scale || 2})`,
+    BOOLEAN: 'TINYINT(1)',
+    DATE: 'TIMESTAMP',
+    DATEONLY: 'DATE',
+    ENUM: (...values) => `ENUM(${values.map(v => `'${v}'`).join(',')})`,
+    JSON: 'JSON'
+  };
+  
+  await migrationModule.down(queryInterface, Sequelize);
+  
+  // Remove from executed list
+  await unmarkMigration(connection, migration.name);
+  
+  log(`✓ Migration ${migration.name} rolled back`, 'green');
 }
 
 // Handle command line arguments
