@@ -42,6 +42,13 @@ import HelpArticle from './pages/HelpArticle';
 import SystemSettings from './pages/SystemSettings';
 import NotificationSettings from './pages/NotificationSettings';
 
+import AnalyticsDashboard from './pages/Analytics/Dashboard';
+import CallsReport from './pages/Analytics/CallsReport';
+import ChatsReport from './pages/Analytics/ChatsReport';
+import AdvancedAnalytics from './pages/Analytics/AdvancedAnalytics';
+import CostAnalytics from './pages/Analytics/CostAnalytics';
+import SatisfactionReport from './pages/Analytics/SatisfactionReport';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -78,6 +85,14 @@ function App() {
           }>
             <Route index element={<Dashboard />} />
             <Route path="monitor" element={<Monitor />} />
+			
+			<Route path="analytics/dashboard" element={<AnalyticsDashboard />} />
+			<Route path="analytics/calls" element={<CallsReport />} />
+			<Route path="analytics/chats" element={<ChatsReport />} />
+			<Route path="analytics/advanced" element={<AdvancedAnalytics />} />
+			<Route path="analytics/costs" element={<CostAnalytics />} />
+			<Route path="analytics/satisfaction" element={<SatisfactionReport />} />
+
             <Route path="agents" element={<Agents />} />
             <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
