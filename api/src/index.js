@@ -24,6 +24,7 @@ const imagesRoutes = require('./routes/images');
 const settingsRoutes = require('./routes/settings');
 const transcriptionRoutes = require('./routes/transcriptions');
 const analyticsRoutes = require('./routes/analytics');
+const feedbackRoutes = require('./routes/feedback');
 
 const sessionCleanup = require('./jobs/session-cleanup');
 
@@ -123,6 +124,7 @@ app.use('/api/images', imagesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/transcriptions', transcriptionRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {

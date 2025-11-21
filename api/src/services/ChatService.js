@@ -985,6 +985,12 @@ class ChatService {
 
             if (shouldCloseSession) {
                 console.log('🔒 Closing session:', sessionId);
+				
+				await db.query(
+					'UPDATE yovo_tbl_aiva_chat_sessions SET feedback_requested = 1 WHERE id = ?',
+					[sessionId]
+				);
+				
                 await this.endSession(sessionId);
             }
 
@@ -1031,6 +1037,7 @@ class ChatService {
                 message_id: assistantMessageId,
                 agent_transfer: llmDecision.agent_transfer || false,
                 interaction_closed: shouldCloseSession,
+				show_feedback_prompt: shouldCloseSession,  
                 response: {
                     text: formattedResponse.text,
                     html: formattedResponse.html,
@@ -1634,6 +1641,10 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
         if (shouldCloseSession) {
             console.log('🔒 Closing session:', sessionId);
+			await db.query(
+				'UPDATE yovo_tbl_aiva_chat_sessions SET feedback_requested = 1 WHERE id = ?',
+				[sessionId]
+			);
             await this.endSession(sessionId);
         }
 
@@ -1644,6 +1655,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
             message_id: assistantMessageId,
             agent_transfer: agentTransferRequested,
             interaction_closed: shouldCloseSession,
+			show_feedback_prompt: shouldCloseSession,
             response: {
                 text: formattedResponse.text,
                 html: formattedResponse.html,
@@ -1782,7 +1794,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  ${hasProducts ? '"preferences_collected": { "preference_name": "value or null" },' : ''}
 	  ${hasProducts ? '"ready_to_search": true/false,' : ''}
 	  "agent_transfer": true/false,
-	  "order_intent_detected": true/false
+	  "order_intent_detected": true/false,
+	  "conversation_complete": true/false,
+	  "user_wants_to_end": true/false
 	}
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

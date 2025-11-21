@@ -276,6 +276,8 @@ router.post('/message', async (req, res) => {
         session_id: sessionId,
         message_id: result.message_id,
         agent_transfer: result.agent_transfer || false,
+		interaction_closed: result.interaction_closed || false,  // ✅ ADD THIS LINE
+        show_feedback_prompt: result.show_feedback_prompt || false,
         response: result.response,
         formatted_html: result.formatted_html || null,
         formatted_markdown: result.formatted_markdown || null,
@@ -451,6 +453,97 @@ router.get('/agent/:identifier/config', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get configuration'
+    });
+  }
+});
+
+/**
+ * @route POST /api/public/chat/feedback/session
+ * @desc Submit session feedback (public)
+ * @access Public
+ */
+router.post('/feedback/session', async (req, res) => {
+  try {
+    const { session_id, rating, comment } = req.body;
+
+    if (!session_id || !rating) {
+      return res.status(400).json({
+        success: false,
+        error: 'session_id and rating are required'
+      });
+    }
+
+    if (!['good', 'bad'].includes(rating)) {
+      return res.status(400).json({
+        success: false,
+        error: 'rating must be "good" or "bad"'
+      });
+    }
+
+    // Import FeedbackService
+    const FeedbackService = require('../services/FeedbackService');
+
+    const feedback = await FeedbackService.submitSessionFeedback({
+      sessionId: session_id,
+      rating,
+      comment
+    });
+
+    res.json({
+      success: true,
+      data: feedback
+    });
+
+  } catch (error) {
+    console.error('Submit session feedback error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to submit feedback'
+    });
+  }
+});
+
+/**
+ * @route POST /api/public/chat/feedback/message
+ * @desc Submit message feedback (public)
+ * @access Public
+ */
+router.post('/feedback/message', async (req, res) => {
+  try {
+    const { message_id, rating, comment } = req.body;
+
+    if (!message_id || !rating) {
+      return res.status(400).json({
+        success: false,
+        error: 'message_id and rating are required'
+      });
+    }
+
+    if (!['useful', 'not_useful'].includes(rating)) {
+      return res.status(400).json({
+        success: false,
+        error: 'rating must be "useful" or "not_useful"'
+      });
+    }
+
+    const FeedbackService = require('../services/FeedbackService');
+
+    const feedback = await FeedbackService.submitMessageFeedback({
+      messageId: message_id,
+      rating,
+      comment
+    });
+
+    res.json({
+      success: true,
+      data: feedback
+    });
+
+  } catch (error) {
+    console.error('Submit message feedback error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to submit feedback'
     });
   }
 });

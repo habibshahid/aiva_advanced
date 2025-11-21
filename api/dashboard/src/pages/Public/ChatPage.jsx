@@ -101,6 +101,8 @@ const ChatPage = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [showFeedbackPrompt, setShowFeedbackPrompt] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const messagesEndRef = useRef(null);
 
   const API_URL = window.location.origin + '/aiva/api/public/chat';
@@ -250,6 +252,11 @@ const ChatPage = () => {
             }]);
           }, 1000);
         }
+		
+		// Handle conversation end - show feedback prompt
+        if (data.show_feedback_prompt && !feedbackSubmitted) {
+          setShowFeedbackPrompt(true);
+        }
       } else {
         throw new Error('Failed to send message');
       }
@@ -270,7 +277,49 @@ const ChatPage = () => {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+  
+  const submitFeedback = async (rating, comment = '') => {
+    try {
+      const response = await axios.post(`${API_URL.replace('/message', '')}/feedback/session`, {
+        session_id: sessionId,
+        rating: rating,
+        comment: comment
+      });
 
+      if (response.data.success) {
+        setFeedbackSubmitted(true);
+        setShowFeedbackPrompt(false);
+        
+        // Show thank you message
+        setMessages(prev => [...prev, {
+          id: 'feedback-thanks-' + Date.now(),
+          role: 'system',
+          content: '✅ Thank you for your feedback!',
+          created_at: new Date().toISOString()
+        }]);
+      }
+    } catch (error) {
+      console.error('Submit feedback error:', error);
+    }
+  };
+  
+  const submitMessageFeedback = async (messageId, rating) => {
+    try {
+      const response = await axios.post(`${API_URL.replace('/message', '')}/feedback/message`, {
+        message_id: messageId,
+        rating: rating
+      });
+
+      if (response.data.success) {
+        console.log('✅ Message feedback submitted');
+        // Optional: Show a subtle toast notification
+        // You could add a state for this if you want visual confirmation
+      }
+    } catch (error) {
+      console.error('Submit message feedback error:', error);
+    }
+  };
+  
   // Render message content with rich elements
   const renderMessageContent = (message) => {
     return (
@@ -283,6 +332,28 @@ const ChatPage = () => {
           }}
         />
 
+		{message.role === 'assistant' && message.id && (
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>Was this helpful?</span>
+              <button
+                onClick={() => submitMessageFeedback(message.id, 'useful')}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="Helpful"
+              >
+                👍
+              </button>
+              <button
+                onClick={() => submitMessageFeedback(message.id, 'not_useful')}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="Not helpful"
+              >
+                👎
+              </button>
+            </div>
+          </div>
+        )}
+		
         {/* Sources */}
         {message.sources && message.sources.length > 0 && (
 		  <div className="mt-4 pt-4 border-t border-gray-200">
@@ -464,7 +535,39 @@ const ChatPage = () => {
           <div ref={messagesEndRef} />
         </div>
       </div>
-
+	  
+	  {/* Feedback Prompt */}
+      {showFeedbackPrompt && !feedbackSubmitted && (
+        <div className="bg-blue-50 border-t border-blue-200 px-4 py-4">
+          <div className="max-w-4xl mx-auto">
+            <div className="text-center mb-3">
+              <p className="text-sm font-medium text-gray-900 mb-1">
+                How was your experience?
+              </p>
+              <p className="text-xs text-gray-600">
+                Your feedback helps us improve
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={() => submitFeedback('good')}
+                className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors"
+              >
+                <span className="text-lg">👍</span>
+                <span className="text-sm font-medium">Good</span>
+              </button>
+              <button
+                onClick={() => submitFeedback('bad')}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
+              >
+                <span className="text-lg">👎</span>
+                <span className="text-sm font-medium">Bad</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+	  
       {/* Input */}
       <div className="bg-white border-t border-gray-200 px-4 py-4">
         <div className="max-w-4xl mx-auto">

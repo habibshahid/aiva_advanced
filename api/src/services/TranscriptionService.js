@@ -320,7 +320,17 @@ class TranscriptionService {
             .reduce((sum, m) => sum + m.content.length, 0) / assistantMessages
         : 0;
 
-      // Insert analytics
+	  const [existing] = await db.query(
+	    'SELECT id FROM yovo_tbl_aiva_chat_analytics WHERE session_id = ?',
+	    [sessionId]
+	  );
+
+	  if (existing.length > 0) {
+	    console.log(`⚠️ Analytics already exist for session ${sessionId}, skipping`);
+	    return existing[0];
+	  }
+      
+	  // Insert analytics
       await db.query(
         `INSERT INTO yovo_tbl_aiva_chat_analytics (
           id, session_id,

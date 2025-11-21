@@ -195,6 +195,9 @@
   let sessionId = null;
   let isOpen = false;
   let messages = [];
+  
+  let showFeedbackPrompt = false;
+  let feedbackSubmitted = false;
 
   /**
    * Initialize widget
@@ -993,6 +996,92 @@
 		.aiva-source-link svg {
 		  flex-shrink: 0;
 		}
+		
+		/* Feedback Prompt */
+		.aiva-feedback-prompt {
+		  padding: 16px;
+		  background: #eff6ff;
+		  border-top: 1px solid #bfdbfe;
+		  animation: fadeIn 0.3s ease;
+		}
+		.aiva-feedback-content {
+		  text-align: center;
+		}
+		.aiva-feedback-title {
+		  font-weight: 600;
+		  font-size: 14px;
+		  color: #1f2937;
+		  margin-bottom: 4px;
+		}
+		.aiva-feedback-subtitle {
+		  font-size: 12px;
+		  color: #6b7280;
+		  margin-bottom: 12px;
+		}
+		.aiva-feedback-buttons {
+		  display: flex;
+		  gap: 8px;
+		  justify-content: center;
+		}
+		.aiva-feedback-btn {
+		  display: flex;
+		  align-items: center;
+		  gap: 6px;
+		  padding: 8px 16px;
+		  border: none;
+		  border-radius: 8px;
+		  font-size: 13px;
+		  font-weight: 500;
+		  cursor: pointer;
+		  transition: all 0.2s;
+		  color: white;
+		}
+		.aiva-feedback-good {
+		  background: #10b981;
+		}
+		.aiva-feedback-good:hover {
+		  background: #059669;
+		  transform: scale(1.05);
+		}
+		.aiva-feedback-bad {
+		  background: #ef4444;
+		}
+		.aiva-feedback-bad:hover {
+		  background: #dc2626;
+		  transform: scale(1.05);
+		}
+		.aiva-feedback-emoji {
+		  font-size: 16px;
+		}
+		/* Message Feedback */
+		.aiva-message-feedback {
+		  margin-top: 8px;
+		  padding-top: 8px;
+		  border-top: 1px solid #e5e7eb;
+		  display: flex;
+		  align-items: center;
+		  gap: 8px;
+		  font-size: 11px;
+		  color: #6b7280;
+		}
+		.aiva-message-feedback-btn {
+		  background: none;
+		  border: none;
+		  cursor: pointer;
+		  padding: 4px;
+		  font-size: 14px;
+		  opacity: 0.6;
+		  transition: all 0.2s;
+		  border-radius: 4px;
+		}
+		.aiva-message-feedback-btn:hover {
+		  opacity: 1;
+		  background: #f3f4f6;
+		}
+		.aiva-message-feedback-btn.selected {
+		  opacity: 1;
+		  background: #e0e7ff;
+		}
 	  `;
 	  document.head.appendChild(styleSheet);
 	  console.log('AIVA Widget: Styles applied');
@@ -1170,13 +1259,18 @@
 		  
 		  const fullContent = responseText + sources + products + images;
 		  
-		  addMessage('bot', fullContent, true); // Pass true for rich HTML content
+		  addMessage('bot', fullContent, true, data.data.message_id); // Pass true for rich HTML content
 		  
 		  // Handle agent transfer
 		  if (data.data.agent_transfer) {
 			setTimeout(() => {
 			  addMessage('system', '🤝 Connecting you to a human agent...');
 			}, 1000);
+		  }
+		  
+		  if (data.data.show_feedback_prompt && !feedbackSubmitted) {
+			showFeedbackPrompt = true;
+			renderFeedbackPrompt();
 		  }
 	  }
     } catch (error) {
@@ -1189,8 +1283,8 @@
   /**
    * Add message to UI
    */
-  function addMessage(role, content, isHtml = false) {
-    messages.push({ role, content, isHtml });
+  function addMessage(role, content, isHtml = false, messageId = null) {
+    messages.push({ role, content, isHtml, id: messageId || Date.now().toString()});
     renderMessages();
   }
 
@@ -1207,15 +1301,39 @@
     // Clear and re-render
     container.innerHTML = '';
     
-    messages.forEach(msg => {
+    messages.forEach((msg, index) => {
 	  const messageDiv = document.createElement('div');
 	  messageDiv.className = `aiva-message ${msg.role}`;
 	  
 	  // Use HTML directly if it's rich content, otherwise escape
 	  const content = msg.isHtml ? msg.content : escapeHtml(msg.content);
 	  
+	  // ✅ ADD MESSAGE FEEDBACK for assistant messages
+	  const messageFeedback = msg.role === 'assistant' && msg.id ? `
+		<div class="aiva-message-feedback">
+		  <span>Was this helpful?</span>
+		  <button 
+			class="aiva-message-feedback-btn" 
+			onclick="window.aivaSubmitMessageFeedback('${msg.id}', 'useful')"
+			title="Helpful"
+		  >
+			👍
+		  </button>
+		  <button 
+			class="aiva-message-feedback-btn" 
+			onclick="window.aivaSubmitMessageFeedback('${msg.id}', 'not_useful')"
+			title="Not helpful"
+		  >
+			👎
+		  </button>
+		</div>
+	  ` : '';
+	  
 	  messageDiv.innerHTML = `
-		<div class="aiva-message-bubble">${content}</div>
+		<div class="aiva-message-bubble">
+		  ${content}
+		  ${messageFeedback}
+		</div>
 	  `;
 	  container.appendChild(messageDiv);
 	});
@@ -1233,6 +1351,98 @@
     }
   }
 
+  /**
+   * Submit feedback
+   */
+  window.aivaSubmitFeedback = async function(rating) {
+    try {
+      const response = await fetch(`${config.apiUrl.replace('/message', '')}/feedback/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          rating: rating
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        feedbackSubmitted = true;
+        showFeedbackPrompt = false;
+        
+        // Remove feedback prompt
+        const feedbackElement = document.getElementById('aiva-feedback-prompt');
+        if (feedbackElement) {
+          feedbackElement.remove();
+        }
+        
+        // Show thank you message
+        addMessage('system', '✅ Thank you for your feedback!');
+      }
+    } catch (error) {
+      console.error('AIVA Widget: Submit feedback failed', error);
+    }
+  };
+  
+  /**
+   * Submit message feedback
+   */
+  window.aivaSubmitMessageFeedback = async function(messageId, rating) {
+    try {
+      const response = await fetch(`${config.apiUrl.replace('/message', '')}/feedback/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message_id: messageId,
+          rating: rating
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('✅ Message feedback submitted');
+        // Optional: Add visual feedback (button highlight, etc.)
+      }
+    } catch (error) {
+      console.error('AIVA Widget: Submit message feedback failed', error);
+    }
+  };
+  
+  /**
+   * Render feedback prompt
+   */
+  function renderFeedbackPrompt() {
+    const container = document.getElementById('aiva-messages');
+    if (!container) return;
+    
+    // Check if feedback prompt already exists
+    if (document.getElementById('aiva-feedback-prompt')) return;
+    
+    const feedbackDiv = document.createElement('div');
+    feedbackDiv.id = 'aiva-feedback-prompt';
+    feedbackDiv.className = 'aiva-feedback-prompt';
+    feedbackDiv.innerHTML = `
+      <div class="aiva-feedback-content">
+        <div class="aiva-feedback-title">How was your experience?</div>
+        <div class="aiva-feedback-subtitle">Your feedback helps us improve</div>
+        <div class="aiva-feedback-buttons">
+          <button class="aiva-feedback-btn aiva-feedback-good" onclick="window.aivaSubmitFeedback('good')">
+            <span class="aiva-feedback-emoji">👍</span>
+            <span>Good</span>
+          </button>
+          <button class="aiva-feedback-btn aiva-feedback-bad" onclick="window.aivaSubmitFeedback('bad')">
+            <span class="aiva-feedback-emoji">👎</span>
+            <span>Bad</span>
+          </button>
+        </div>
+      </div>
+    `;
+    container.appendChild(feedbackDiv);
+    scrollToBottom();
+  }
+  
   /**
    * Escape HTML
    */
