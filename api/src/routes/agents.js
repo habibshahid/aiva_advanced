@@ -21,7 +21,7 @@ const authenticate = (req, res, next) => {
 
 /**
  * @swagger
- * /api/agents:
+ * /agents:
  *   get:
  *     summary: List all agents
  *     tags: [Agents]
@@ -68,6 +68,7 @@ const authenticate = (req, res, next) => {
  */
 router.get('/', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
+		console.log('##########', req.user)
         const agents = await AgentService.listAgents(req.user.tenant_id, req.query);
         res.json({ agents });
     } catch (error) {
@@ -78,7 +79,7 @@ router.get('/', authenticate, checkPermission('agents.view'), async (req, res) =
 
 /**
  * @swagger
- * /api/agents/{id}:
+ * /agents/{id}:
  *   get:
  *     summary: Get agent by ID
  *     tags: [Agents]

@@ -132,4 +132,81 @@ router.post('/api-key/generate', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @route GET /api/auth/api-key
+ * @desc Get current API key for tenant (masked)
+ * @access Private (admin or super_admin only)
+ */
+router.get('/api-key', verifyToken, async (req, res) => {
+    try {
+        // Only admin and super_admin can view API keys
+        if (!['admin', 'super_admin'].includes(req.user.role)) {
+            return res.status(403).json({ 
+                error: 'Insufficient permissions' 
+            });
+        }
+        
+        const [tenants] = await db.query(
+            'SELECT api_key, created_at, updated_at FROM yovo_tbl_aiva_tenants WHERE id = ?',
+            [req.user.tenant_id]
+        );
+        
+        if (tenants.length === 0) {
+            return res.status(404).json({ error: 'Tenant not found' });
+        }
+        
+        const apiKey = tenants[0].api_key;
+        
+        res.json({ 
+            api_key: apiKey || null,
+            has_key: !!apiKey,
+            // Show masked version for security
+            masked_key: apiKey ? `${apiKey.substring(0, 7)}...${apiKey.substring(apiKey.length - 4)}` : null
+        });
+        
+    } catch (error) {
+        console.error('Get API key error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get API key' 
+        });
+    }
+});
+
+/**
+ * @route DELETE /api/auth/api-key
+ * @desc Revoke/delete API key for tenant
+ * @access Private (admin or super_admin only)
+ */
+router.delete('/api-key', verifyToken, async (req, res) => {
+    try {
+        // Only admin and super_admin can revoke API keys
+        if (!['admin', 'super_admin'].includes(req.user.role)) {
+            return res.status(403).json({ 
+                error: 'Insufficient permissions' 
+            });
+        }
+        
+        await db.query(
+            'UPDATE yovo_tbl_aiva_tenants SET api_key = NULL WHERE id = ?',
+            [req.user.tenant_id]
+        );
+        
+        // Log action
+        await UserService.logAction({
+            user_id: req.user.id,
+            tenant_id: req.user.tenant_id,
+            action: 'api_key_revoked',
+            ip_address: req.ip
+        });
+        
+        res.json({ message: 'API key revoked successfully' });
+        
+    } catch (error) {
+        console.error('Revoke API key error:', error);
+        res.status(500).json({ 
+            error: 'Failed to revoke API key' 
+        });
+    }
+});
+
 module.exports = router;

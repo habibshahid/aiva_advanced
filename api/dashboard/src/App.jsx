@@ -49,6 +49,9 @@ import AdvancedAnalytics from './pages/Analytics/AdvancedAnalytics';
 import CostAnalytics from './pages/Analytics/CostAnalytics';
 import SatisfactionReport from './pages/Analytics/SatisfactionReport';
 
+import TenantManager from './pages/TenantManager';
+import APISettings from './pages/APISettings';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -92,7 +95,10 @@ function App() {
 			<Route path="analytics/advanced" element={<AdvancedAnalytics />} />
 			<Route path="analytics/costs" element={<CostAnalytics />} />
 			<Route path="analytics/satisfaction" element={<SatisfactionReport />} />
-
+			
+			<Route path="tenants" element={<TenantManager />} />
+			<Route path="settings/api" element={<APISettings />} />
+			
             <Route path="agents" element={<Agents />} />
             <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />

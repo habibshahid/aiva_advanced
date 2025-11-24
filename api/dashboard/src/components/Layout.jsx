@@ -23,7 +23,9 @@ import {
   Star,
   Bell,
   Shield,
-  ChevronLeft
+  ChevronLeft,
+  Building2, 
+  Key
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -123,12 +125,12 @@ const Layout = () => {
           icon: Store,
           roles: ['super_admin', 'admin', 'agent_manager']
         },
-        { 
+        /*{ 
           name: 'Calls', 
           href: '/calls', 
           icon: Phone,
           roles: ['super_admin', 'admin', 'agent_manager', 'client']
-        }
+        }*/
       ]
     },
     {
@@ -234,7 +236,19 @@ const Layout = () => {
           ]
         }
       ],
-      bottomItems: [
+	  bottomItems: [
+		{ 
+			name: 'Tenant Manager', 
+			href: '/tenants', 
+			icon: Building2,
+			roles: ['super_admin'] // Only super_admin can see this
+		  },
+		  { 
+			name: 'API Settings', 
+			href: '/settings/api', 
+			icon: Key,
+			roles: ['super_admin', 'admin'] // Admin and super_admin
+		  },
         { 
           name: 'Help Center', 
           href: '/help', 
