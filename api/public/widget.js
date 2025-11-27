@@ -1245,34 +1245,35 @@
       if (typing) typing.style.display = 'none';
 
       if (data.success) {
-		  // Update session ID if new session was created
-		  if (data.data.new_session_created) {
-			sessionId = data.data.session_id;
-			localStorage.setItem('aiva_session_' + config.agentId, sessionId);
-		  }
-		  
-		  // Build rich message content
-		  const responseText = data.data.formatted_html || data.data.response.html || data.data.response.text || data.data.response;
-		  const sources = formatSources(data.data.sources);
-		  const products = formatProducts(data.data.products);
-		  const images = formatImages(data.data.images);
-		  
-		  const fullContent = responseText + sources + products + images;
-		  
-		  addMessage('bot', fullContent, true, data.data.message_id); // Pass true for rich HTML content
-		  
-		  // Handle agent transfer
-		  if (data.data.agent_transfer) {
-			setTimeout(() => {
-			  addMessage('system', '🤝 Connecting you to a human agent...');
-			}, 1000);
-		  }
-		  
-		  if (data.data.show_feedback_prompt && !feedbackSubmitted) {
-			showFeedbackPrompt = true;
-			renderFeedbackPrompt();
-		  }
-	  }
+			// Update session ID if new session was created
+			if (data.data.new_session_created) {
+				sessionId = data.data.session_id;
+				localStorage.setItem('aiva_session_' + config.agentId, sessionId);
+			}
+			
+			// ✅ FIX: Use synthesized response FIRST (not formatted_html which is raw chunks)
+			const responseText = data.data.response?.html || data.data.response?.text || data.data.response || '';
+			
+			// Build collapsible sources section
+			const sourcesSection = buildCollapsibleSources(data.data.sources, data.data.images);
+			
+			// Combine: Answer first, then collapsible sources
+			const fullContent = responseText + sourcesSection;
+			
+			addMessage('bot', fullContent, true, data.data.message_id?.messageId || data.data.message_id);
+			
+			// Handle agent transfer
+			if (data.data.agent_transfer) {
+				setTimeout(() => {
+					addMessage('system', '🤝 Connecting you to a human agent...');
+				}, 1000);
+			}
+			
+			if (data.data.show_feedback_prompt && !feedbackSubmitted) {
+				showFeedbackPrompt = true;
+				renderFeedbackPrompt();
+			}
+		}
     } catch (error) {
       if (typing) typing.style.display = 'none';
       addMessage('bot', 'Sorry, I could not connect to the server. Please try again later.');

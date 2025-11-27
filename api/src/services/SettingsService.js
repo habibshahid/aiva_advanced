@@ -475,7 +475,7 @@ class SettingsService {
     
     return logs.map(log => ({
       ...log,
-      metadata: log.metadata ? JSON.parse(log.metadata) : {}
+      metadata: log.metadata ? (log.metadata) : {}
     }));
   }
 }

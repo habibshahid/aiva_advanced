@@ -1,94 +1,134 @@
 /**
  * Standalone Chat Page
  * OpenAI-style full-page chat interface with rich content support
+ * 
+ * FIXED: Shows response.html (synthesized answer) instead of formatted_html (raw chunks)
+ * FIXED: Sources and images are in collapsible section
  */
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader, ExternalLink, ShoppingBag, Image as ImageIcon } from 'lucide-react';
+import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon } from 'lucide-react';
 import axios from 'axios';
 
 /**
- * Collapsible Source Component
+ * Collapsible Sources Component
+ * Shows sources and images in an expandable panel
  */
-const CollapsibleSource = ({ source, index }) => {
+const CollapsibleSources = ({ sources = [], images = [] }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   
+  // Don't render if no sources or images
+  if ((!sources || sources.length === 0) && (!images || images.length === 0)) {
+    return null;
+  }
+  
+  const sourceCount = sources?.length || 0;
+  const imageCount = images?.length || 0;
+  
   return (
-    <div className="bg-gray-50 rounded-lg overflow-hidden text-xs">
-      <div className="p-3">
-        {/* Title - More prominent */}
-        <div className="font-semibold text-gray-900 mb-2 flex items-start gap-2">
-          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-[10px] font-bold">
-            {index + 1}
-          </span>
-          <span className="flex-1">{source.source?.metadata?.title || source.metadata?.title || 'Document'}</span>
+    <div className="mt-3 pt-3 border-t border-gray-200">
+      {/* Toggle Button */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors w-full"
+      >
+        {isExpanded ? (
+          <ChevronDown className="w-4 h-4" />
+        ) : (
+          <ChevronRight className="w-4 h-4" />
+        )}
+        <span className="flex items-center gap-2">
+          {sourceCount > 0 && (
+            <span className="flex items-center gap-1">
+              <FileText className="w-3 h-3" />
+              {sourceCount} source{sourceCount > 1 ? 's' : ''}
+            </span>
+          )}
+          {sourceCount > 0 && imageCount > 0 && <span>·</span>}
+          {imageCount > 0 && (
+            <span className="flex items-center gap-1">
+              <ImageIcon className="w-3 h-3" />
+              {imageCount} image{imageCount > 1 ? 's' : ''}
+            </span>
+          )}
+        </span>
+      </button>
+      
+      {/* Collapsible Content */}
+      {isExpanded && (
+        <div className="mt-2 space-y-3 max-h-80 overflow-y-auto">
+          {/* Text Sources */}
+          {sources && sources.length > 0 && (
+            <div className="space-y-2">
+              {sources.map((source, idx) => {
+                const docName = source.source?.document_name || source.document || 'Unknown';
+                const page = source.source?.page || source.source?.metadata?.page_number || source.page || '';
+                const relevance = Math.round((source.score || source.relevance || 0) * 100);
+                const content = source.content || '';
+                const preview = content.substring(0, 200) + (content.length > 200 ? '...' : '');
+                
+                return (
+                  <div 
+                    key={source.result_id || idx}
+                    className="bg-gray-50 rounded-lg p-3 border border-gray-200"
+                  >
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className="bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full font-medium">
+                        {idx + 1}
+                      </span>
+                      <span className="text-xs font-medium text-gray-700 truncate max-w-[200px]">
+                        {docName}
+                      </span>
+                      {page && (
+                        <span className="text-xs text-gray-500">
+                          Page {page}
+                        </span>
+                      )}
+                      <span className="text-xs text-green-600 font-medium ml-auto">
+                        {relevance}%
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 leading-relaxed">
+                      {preview}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          
+          {/* Images */}
+          {images && images.length > 0 && (
+            <div className="grid grid-cols-3 gap-2">
+              {images.slice(0, 9).map((img, idx) => (
+                <a
+                  key={img.image_id || idx}
+                  href={img.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-lg overflow-hidden border border-gray-200 hover:border-blue-400 transition-colors"
+                >
+                  <img
+                    src={img.thumbnail_url || img.url}
+                    alt={img.title || `Image ${idx + 1}`}
+                    className="w-full h-16 object-cover"
+                    loading="lazy"
+                    onError={(e) => {
+                      e.target.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%2264%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22100%22 height=%2264%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2212%22%3EImage%3C/text%3E%3C/svg%3E';
+                    }}
+                  />
+                </a>
+              ))}
+              {images.length > 9 && (
+                <div className="flex items-center justify-center bg-gray-100 rounded-lg text-xs text-gray-500">
+                  +{images.length - 9} more
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {console.log(source)}
-        {/* Content Preview */}
-        <div 
-          className="text-gray-600 mb-2"
-          style={{
-            display: isExpanded ? 'block' : '-webkit-box',
-            WebkitLineClamp: isExpanded ? 'unset' : 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden'
-          }}
-        >
-          {source.content}
-        </div>
-
-        {/* Metadata Info */}
-        {(source.page || source.relevance_score) && (
-          <div className="flex items-center gap-3 text-[10px] text-gray-500 mb-2">
-            {source.page && (
-              <span>📄 Page {source.source?.metadata?.page || source.metadata?.page || ''}</span>
-            )}
-            {source.source?.metadata?.relevance_score || source.relevance_score && (
-              <span>🎯 {((source.source?.relevance_score || source.relevance_score || source.score) * 100).toFixed(0)}% match</span>
-            )}
-          </div>
-        )}
-
-        {/* Expand/Collapse Button */}
-        {source.content && source.content.length > 150 && (
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="text-primary-600 hover:text-primary-700 font-medium inline-flex items-center gap-1"
-          >
-            {isExpanded ? (
-              <>
-                Show less
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                </svg>
-              </>
-            ) : (
-              <>
-                Show more
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </>
-            )}
-          </button>
-        )}
-
-        {/* Source Link - Fixed path */}
-        {(source.url || source.source?.metadata?.source_url || source?.metadata?.source_url) && (
-          <div className="mt-2 pt-2 border-t border-gray-200">
-            <a 
-              href={source.url || source.source?.metadata?.source_url || source.metadata?.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1 font-medium"
-            >
-              <ExternalLink className="w-3 h-3" />
-              View source
-            </a>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };
@@ -167,28 +207,28 @@ const ChatPage = () => {
   };
 
   const loadHistory = async (sid) => {
-	  try {
-		const response = await axios.get(`${API_URL}/history/${sid}`);
-		if (response.data.success) {
-		  // Map messages to include all rich content
-		  const loadedMessages = response.data.data.messages.map(msg => ({
-			id: msg.id,
-			role: msg.role,
-			content: msg.content,
-			html: msg.content_html,
-			formatted_html: msg.formatted_html,
-			sources: msg.sources || [],
-			images: msg.images || [],
-			products: msg.products || [],
-			agent_transfer: msg.agent_transfer_requested,
-			created_at: msg.created_at
-		  }));
-		  setMessages(loadedMessages);
-		}
-	  } catch (error) {
-		console.error('Load history error:', error);
-	  }
-	};
+    try {
+      const response = await axios.get(`${API_URL}/history/${sid}`);
+      if (response.data.success) {
+        // Map messages to include all rich content
+        const loadedMessages = response.data.data.messages.map(msg => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          html: msg.content_html,
+          response: msg.response,  // Store full response object
+          sources: msg.sources || [],
+          images: msg.images || [],
+          products: msg.products || [],
+          agent_transfer: msg.agent_transfer_requested,
+          created_at: msg.created_at
+        }));
+        setMessages(loadedMessages);
+      }
+    } catch (error) {
+      console.error('Load history error:', error);
+    }
+  };
 
   const sendMessage = async (e) => {
     e.preventDefault();
@@ -225,13 +265,16 @@ const ChatPage = () => {
           localStorage.setItem(`aiva_chat_${agentId}`, newSessionId);
         }
 
-        // Build rich message
+        // ✅ FIX: Build message with response object for proper display priority
         const assistantMessage = {
-          id: data.message_id,
+          id: data.message_id?.messageId || data.message_id,
           role: 'assistant',
-          content: data.response.text || data.response,
-          html: data.response.html,
-		  formatted_html: data.formatted_html,
+          // Store the full response object
+          response: data.response,
+          // Also store individual fields for backward compatibility
+          content: data.response?.text || data.response || '',
+          html: data.response?.html || '',
+          // Sources and images for collapsible section
           sources: data.sources || [],
           images: data.images || [],
           products: data.products || [],
@@ -252,8 +295,8 @@ const ChatPage = () => {
             }]);
           }, 1000);
         }
-		
-		// Handle conversation end - show feedback prompt
+        
+        // Handle conversation end - show feedback prompt
         if (data.show_feedback_prompt && !feedbackSubmitted) {
           setShowFeedbackPrompt(true);
         }
@@ -312,63 +355,45 @@ const ChatPage = () => {
 
       if (response.data.success) {
         console.log('✅ Message feedback submitted');
-        // Optional: Show a subtle toast notification
-        // You could add a state for this if you want visual confirmation
       }
     } catch (error) {
       console.error('Submit message feedback error:', error);
     }
   };
   
-  // Render message content with rich elements
+  /**
+   * ✅ FIXED: Render message content
+   * - Shows response.html (synthesized answer) FIRST
+   * - Sources and images are in CollapsibleSources component
+   */
   const renderMessageContent = (message) => {
+    // ✅ FIX: Priority order for main content:
+    // 1. response.html (synthesized LLM answer)
+    // 2. response.text (synthesized LLM answer, plain text)
+    // 3. html (fallback)
+    // 4. content (raw text fallback)
+    // ❌ NOT formatted_html (that's raw chunks, not the answer!)
+    const mainContent = message.response?.html 
+      || message.response?.text 
+      || message.html 
+      || message.content 
+      || '';
+    
     return (
       <>
-        {/* Main text content */}
+        {/* Main Answer - Synthesized LLM Response */}
         <div 
-          className="text-sm whitespace-pre-wrap"
-          dangerouslySetInnerHTML={{ 
-            __html: message.formatted_html || message.html || message.content 
-          }}
+          className="text-sm whitespace-pre-wrap prose prose-sm max-w-none"
+          dangerouslySetInnerHTML={{ __html: mainContent }}
         />
 
-		{message.role === 'assistant' && message.id && (
-          <div className="mt-3 pt-3 border-t border-gray-200">
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <span>Was this helpful?</span>
-              <button
-                onClick={() => submitMessageFeedback(message.id, 'useful')}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
-                title="Helpful"
-              >
-                👍
-              </button>
-              <button
-                onClick={() => submitMessageFeedback(message.id, 'not_useful')}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
-                title="Not helpful"
-              >
-                👎
-              </button>
-            </div>
-          </div>
-        )}
-		
-        {/* Sources */}
-        {message.sources && message.sources.length > 0 && (
-		  <div className="mt-4 pt-4 border-t border-gray-200">
-			<div className="text-xs font-semibold text-gray-600 mb-2">
-			  📚 Sources ({message.sources.length})
-			</div>
-			<div className="space-y-2">
-			  {message.sources.map((source, idx) => (
-				<CollapsibleSource key={idx} source={source} index={idx} />
-			  ))}
-			</div>
-		  </div>
-		)}
+        {/* ✅ Collapsible Sources & Images */}
+        <CollapsibleSources 
+          sources={message.sources} 
+          images={message.images} 
+        />
 
-        {/* Products */}
+        {/* Products - Show inline (not collapsible) */}
         {message.products && message.products.length > 0 && (
           <div className="mt-4 pt-4 border-t border-gray-200">
             <div className="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1">
@@ -407,48 +432,25 @@ const ChatPage = () => {
           </div>
         )}
 
-        {/* Images */}
-        {message.images && message.images.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <div className="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1">
-              <ImageIcon className="w-4 h-4" />
-              Related Images ({message.images.length})
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {message.images.map((img, idx) => (
-                <div
-                  key={img.image_id || idx}
-                  className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md hover:border-primary-300 transition-all cursor-pointer group"
-                  onClick={() => window.open(img.url, '_blank')}
-                >
-                  <div className="aspect-square bg-gray-100 overflow-hidden">
-                    <img
-                      src={img.thumbnail_url || img.url}
-                      alt={img.title || 'Image'}
-                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
-                      loading="lazy"
-                      onError={(e) => {
-                        e.target.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22200%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2220%22%3EImage%3C/text%3E%3C/svg%3E';
-                      }}
-                    />
-                  </div>
-                  <div className="p-2 bg-white">
-                    <p className="text-xs font-medium text-gray-900 truncate" title={img.title || 'Image'}>
-                      {img.title || 'Image'}
-                    </p>
-                    {img.page_number && (
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        Page {img.page_number}
-                      </p>
-                    )}
-                    {img.similarity_score && (
-                      <p className="text-xs text-green-600 font-medium mt-0.5">
-                        {Math.round(img.similarity_score * 100)}% match
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
+        {/* Message Feedback */}
+        {message.role === 'assistant' && message.id && (
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>Was this helpful?</span>
+              <button
+                onClick={() => submitMessageFeedback(message.id, 'useful')}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="Helpful"
+              >
+                👍
+              </button>
+              <button
+                onClick={() => submitMessageFeedback(message.id, 'not_useful')}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="Not helpful"
+              >
+                👎
+              </button>
             </div>
           </div>
         )}
@@ -535,8 +537,8 @@ const ChatPage = () => {
           <div ref={messagesEndRef} />
         </div>
       </div>
-	  
-	  {/* Feedback Prompt */}
+      
+      {/* Feedback Prompt */}
       {showFeedbackPrompt && !feedbackSubmitted && (
         <div className="bg-blue-50 border-t border-blue-200 px-4 py-4">
           <div className="max-w-4xl mx-auto">
@@ -567,7 +569,7 @@ const ChatPage = () => {
           </div>
         </div>
       )}
-	  
+      
       {/* Input */}
       <div className="bg-white border-t border-gray-200 px-4 py-4">
         <div className="max-w-4xl mx-auto">

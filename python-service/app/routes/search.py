@@ -10,7 +10,13 @@ from app.models.responses import SearchResponse, EmbeddingResponse
 from app.services.embeddings import EmbeddingService
 from app.services.vector_store import VectorStore
 from app.utils.cost_tracking import CostTracker
+from app.config import settings
 
+try:
+    from app.services.enhanced_search import get_enhanced_search_service
+    ENHANCED_SEARCH_AVAILABLE = True
+except ImportError:
+    ENHANCED_SEARCH_AVAILABLE = False
 
 router = APIRouter()
 embedding_service = EmbeddingService()
@@ -41,17 +47,45 @@ async def search_knowledge(request: SearchRequest):
         if request.filters:
             include_products = request.filters.get('include_products', False)
             
-        # Perform search (vector_store handles caching internally)
-        results = await vector_store.search(
-            kb_id=kb_id,
-            query=query,
-            image=request.image,
-            top_k=top_k,
-            search_type=search_type,
-            filters=request.filters or {},
-            include_products=include_products
+        # ============================================================
+        # NEW: Check if enhanced search is enabled
+        # ============================================================
+        use_enhanced = (
+            ENHANCED_SEARCH_AVAILABLE and 
+            any([
+                getattr(settings, 'ENABLE_QUERY_EXPANSION', False),
+                getattr(settings, 'ENABLE_QUERY_REWRITING', False),
+                getattr(settings, 'ENABLE_BM25_SEARCH', False),
+                getattr(settings, 'ENABLE_MMR_DIVERSITY', False),
+                getattr(settings, 'ENABLE_RELEVANCE_THRESHOLD', False),
+                getattr(settings, 'ENABLE_RERANKING', False)
+            ])
         )
         
+        if use_enhanced:
+            logger.info("Using enhanced search")
+            enhanced_search = get_enhanced_search_service()
+            results = await enhanced_search.search(
+                kb_id=kb_id,
+                query=query,
+                image=request.image,
+                top_k=top_k,
+                search_type=search_type,
+                filters=request.filters or {},
+                include_products=include_products
+            )
+        else:
+            # Original search (unchanged)
+            results = await vector_store.search(
+                kb_id=kb_id,
+                query=query,
+                image=request.image,
+                top_k=top_k,
+                search_type=search_type,
+                filters=request.filters or {},
+                include_products=include_products
+            )
+            
         processing_time = int((time.time() - start_time) * 1000)
         
         # Check if results came from cache
