@@ -23,7 +23,7 @@ class SessionCleanup {
         LEFT JOIN yovo_tbl_aiva_chat_messages cm ON cs.id = cm.session_id
         WHERE cs.status = 'active'
         GROUP BY cs.id, cs.tenant_id, cs.agent_id
-        HAVING MAX(cm.created_at) < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+        HAVING MAX(cm.created_at) < DATE_SUB(NOW(), INTERVAL 30 MINUTE)
       `);
 
       if (inactiveSessions.length === 0) {

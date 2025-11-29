@@ -677,12 +677,30 @@ class DocumentProcessor:
         source_url: str = None,
         metadata: Dict[str, Any] = None
     ) -> Any:
-        """Process plain text content (for web scraping, etc)"""
+        """
+        Process plain text content (for web scraping, etc)
+        
+        NOTE: This method creates its own document record because:
+        - It's called from Python's scrape_url endpoint
+        - Python generates the document_id
+        - There's no Node.js step that creates the document
+        """
         import time
         start_time = time.time()
         
         if metadata is None:
             metadata = {}
+        
+        # ✅ FIX: Create document record FIRST (required for foreign key)
+        await self._create_document_record_for_scraping(
+            document_id=document_id,
+            kb_id=kb_id,
+            tenant_id=tenant_id,
+            title=title or source_url or "Scraped Content",
+            source_url=source_url,
+            text_length=len(text),
+            metadata=metadata
+        )
         
         # Process text with markdown preservation
         processed = await self.text_processor.process_text(
@@ -695,7 +713,7 @@ class DocumentProcessor:
                 "source_url": source_url,
                 "content_type": "text/html"
             },
-            preserve_formatting=True  # NEW
+            preserve_formatting=True
         )
         
         # Generate embeddings
@@ -703,7 +721,7 @@ class DocumentProcessor:
             chunks=processed["chunks"]
         )
         
-        # Store in vector store
+        # Store in vector store (now document exists, foreign key will work)
         await self.vector_store.store_document(
             document_id=document_id,
             kb_id=kb_id,
@@ -714,8 +732,17 @@ class DocumentProcessor:
         
         processing_time = int((time.time() - start_time) * 1000)
         
-        # Build response
-        from app.models.responses import DocumentProcessingResult, EmbeddingResult
+        # Update document status to completed
+        await self._update_document_status(document_id, "completed", {
+            "total_chunks": len(processed["chunks"]),
+            "total_tokens": embeddings_result.get("total_tokens", 0),
+            "processing_time_ms": processing_time
+        })
+        
+        # ✅ Build response using CORRECT model field names
+        # DocumentProcessingResult fields from responses.py:
+        # total_pages, total_chunks, extracted_images, detected_tables, 
+        # detected_faqs, chunks_by_type, language_detected, has_roman_urdu, processing_time_ms
         
         processing_results = DocumentProcessingResult(
             total_pages=1,
@@ -723,25 +750,148 @@ class DocumentProcessor:
             extracted_images=0,
             detected_tables=0,
             detected_faqs=processed.get("faqs", 0),
-            chunks_by_type=processed.get("chunks_by_type", {}),
-            language_detected=processed.get("languages", []),
+            chunks_by_type=processed.get("chunks_by_type", {"text": len(processed["chunks"])}),
+            language_detected=processed.get("languages", ["en"]),
             has_roman_urdu=processed.get("has_roman_urdu", False),
             processing_time_ms=processing_time
         )
         
+        # EmbeddingResult fields from responses.py:
+        # total_embeddings_generated, embedding_model, total_tokens_embedded, vector_dimension
+        
         embedding_result = EmbeddingResult(
-            total_embeddings_generated=embeddings_result["total_embeddings"],
-            embedding_model=embeddings_result["model"],
-            total_tokens_embedded=embeddings_result["total_tokens"],
-            vector_dimension=embeddings_result["dimension"]
+            total_embeddings_generated=len(embeddings_result.get("embeddings", [])),
+            embedding_model=embeddings_result.get("model", "text-embedding-3-small"),
+            total_tokens_embedded=embeddings_result.get("total_tokens", 0),
+            vector_dimension=embeddings_result.get("dimension", 1536)
         )
         
+        # Return same structure as process_document
         class ProcessingResponse:
             def __init__(self, proc, emb):
                 self.processing_results = proc
                 self.embeddings = emb
         
         return ProcessingResponse(processing_results, embedding_result)
+
+
+    # ============================================================
+    # ADD: New helper method for creating document record (scraping only)
+    # ============================================================
+
+    async def _create_document_record_for_scraping(
+        self,
+        document_id: str,
+        kb_id: str,
+        tenant_id: str,
+        title: str,
+        source_url: str,
+        text_length: int,
+        metadata: Dict[str, Any]
+    ):
+        """
+        Create document record specifically for web scraping.
+        """
+        import mysql.connector
+        from app.config import settings
+        
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor()
+        
+        try:
+            # Check if document already exists (avoid duplicates)
+            cursor.execute(
+                "SELECT id FROM yovo_tbl_aiva_documents WHERE id = %s",
+                (document_id,)
+            )
+            if cursor.fetchone():
+                logger.info(f"Document {document_id} already exists, skipping creation")
+                return
+            
+            # Create document record for scraped content
+            cursor.execute("""
+                INSERT INTO yovo_tbl_aiva_documents 
+                (id, kb_id, tenant_id, filename, original_filename, file_type, 
+                 file_size_bytes, storage_url, status, metadata, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            """, (
+                document_id,
+                kb_id,
+                tenant_id,
+                (title[:255] if title else "Scraped Content"),  # filename
+                (source_url[:255] if source_url else "web_scrape"),  # original_filename
+                "text/html",  # file_type
+                text_length,  # file_size_bytes (approximate)
+                source_url or f"/scraped/{document_id}",  # storage_url
+                "processing",  # status
+                json.dumps({
+                    **metadata,
+                    "source_type": "web_scrape",
+                    "source_url": source_url,
+                    "title": title
+                })
+            ))
+            
+            conn.commit()
+            logger.info(f"Created document record for scraped content: {document_id}")
+            
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error creating document record for scraping: {e}")
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+
+    async def _update_document_status(
+        self,
+        document_id: str,
+        status: str,
+        processing_stats: Dict[str, Any] = None
+    ):
+        """Update document status after processing"""
+        import mysql.connector
+        from app.config import settings
+        
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor()
+        
+        try:
+            if processing_stats:
+                cursor.execute("""
+                    UPDATE yovo_tbl_aiva_documents 
+                    SET status = %s, processing_stats = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (status, json.dumps(processing_stats), document_id))
+            else:
+                cursor.execute("""
+                    UPDATE yovo_tbl_aiva_documents 
+                    SET status = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (status, document_id))
+            
+            conn.commit()
+            logger.debug(f"Updated document {document_id} status to {status}")
+            
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error updating document status: {e}")
+        finally:
+            cursor.close()
+            conn.close()
     
     
     async def get_document_status(self, document_id: str) -> Dict[str, Any]:

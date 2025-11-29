@@ -156,3 +156,11 @@ export const getProductStats = (params = {}) =>
  */
 export const getStoreSyncStatus = (storeId) => 
   api.get(`/shopify/stores/${storeId}/sync-status`);
+  
+/**
+ * Cancel a running sync job
+ * @param {string} jobId - Job ID
+ * @returns {Promise<Object>} Result
+ */
+export const cancelSync = (jobId) => 
+  api.delete(`/shopify/sync/${jobId}/cancel`);

@@ -561,7 +561,7 @@ router.delete('/sync/:job_id/cancel', verifyToken, async (req, res) => {
     // Check if job can be cancelled
     if (!['pending', 'processing'].includes(job.status)) {
       return res.status(400).json(
-        rb.badRequest('Job cannot be cancelled (status: ' + job.status + ')')
+		ResponseBuilder.badRequest('Job cannot be cancelled (status: ' + job.status + ')')
       );
     }
 

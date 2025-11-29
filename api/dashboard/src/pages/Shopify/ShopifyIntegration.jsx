@@ -29,7 +29,8 @@ const ShopifyIntegration = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const intervalRef = useRef(null);
-
+  const [cancelling, setCancelling] = useState({});
+  
   useEffect(() => {
     loadData();
     
@@ -155,6 +156,30 @@ const ShopifyIntegration = () => {
     }
   };
 
+  const handleCancelSync = async (jobId, storeId) => {
+	  if (!confirm('Are you sure you want to cancel this sync? Progress will be saved but sync will stop.')) {
+		return;
+	  }
+	  
+	  try {
+		setCancelling(prev => ({ ...prev, [jobId]: true }));
+		
+		await shopifyApi.cancelSync(jobId);
+		
+		// Show success message
+		alert('Sync cancelled successfully');
+		
+		// Refresh sync statuses
+		await loadSyncStatuses();
+		
+	  } catch (err) {
+		console.error('Cancel sync error:', err);
+		alert(`Failed to cancel sync: ${err.response?.data?.error || err.message}`);
+	  } finally {
+		setCancelling(prev => ({ ...prev, [jobId]: false }));
+	  }
+	};
+
   const getStatusIcon = (status) => {
     switch (status) {
       case 'active':
@@ -200,7 +225,8 @@ const ShopifyIntegration = () => {
     }
 
     if (syncStatus.is_syncing) {
-      const { progress, timing } = syncStatus;
+      const { progress, timing, job_id } = syncStatus;
+      const isCancelling = cancelling[job_id];
       
       return (
         <div className="space-y-2">
@@ -242,6 +268,29 @@ const ShopifyIntegration = () => {
               {progress.images.processed} / {progress.images.total} images processed
             </div>
           )}
+		  
+		  {/* ════════════════════════════════════════════════════════════════ */}
+			{/* 🛑 CANCEL BUTTON */}
+			{/* ════════════════════════════════════════════════════════════════ */}
+			<div className="pt-2 border-t border-gray-100">
+			  <button
+				onClick={() => handleCancelSync(job_id, store.id)}
+				disabled={isCancelling}
+				className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+			  >
+				{isCancelling ? (
+				  <>
+					<Loader className="w-3 h-3 mr-1.5 animate-spin" />
+					Cancelling...
+				  </>
+				) : (
+				  <>
+					<XCircle className="w-3 h-3 mr-1.5" />
+					Cancel Sync
+				  </>
+				)}
+			  </button>
+			</div>
         </div>
       );
     }

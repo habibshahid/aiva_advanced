@@ -8,6 +8,7 @@ const ProductSyncService = require('../../services/ProductSyncService');
 const SyncJobService = require('../../services/SyncJobService');
 const KnowledgeService = require('../../services/KnowledgeService');
 const db = require('../../config/database');
+const CANCELLATION_CHECK_INTERVAL = 5; // Check every 5 products
 
 /**
  * Process full sync job
@@ -73,6 +74,48 @@ async function processFullSync(job) {
     let failedImages = 0;
     
     for (let i = 0; i < products.length; i += batchSize) {
+		// ════════════════════════════════════════════════════════════════
+		// 🛑 CHECK FOR CANCELLATION
+		// ════════════════════════════════════════════════════════════════
+		if (i % (batchSize * CANCELLATION_CHECK_INTERVAL) === 0 || i === 0) {
+			const currentJob = await SyncJobService.getJob(job_id);
+			if (currentJob && currentJob.status === 'cancelled') {
+				console.log(`[Job ${job_id}] ⚠️ Job was cancelled by user - stopping gracefully`);
+				
+				// Update final stats before exiting
+				await SyncJobService.updateProgress(job_id, {
+					processed_products: processedCount,
+					failed_products: failedCount,
+					products_added: addedCount,
+					products_updated: updatedCount,
+					total_images: totalImages,
+					processed_images: processedImages,
+					failed_images: failedImages
+				});
+				
+				// Update store status
+				await db.query(`
+					UPDATE yovo_tbl_aiva_shopify_stores 
+					SET 
+						last_sync_status = 'cancelled',
+						last_sync_at = NOW()
+					WHERE id = ?
+				`, [store_id]);
+				
+				return {
+					success: false,
+					cancelled: true,
+					processed: processedCount,
+					failed: failedCount,
+					added: addedCount,
+					updated: updatedCount,
+					images_processed: processedImages,
+					images_failed: failedImages,
+					message: 'Job cancelled by user'
+				};
+			}
+		}
+		
       const batch = products.slice(i, i + batchSize);
       
       console.log(`[Job ${job_id}] Processing batch ${Math.floor(i / batchSize) + 1} (${batch.length} products)`);

@@ -255,14 +255,29 @@ class SyncJobService {
   }
   
   /**
-   * Cancel job
-   * @param {string} jobId - Job ID
-   */
-  async cancel(jobId) {
-    await this.updateStatus(jobId, 'cancelled', {
-      completed_at: new Date()
-    });
-  }
+	 * Cancel a running or pending job
+	 * @param {string} jobId - Job ID
+	 * @returns {Promise<Object>} Updated job
+	 */
+	async cancel(jobId) {
+		const [result] = await db.query(
+			`UPDATE yovo_tbl_aiva_sync_jobs 
+			 SET 
+			   status = 'cancelled',
+			   completed_at = NOW(),
+			   error_message = 'Cancelled by user'
+			 WHERE id = ? AND status IN ('pending', 'processing')`,
+			[jobId]
+		);
+		
+		if (result.affectedRows === 0) {
+			throw new Error('Job cannot be cancelled or not found');
+		}
+		
+		console.log(`[SyncJob] Job ${jobId} marked as cancelled`);
+		
+		return this.getJob(jobId);
+	}
   
   /**
    * Get jobs for a tenant

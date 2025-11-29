@@ -184,7 +184,7 @@ class ProductSyncService {
 		formData.append('tenant_id', tenantId);
 		formData.append('metadata', JSON.stringify({
 		  source: 'shopify',
-		  shopify_image_id: imageData.id,
+		  shopify_image_id: String(imageData.id),
 		  shopify_image_src: imageData.src,
 		  alt_text: imageData.alt || null,
 		  position: imageData.position,
@@ -288,22 +288,28 @@ class ProductSyncService {
    * @private
    */
   async checkImageExists(shopifyImageId, kbId) {
-    try {
-      const [images] = await db.query(`
-        SELECT i.id, i.kb_id, i.filename, i.storage_url
-        FROM yovo_tbl_aiva_images i
-        WHERE i.kb_id = ?
-        AND JSON_EXTRACT(i.metadata, '$.shopify_image_id') = ?
-        LIMIT 1
-      `, [kbId, shopifyImageId]);
-      
-      return images.length > 0 ? images[0] : null;
-      
-    } catch (error) {
-      console.error('Error checking image existence:', error);
-      return null; // On error, assume doesn't exist and re-process
-    }
-  }
+	  try {
+		// Normalize to string for consistent comparison
+		const normalizedId = String(shopifyImageId);
+		
+		const [images] = await db.query(`
+		  SELECT i.id, i.kb_id, i.filename, i.storage_url, i.shopify_image_id_extracted as shopify_image_id
+		  FROM yovo_tbl_aiva_images i
+		  WHERE i.kb_id = ?
+		  AND i.shopify_image_id_extracted IN (${placeholders})
+		`, [kbId, ...normalizedIds]);
+		
+		if (images.length > 0) {
+		  console.log(`✓ Image ${shopifyImageId} already exists in DB (id: ${images[0].id})`);
+		}
+		
+		return images.length > 0 ? images[0] : null;
+		
+	  } catch (error) {
+		console.error('Error checking image existence:', error);
+		return null;
+	  }
+	}
   
   /**
    * Ensure image is linked to product
@@ -375,22 +381,73 @@ class ProductSyncService {
       const redis = require('../config/redis');
       const vectorKey = `vector:${kbId}:product:${product.id}`;
       
-      const vectorData = {
-        product_id: product.id,
-        kb_id: kbId,
-        tenant_id: tenantId,
-        type: 'product',
-        shopify_product_id: product.shopify_product_id,
-        title: product.title,
-        description: product.description,
-        vendor: product.vendor,
-        product_type: product.product_type,
-        price: product.price,
-        tags: product.tags,
-        embedding: embeddingResult.embedding,
-        tokens: embeddingResult.tokens,
-        created_at: new Date().toISOString()
-      };
+      // Get shop_domain from store
+		const [storeResult] = await db.query(
+		  'SELECT shop_domain FROM yovo_tbl_aiva_shopify_stores WHERE kb_id = ? LIMIT 1',
+		  [kbId]
+		);
+		const shopDomain = storeResult.length > 0 ? storeResult[0].shop_domain : null;
+
+		// Extract handle from shopify_metadata
+		let handle = null;
+		if (product.shopify_metadata) {
+		  const metadata = typeof product.shopify_metadata === 'string' 
+			? JSON.parse(product.shopify_metadata) 
+			: product.shopify_metadata;
+		  handle = metadata.handle;
+		}
+
+		// Build variants summary for the vector
+		const variantsSummary = product.variants ? product.variants.map(v => ({
+		  variant_id: v.shopify_variant_id || v.id,
+		  title: v.title,
+		  sku: v.sku,
+		  price: v.price,
+		  compare_at_price: v.compare_at_price,
+		  inventory_quantity: v.inventory_quantity || 0,
+		  available: (v.inventory_quantity || 0) > 0,
+		  option1: v.option1,
+		  option2: v.option2,
+		  option3: v.option3
+		})) : [];
+
+		// Calculate total available inventory
+		const totalInventory = variantsSummary.reduce((sum, v) => sum + (v.inventory_quantity || 0), 0);
+
+		// Build purchase URL
+		const purchaseUrl = (handle && shopDomain) 
+		  ? `https://${shopDomain}/products/${handle}` 
+		  : null;
+
+		const vectorData = {
+		  product_id: product.id,
+		  kb_id: kbId,
+		  tenant_id: tenantId,
+		  type: 'product',
+		  shopify_product_id: product.shopify_product_id,
+		  title: product.title,
+		  description: product.description,
+		  vendor: product.vendor,
+		  product_type: product.product_type,
+		  price: product.price,
+		  compare_at_price: product.compare_at_price,
+		  tags: product.tags,
+		  // NEW: Critical fields for purchase URLs
+		  handle: handle,
+		  shop_domain: shopDomain,
+		  purchase_url: purchaseUrl,
+		  // NEW: Inventory and availability
+		  total_inventory: totalInventory,
+		  in_stock: totalInventory > 0,
+		  // NEW: Variant details for size/color availability
+		  variants: variantsSummary,
+		  variants_count: variantsSummary.length,
+		  available_variants: variantsSummary.filter(v => v.available).map(v => v.title).join(', '),
+		  // Original fields
+		  embedding: embeddingResult.embedding,
+		  tokens: embeddingResult.tokens,
+		  created_at: new Date().toISOString()
+		};
       
       await redis.set(vectorKey, JSON.stringify(vectorData));
       
@@ -425,40 +482,78 @@ class ProductSyncService {
    * @private
    */
   buildProductText(product) {
-    const parts = [];
-    
-    if (product.title) parts.push(`Product: ${product.title}`);
-    if (product.vendor) parts.push(`Brand: ${product.vendor}`);
-    if (product.product_type) parts.push(`Category: ${product.product_type}`);
-    if (product.description) parts.push(`Description: ${product.description}`);
-    if (product.price) parts.push(`Price: PKR ${product.price}`);
-    
-    if (product.variants && product.variants.length > 0) {
-      const variantInfo = product.variants
-        .map(v => {
-          const info = [];
-          if (v.title && v.title !== 'Default Title') info.push(v.title);
-          if (v.sku) info.push(`SKU: ${v.sku}`);
-          return info.join(' - ');
-        })
-        .filter(v => v)
-        .join(', ');
-      
-      if (variantInfo) parts.push(`Variants: ${variantInfo}`);
-    }
-    
-    if (product.tags && product.tags.length > 0) {
-      parts.push(`Tags: ${product.tags.join(', ')}`);
-    }
-    
-    if (product.total_inventory > 0) {
-      parts.push(`In Stock: ${product.total_inventory} available`);
-    } else {
-      parts.push('Status: Out of Stock');
-    }
-    
-    return parts.join('\n');
-  }
+	  const parts = [];
+	  
+	  if (product.title) parts.push(`Product: ${product.title}`);
+	  if (product.vendor) parts.push(`Brand: ${product.vendor}`);
+	  if (product.product_type) parts.push(`Category: ${product.product_type}`);
+	  if (product.description) parts.push(`Description: ${product.description}`);
+	  if (product.price) parts.push(`Price: PKR ${product.price}`);
+	  if (product.compare_at_price && product.compare_at_price > product.price) {
+		parts.push(`Original Price: PKR ${product.compare_at_price} (On Sale)`);
+	  }
+	  
+	  // Enhanced variant information with inventory details
+	  if (product.variants && product.variants.length > 0) {
+		const variantDetails = product.variants.map(v => {
+		  const info = [];
+		  if (v.title && v.title !== 'Default Title') info.push(v.title);
+		  if (v.sku) info.push(`SKU: ${v.sku}`);
+		  
+		  // Add inventory status per variant
+		  const qty = v.inventory_quantity || 0;
+		  if (qty > 0) {
+			info.push(`${qty} in stock`);
+		  } else {
+			info.push('Out of stock');
+		  }
+		  
+		  // Add price if different from main price
+		  if (v.price && parseFloat(v.price) !== parseFloat(product.price)) {
+			info.push(`PKR ${v.price}`);
+		  }
+		  
+		  return info.join(' - ');
+		});
+		
+		parts.push(`Variants/Sizes Available:\n${variantDetails.join('\n')}`);
+		
+		// Summarize available options
+		const availableVariants = product.variants
+		  .filter(v => (v.inventory_quantity || 0) > 0)
+		  .map(v => v.title)
+		  .filter(t => t && t !== 'Default Title');
+		
+		if (availableVariants.length > 0) {
+		  parts.push(`Available Sizes/Options: ${availableVariants.join(', ')}`);
+		}
+		
+		const outOfStockVariants = product.variants
+		  .filter(v => (v.inventory_quantity || 0) === 0)
+		  .map(v => v.title)
+		  .filter(t => t && t !== 'Default Title');
+		
+		if (outOfStockVariants.length > 0) {
+		  parts.push(`Out of Stock Sizes/Options: ${outOfStockVariants.join(', ')}`);
+		}
+	  }
+	  
+	  if (product.tags && product.tags.length > 0) {
+		parts.push(`Tags: ${product.tags.join(', ')}`);
+	  }
+	  
+	  // Overall stock status
+	  const totalInventory = product.total_inventory || 
+		(product.variants ? product.variants.reduce((sum, v) => sum + (v.inventory_quantity || 0), 0) : 0);
+	  
+	  if (totalInventory > 0) {
+		parts.push(`Total Stock: ${totalInventory} units available`);
+	  } else {
+		parts.push('Status: OUT OF STOCK - All sizes/options unavailable');
+	  }
+	  
+	  return parts.join('\n');
+	}
   
   /**
    * Extract filename from URL
@@ -579,6 +674,17 @@ class ProductSyncService {
 	 */
 	async bulkCheckImagesExist(shopifyImageIds, kbId) {
 	  try {
+		// Handle empty array
+		if (!shopifyImageIds || shopifyImageIds.length === 0) {
+		  return {};
+		}
+		
+		// Ensure all IDs are strings for consistent comparison
+		const normalizedIds = shopifyImageIds.map(id => String(id));
+		
+		// Build placeholders for IN clause (one ? per ID)
+		const placeholders = normalizedIds.map(() => '?').join(',');
+		
 		const [images] = await db.query(`
 		  SELECT 
 			i.id, 
@@ -588,14 +694,17 @@ class ProductSyncService {
 			JSON_UNQUOTE(JSON_EXTRACT(i.metadata, '$.shopify_image_id')) as shopify_image_id
 		  FROM yovo_tbl_aiva_images i
 		  WHERE i.kb_id = ?
-		  AND JSON_EXTRACT(i.metadata, '$.shopify_image_id') IN (?)
-		`, [kbId, shopifyImageIds]);
+		  AND JSON_UNQUOTE(JSON_EXTRACT(i.metadata, '$.shopify_image_id')) IN (${placeholders})
+		`, [kbId, ...normalizedIds]);
 		
 		// Create map for fast lookup
 		const imageMap = {};
 		images.forEach(img => {
-		  imageMap[img.shopify_image_id] = img;
+		  // Normalize the key to string for consistent lookup
+		  imageMap[String(img.shopify_image_id)] = img;
 		});
+		
+		console.log(`bulkCheckImagesExist: Found ${images.length}/${shopifyImageIds.length} existing images`);
 		
 		return imageMap;
 		

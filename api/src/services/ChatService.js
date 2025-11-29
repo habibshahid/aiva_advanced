@@ -824,10 +824,13 @@ class ChatService {
                     response: aiMessage.content,
                     product_search_needed: false,
                     knowledge_search_needed: false,
+					product_search_type: "none",
+					product_id: null,
+					needs_clarification: false,
                     agent_transfer: false,
                     order_intent_detected: false,
-                    "conversation_complete": false,
-                    "user_wants_to_end": false
+                    conversation_complete: false,
+                    user_wants_to_end: false
                 };
             }
 
@@ -1089,6 +1092,9 @@ class ChatService {
                     ready_to_search: false,
                     product_search_needed: false,
                     knowledge_search_needed: false,
+					product_search_type: "none",
+					product_id: null,
+					needs_clarification: false,
                     conversation_complete: llmDecision.conversation_complete || false, // ✅ ADD
                     user_wants_to_end: llmDecision.user_wants_to_end || false
                 },
@@ -1269,6 +1275,9 @@ class ChatService {
 					response: finalMessage.content || "I've processed your request.",
 					product_search_needed: false,
 					knowledge_search_needed: false,
+					product_search_type: "none",
+					product_id: null,
+					needs_clarification: false,
 					agent_transfer: false,
 					order_intent_detected: false,
 					conversation_complete: false,
@@ -1292,7 +1301,10 @@ class ChatService {
 					llmDecision = {
 						response: aiMessage.content,
 						product_search_needed: false,
-						knowledge_search_needed: false,
+						knowledge_search_needed: true,
+						product_search_type: "none",
+						product_id: null,
+						needs_clarification: false,
 						collecting_preferences: false,
 						preferences_collected: {},
 						ready_to_search: false,
@@ -1309,6 +1321,9 @@ class ChatService {
 					response: "I apologize, but I couldn't process your request. Please try again.",
 					product_search_needed: false,
 					knowledge_search_needed: false,
+					product_search_type: "none",
+					product_id: null,
+					needs_clarification: false,
 					agent_transfer: false,
 					order_intent_detected: false,
 					conversation_complete: false,
@@ -1349,130 +1364,359 @@ class ChatService {
         let knowledgeResults = null;
 
         // Product search - Only if LLM says ready
-        if (llmDecision && llmDecision.product_search_needed && llmDecision.ready_to_search && agent.kb_id) {
-            try {
-                const searchQuery = llmDecision.product_search_query || llmDecision.search_query || message;
+        if (llmDecision && llmDecision.product_search_needed && agent.kb_id) {
+    
+			const searchType = llmDecision.product_search_type || 'multi';
+			
+			console.log(`🔍 Product search type: ${searchType}`);
+			
+			if (searchType === 'single' && llmDecision.product_id) {
+			// ════════════════════════════════════════════════════════════════
+			// 🎯 SINGLE PRODUCT LOOKUP (Direct DB fetch - fast & precise)
+			// ════════════════════════════════════════════════════════════════
+			console.log(`🎯 Single product lookup: ${llmDecision.product_id}`);
+			
+			try {
+				const ProductService = require('./ProductService');
+				const product = await ProductService.getProduct(llmDecision.product_id);
+				
+				if (product) {
+					// Ensure variants are loaded
+					if (!product.variants || product.variants.length === 0) {
+						product.variants = await ProductService.getVariants(llmDecision.product_id);
+					}
+					
+					// Extract handle from metadata if not present
+					let handle = product.handle;
+					if (!handle && product.shopify_metadata) {
+						const metadata = typeof product.shopify_metadata === 'string' 
+							? JSON.parse(product.shopify_metadata) 
+							: product.shopify_metadata;
+						handle = metadata?.handle;
+					}
+					
+					// Build purchase URL
+					const purchaseUrl = (handle && product.shop_domain)
+						? `https://${product.shop_domain}/products/${handle}`
+						: null;
+					
+					// ════════════════════════════════════════════════════════════════
+					// 🖼️ Extract Shopify CDN image URL from metadata
+					// ════════════════════════════════════════════════════════════════
+					let imageUrl = null;
+					if (product.images && product.images.length > 0) {
+						const firstImage = product.images[0];
+						if (firstImage.metadata) {
+							const imgMetadata = typeof firstImage.metadata === 'string'
+								? JSON.parse(firstImage.metadata)
+								: firstImage.metadata;
+							imageUrl = imgMetadata?.shopify_image_src || null;
+						}
+					}
+					
+					// Build available/out-of-stock sizes
+					const availableSizes = [];
+					const outOfStockSizes = [];
+					
+					(product.variants || []).forEach(v => {
+						const variantName = v.title || v.option1 || 'Default';
+						if (variantName !== 'Default Title') {
+							if ((v.inventory_quantity || 0) > 0) {
+								availableSizes.push(variantName);
+							} else {
+								outOfStockSizes.push(variantName);
+							}
+						}
+					});
+					
+					// Calculate total inventory
+					const totalInventory = (product.variants || []).reduce(
+						(sum, v) => sum + (v.inventory_quantity || 0), 0
+					);
+					
+					// ════════════════════════════════════════════════════════════════
+					// 📦 Format to MATCH multi-product search result structure
+					// ════════════════════════════════════════════════════════════════
+					knowledgeResults = {
+						text_results: [],
+						image_results: [],
+						product_results: [{
+							// Core fields (same as multi)
+							product_id: product.id,
+							name: product.title,
+							description: product.description,
+							image_url: imageUrl,  // Shopify CDN URL
+							price: parseFloat(product.price) || 0,
+							availability: totalInventory > 0 ? 'in_stock' : 'out_of_stock',
+							similarity_score: 1.0,  // Perfect match for direct lookup
+							
+							// Match reason (same structure as multi)
+							match_reason: {
+								semantic_score: 1.0,
+								match_type: 'direct_lookup',
+								matched_on: ['product_id']
+							},
+							
+							// Metadata object (same as multi)
+							metadata: {
+								vendor: product.vendor,
+								product_type: product.product_type,
+								tags: product.tags || [],
+								shopify_product_id: product.shopify_product_id,
+								total_inventory: totalInventory,
+								available_sizes: availableSizes,
+								out_of_stock_sizes: outOfStockSizes,
+								handle: handle,
+								purchase_url: purchaseUrl
+							},
+							
+							// URL fields
+							url: `/shopify/products/${product.id}`,
+							purchase_url: purchaseUrl,
+							
+							// Additional fields for detailed context (used in LLM prompt)
+							variants: (product.variants || []).map(v => ({
+								variant_id: v.shopify_variant_id || v.id,
+								title: v.title,
+								sku: v.sku,
+								price: parseFloat(v.price) || null,
+								compare_at_price: v.compare_at_price ? parseFloat(v.compare_at_price) : null,
+								inventory_quantity: v.inventory_quantity || 0,
+								available: (v.inventory_quantity || 0) > 0,
+								option1: v.option1,
+								option2: v.option2,
+								option3: v.option3
+							}))
+						}]
+					};
+					
+					console.log(`✅ Loaded single product: ${product.title}`);
+					console.log(`   Shopify Product ID: ${product.shopify_product_id}`);
+					console.log(`   Image URL: ${imageUrl || 'N/A'}`);
+					console.log(`   Variants: ${product.variants?.length || 0}`);
+					console.log(`   Available sizes: ${availableSizes.join(', ') || 'None'}`);
+					console.log(`   Out of stock: ${outOfStockSizes.join(', ') || 'None'}`);
+					console.log(`   Purchase URL: ${purchaseUrl || 'N/A'}`);
+					
+				} else {
+					console.log(`⚠️ Product not found: ${llmDecision.product_id}`);
+				}
+				
+			} catch (error) {
+				console.error(`❌ Single product lookup error:`, error);
+			}
+			
+		} else if (searchType === 'multi' || llmDecision.ready_to_search) {
+				// ════════════════════════════════════════════════════════════════
+				// 🔍 MULTI PRODUCT SEARCH (Semantic search - for browsing/discovery)
+				// ════════════════════════════════════════════════════════════════
+				const searchQuery = llmDecision.product_search_query || llmDecision.search_query || message;
+				
+				console.log(`🔍 Multi product search: "${searchQuery}"`);
+				
+				try {
+					const searchResult = await KnowledgeService.search({
+						kbId: agent.kb_id,
+						query: searchQuery,
+						image: null,
+						topK: 5,
+						searchType: 'text',
+						filters: {
+							include_products: true
+						}
+					});
 
-                console.log(`🔍 Product Search: "${searchQuery}"`);
+					console.log('🔍 Knowledge search results:', {
+						text_results: searchResult.results?.text_results?.length || 0,
+						image_results: searchResult.results?.image_results?.length || 0,
+						product_results: searchResult.results?.product_results?.length || 0
+					});
 
-                const searchResult = await KnowledgeService.search({
-                    kbId: agent.kb_id,
-                    query: searchQuery,
-                    image: null,
-                    topK: 5,
-                    searchType: 'text',
-                    filters: {
-                        include_products: true
-                    }
-                });
+					knowledgeResults = searchResult.results;
+					knowledgeCost = searchResult.cost_breakdown;
 
-                console.log('🔍 Knowledge search results:', {
-                    text_results: searchResult.results?.text_results?.length || 0,
-                    image_results: searchResult.results?.image_results?.length || 0,
-                    product_results: searchResult.results?.product_results?.length || 0
-                });
+					console.log(`✅ Found ${knowledgeResults?.product_results?.length || 0} products`);
+					
+				} catch (error) {
+					console.error('❌ Multi product search error:', error);
+				}
+			}
+			
+			// ════════════════════════════════════════════════════════════════
+			// 📝 CALL LLM AGAIN WITH PRODUCT RESULTS
+			// ════════════════════════════════════════════════════════════════
+			if (knowledgeResults?.product_results && knowledgeResults.product_results.length > 0) {
+				console.log('🔄 Calling LLM again WITH product results...');
 
-                // Log first image result to see structure
-                if (searchResult.results?.image_results && searchResult.results.image_results.length > 0) {
-                    console.log('📸 First image result structure:', JSON.stringify(searchResult.results.image_results[0], null, 2));
-                }
+				// Build detailed product context based on search type
+				let productContext;
+				
+				if (searchType === 'single' && knowledgeResults.product_results.length === 1) {
+					// SINGLE PRODUCT - Include full details with variants
+					const product = knowledgeResults.product_results[0];
+					
+					productContext = `
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		📦 SPECIFIC PRODUCT DETAILS (User is asking about THIS product)
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-                knowledgeResults = searchResult.results;
-                knowledgeCost = searchResult.cost_breakdown;
+		Product Name: ${product.name || product.title}
+		Product ID: ${product.product_id}
+		Price: PKR ${product.price}${product.compare_at_price ? ` (Original: PKR ${product.compare_at_price})` : ''}
+		Vendor: ${product.vendor || 'N/A'}
+		Category: ${product.product_type || 'N/A'}
 
-                console.log(`✅ Found ${knowledgeResults?.product_results?.length || 0} products`);
+		📝 Description:
+		${product.description || 'No description available'}
 
-                // ✅ Call LLM again with product results
-                if (knowledgeResults?.product_results && knowledgeResults.product_results.length > 0) {
-                    console.log('🔄 Calling LLM again WITH product results...');
+		📏 SIZES & AVAILABILITY:
+		${product.variants && product.variants.length > 0 
+			? product.variants.map(v => {
+				const status = v.inventory_quantity > 0 
+					? `✅ In Stock (${v.inventory_quantity} available)` 
+					: '❌ Out of Stock';
+				const priceInfo = v.price && parseFloat(v.price) !== parseFloat(product.price) 
+					? ` - PKR ${v.price}` 
+					: '';
+				return `  • ${v.title || 'Default'}: ${status}${priceInfo}`;
+			}).join('\n')
+			: '  No size variants available'
+		}
 
-                    // Build product context
-                    const productContext = knowledgeResults.product_results.map((product, idx) =>
-                        `[Product ${idx + 1}]
-Name: ${product.name}
-Price: ${product.price}
-Description: ${product.description}
-Availability: ${product.availability}`
-                    ).join('\n\n');
+		📊 AVAILABILITY SUMMARY:
+		  ✅ Available Sizes: ${product.available_sizes?.length > 0 ? product.available_sizes.join(', ') : 'None available'}
+		  ❌ Out of Stock: ${product.out_of_stock_sizes?.length > 0 ? product.out_of_stock_sizes.join(', ') : 'All in stock'}
+		  📦 Total Inventory: ${product.total_inventory || 0} units
 
-                    // Build messages with product context
-                    const messagesWithContext = [{
-                            role: 'system',
-                            content: `${systemPrompt}
+		🔗 Purchase URL: ${product.purchase_url || 'Not available'}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PRODUCT SEARCH RESULTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		⚠️ IMPORTANT INSTRUCTIONS:
+		- Answer the user's question using ONLY the above product details
+		- Be SPECIFIC about sizes and availability
+		- If user asks about a size, tell them if it's in stock or not
+		- Include the purchase URL when relevant
+		- DO NOT search for more products - you have all the information
+		- DO NOT set product_search_needed = true
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+				} else {
+					// MULTI PRODUCT - Show list of products
+					productContext = knowledgeResults.product_results.map((product, idx) =>
+						`[Product ${idx + 1}]
+		Name: ${product.name || product.title}
+		Price: PKR ${product.price}${product.compare_at_price ? ` (was PKR ${product.compare_at_price})` : ''}
+		Description: ${product.description?.substring(0, 150) || 'No description'}...
+		Availability: ${product.availability || (product.total_inventory > 0 ? 'In Stock' : 'Out of Stock')}
+		${product.available_sizes?.length > 0 ? `Available Sizes: ${product.available_sizes.join(', ')}` : ''}
+		Purchase URL: ${product.purchase_url || 'N/A'}`
+					).join('\n\n');
+					
+					productContext = `
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		PRODUCT SEARCH RESULTS
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Found these products matching "${searchQuery}":
+		Found ${knowledgeResults.product_results.length} products:
 
-${productContext}
+		${productContext}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CRITICAL: Present these products naturally to the user.
-- DO NOT say "I need to search" - you already have the results
-- DO NOT set product_search_needed=true again
-- Present the products in a helpful, conversational way
-- Highlight key features based on user preferences
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-                        },
-                        ...history.map(msg => ({
-                            role: msg.role,
-                            content: msg.content
-                        })),
-                        {
-                            role: 'user',
-                            content: message
-                        }
-                    ];
+		CRITICAL: Present these products naturally to the user.
+		- DO NOT say "I need to search" - you already have the results
+		- DO NOT set product_search_needed=true again
+		- Present the products in a helpful, conversational way
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+				}
 
-                    // Call LLM again
-                    const finalCompletion = await this.openai.chat.completions.create({
-                        model: model,
-                        messages: messagesWithContext,
-                        response_format: {
-                            type: "json_object"
-                        },
-                        temperature: parseFloat(agent.temperature) || 0.7,
-                        max_tokens: agent.max_tokens || 4096
-                    });
+				// Build messages with product context
+				const messagesWithContext = [{
+						role: 'system',
+						content: `${systemPrompt}\n\n${productContext}`
+					},
+					...history.map(msg => ({
+						role: msg.role,
+						content: msg.content
+					})),
+					{
+						role: 'user',
+						content: message
+					}
+				];
 
-                    const finalMessage = finalCompletion.choices[0].message;
+				// Call LLM again
+				// Call LLM again with product context
+				try {
+					const finalCompletion = await this.openai.chat.completions.create({
+						model: model,
+						messages: messagesWithContext,
+						response_format: {
+							type: "json_object"
+						},
+						temperature: parseFloat(agent.temperature) || 0.7,
+						max_tokens: 2048  // ✅ Sufficient for JSON response, prevents timeout
+					});
 
-                    try {
-                        const finalDecision = JSON.parse(finalMessage.content);
-                        console.log('✅ LLM generated final answer with products');
+					const finalMessage = finalCompletion.choices[0].message;
+					const finishReason = finalCompletion.choices[0].finish_reason;
+					
+					console.log('📝 Second LLM call (knowledge) finish_reason:', finishReason);
+					
+					if (finishReason === 'length') {
+						console.warn('⚠️ Response was truncated (hit max_tokens limit)');
+					}
 
-                        llmDecision.response = finalDecision.response;
-                        llmDecision.product_search_needed = false;
-                        llmDecision.ready_to_search = false;
+					try {
+						const finalDecision = JSON.parse(finalMessage.content);
+						console.log('✅ LLM generated final answer with knowledge results');
 
-                        // Add second call cost
-                        const secondCallCost = CostCalculator.calculateChatCost({
-                                prompt_tokens: finalCompletion.usage.prompt_tokens,
-                                completion_tokens: finalCompletion.usage.completion_tokens,
-                                cached_tokens: 0
-                            },
-                            model
-                        );
+						// Update response with final answer
+						llmDecision.response = finalDecision.response;
+						llmDecision.knowledge_search_needed = false;
 
-                        console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
+						// Add second call cost
+						const secondCallCost = CostCalculator.calculateChatCost({
+							prompt_tokens: finalCompletion.usage.prompt_tokens,
+							completion_tokens: finalCompletion.usage.completion_tokens,
+							cached_tokens: 0
+						}, model);
 
-                        // ✅ Combine both LLM costs
-                        llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
+						console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
+						llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
+						console.log('💰 Total LLM cost (both calls):', llmCost.final_cost);
 
-                        console.log('💰 Total LLM cost (both calls):', llmCost.final_cost);
-
-                    } catch (error) {
-                        console.error('Failed to parse final LLM response:', error);
-                    }
-                }
-
-            } catch (error) {
-                console.error('Product search failed:', error);
-            }
-        }
+					} catch (parseError) {
+						console.error('❌ Failed to parse final LLM response (knowledge):', parseError.message);
+						console.error('📄 Raw response (first 500 chars):', finalMessage.content?.substring(0, 500));
+						
+						// ✅ FALLBACK: Use raw content if JSON parsing fails
+						if (finalMessage.content) {
+							// Try to extract just the response text
+							const responseMatch = finalMessage.content.match(/"response"\s*:\s*"([^"]+)"/);
+							if (responseMatch) {
+								llmDecision.response = responseMatch[1];
+								console.log('✅ Extracted response from partial JSON');
+							} else {
+								// Use raw content as last resort
+								llmDecision.response = "I found some information but had trouble formatting it. Please try asking again.";
+								console.log('⚠️ Using generic fallback response');
+							}
+						}
+						
+						llmDecision.knowledge_search_needed = false;
+					}
+					
+				} catch (llmError) {
+					console.error('❌ Second LLM call (knowledge) failed:', llmError.message);
+					
+					// ✅ FALLBACK: Provide helpful message
+					llmDecision.response = "I found some relevant information but encountered an error while processing it. Please try asking your question again.";
+					llmDecision.knowledge_search_needed = false;
+					
+					console.log('⚠️ Using fallback response due to LLM error');
+				}
+			}
+		}
 
         // Knowledge search - Only if LLM says needed
         if (llmDecision && llmDecision.knowledge_search_needed && agent.kb_id && !knowledgeResults) {
@@ -1551,46 +1795,75 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
                     ];
 
                     // Second LLM call
-                    const finalCompletion = await this.openai.chat.completions.create({
-                        model: model,
-                        messages: messagesWithContext,
-                        response_format: {
-                            type: "json_object"
-                        },
-                        temperature: parseFloat(agent.temperature) || 0.7,
-                        max_tokens: agent.max_tokens || 4096
-                    });
+                    // Call LLM again with product context
+					try {
+						const finalCompletion = await this.openai.chat.completions.create({
+							model: model,
+							messages: messagesWithContext,
+							response_format: {
+								type: "json_object"
+							},
+							temperature: parseFloat(agent.temperature) || 0.7,
+							max_tokens: 2048  // ✅ Sufficient for JSON response, prevents timeout
+						});
 
-                    const finalMessage = finalCompletion.choices[0].message;
+						const finalMessage = finalCompletion.choices[0].message;
+						const finishReason = finalCompletion.choices[0].finish_reason;
+						
+						console.log('📝 Second LLM call finish_reason:', finishReason);
+						
+						// ✅ Check if response was cut off
+						if (finishReason === 'length') {
+							console.warn('⚠️ Response was truncated (hit max_tokens limit)');
+						}
 
-                    try {
-                        const finalDecision = JSON.parse(finalMessage.content);
-                        console.log('✅ LLM generated final answer with search results');
+						try {
+							const finalDecision = JSON.parse(finalMessage.content);
+							console.log('✅ LLM generated final answer with products');
 
-                        // Update response with final answer
-                        llmDecision.response = finalDecision.response;
-                        llmDecision.knowledge_search_needed = false;
+							llmDecision.response = finalDecision.response;
+							llmDecision.product_search_needed = false;
+							llmDecision.ready_to_search = false;
 
-                        // ✅ ADD second call cost to existing llmCost
-                        const secondCallCost = CostCalculator.calculateChatCost({
-                                prompt_tokens: finalCompletion.usage.prompt_tokens,
-                                completion_tokens: finalCompletion.usage.completion_tokens,
-                                cached_tokens: 0
-                            },
-                            model
-                        );
+							// Add second call cost
+							const secondCallCost = CostCalculator.calculateChatCost({
+								prompt_tokens: finalCompletion.usage.prompt_tokens,
+								completion_tokens: finalCompletion.usage.completion_tokens,
+								cached_tokens: 0
+							}, model);
 
-                        console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
+							console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
+							llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
+							console.log('💰 Total LLM cost (both calls):', llmCost.final_cost);
 
-                        // ✅ Combine both LLM costs
-                        llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
-
-                        console.log('💰 Total LLM cost (both calls):', llmCost.final_cost);
-
-                    } catch (error) {
-                        console.error('Failed to parse final LLM response:', error);
-                        // Use original response as fallback
-                    }
+						} catch (parseError) {
+							console.error('❌ Failed to parse final LLM response (knowledge):', parseError.message);
+							console.error('📄 Raw response (first 500 chars):', finalMessage.content?.substring(0, 500));
+							
+							// ✅ FALLBACK: Try to extract response from partial JSON
+							if (finalMessage.content) {
+								const responseMatch = finalMessage.content.match(/"response"\s*:\s*"([^"]+)"/);
+								if (responseMatch) {
+									llmDecision.response = responseMatch[1];
+									console.log('✅ Extracted response from partial JSON');
+								} else {
+									llmDecision.response = "I found some information but had trouble formatting it. Please try asking again.";
+									console.log('⚠️ Using generic fallback response');
+								}
+							}
+							
+							llmDecision.knowledge_search_needed = false;
+						}
+						
+					} catch (llmError) {
+						console.error('❌ Second LLM call (knowledge) failed:', llmError.message);
+						
+						// ✅ FALLBACK: Provide helpful message
+						llmDecision.response = "I found some relevant information but encountered an error while processing it. Please try asking your question again.";
+						llmDecision.knowledge_search_needed = false;
+						
+						console.log('⚠️ Using fallback response due to LLM error');
+					}
                 }
 
             } catch (error) {
@@ -1854,13 +2127,20 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	{
 	  "response": "Your natural conversational response in user's language",
-	  ${hasProducts ? '"product_search_needed": true/false,' : ''}
-	  ${hasProducts ? '"product_search_query": "detailed search query (if searching for products)",' : ''}
-	  ${hasDocuments ? '"knowledge_search_needed": true/false,' : ''}
-	  ${hasDocuments ? '"knowledge_search_query": "search query (if searching knowledge base)",' : ''}
-	  ${hasProducts ? '"collecting_preferences": true/false,' : ''}
-	  ${hasProducts ? '"preferences_collected": { "preference_name": "value or null" },' : ''}
-	  ${hasProducts ? '"ready_to_search": true/false,' : ''}
+	  ${hasProducts ? `
+	  "product_search_needed": true/false,
+	  "product_search_type": "single" | "multi" | "none",
+	  "product_id": "uuid-of-specific-product (only if search_type=single)",
+	  "product_search_query": "search query (only if search_type=multi)",
+	  "collecting_preferences": true/false,
+	  "preferences_collected": { "preference_name": "value or null" },
+	  "ready_to_search": true/false,
+	  ` : ''}
+	  ${hasDocuments ? `
+	  "knowledge_search_needed": true/false,
+	  "knowledge_search_query": "search query (if searching knowledge base)",
+	  ` : ''}
+	  "needs_clarification": true/false,
 	  "agent_transfer": true/false,
 	  "order_intent_detected": true/false,
 	  "conversation_complete": true/false,
@@ -1872,6 +2152,195 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
         systemPrompt += jsonFormatInstructions;
 
+	const productSearchDecisionInstructions = `
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🔍 SMART PRODUCT SEARCH DECISION LOGIC
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	When user asks about products, YOU must decide the search type:
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	1️⃣ SINGLE PRODUCT LOOKUP (product_search_type = "single")
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Use when:
+	✅ Message contains "AiVA Product ID: <uuid>" 
+	✅ Message contains "Shopify Product ID: <number>"
+	✅ User replied to a specific product message (WhatsApp reply with product info)
+	✅ User clearly references ONE specific product from conversation history
+	✅ User says "this one", "is wali", "yeh product" AND you can identify which product from context
+
+	HOW TO DETECT PRODUCT ID IN MESSAGE:
+	- Look for pattern: "AiVA Product ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+	- Look for pattern: "Shopify Product ID: 1234567890"
+	- Look for pattern: "Purchase URL: https://store.myshopify.com/products/..."
+	
+	RESPONSE FORMAT:
+	{
+	  "response": "Main is product ki details check kar rahi hoon...",
+	  "product_search_needed": true,
+	  "product_search_type": "single",
+	  "product_id": "8cbaf5af-7212-497e-ba95-6269dfa9199d",  // Extract from message
+	  "product_search_query": null,
+	  "ready_to_search": true
+	}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	2️⃣ MULTI PRODUCT SEARCH (product_search_type = "multi")
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Use when:
+	✅ User asks general question: "show me red dresses"
+	✅ User wants recommendations: "kuch formal shirts dikhao"
+	✅ User browsing: "what do you have under 5000?"
+	✅ User searching by category/color/style/price
+
+	RESPONSE FORMAT:
+	{
+	  "response": "Main aap ke liye products dhundh rahi hoon...",
+	  "product_search_needed": true,
+	  "product_search_type": "multi",
+	  "product_id": null,
+	  "product_search_query": "red formal dresses under 5000",
+	  "ready_to_search": true
+	}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	3️⃣ NEEDS CLARIFICATION (needs_clarification = true)
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Use when:
+	⚠️ User says "this one" / "is ki" / "yeh wali" but NO product ID in message
+	⚠️ User references "the second one" but you can't identify from history
+	⚠️ Ambiguous which product they mean
+	⚠️ Multiple products were shown and user's reference is unclear
+
+	RESPONSE FORMAT:
+	{
+	  "response": "Aap kis product ke baare mein pooch rahe hain? Please product ka naam batayein ya WhatsApp par us message ko reply karein jis mein product ki photo hai.",
+	  "product_search_needed": false,
+	  "product_search_type": "none",
+	  "needs_clarification": true
+	}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	4️⃣ NO SEARCH NEEDED (product_search_type = "none")
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Use when:
+	✅ General conversation / greeting
+	✅ Question about policies, shipping, returns
+	✅ You can answer from instructions/knowledge
+	✅ Non-product related query
+
+	RESPONSE FORMAT:
+	{
+	  "response": "Your answer here...",
+	  "product_search_needed": false,
+	  "product_search_type": "none"
+	}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	📱 WHATSAPP REPLY DETECTION - CRITICAL!
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	🚨 WHEN MESSAGE CONTAINS "AiVA Product ID:" YOU MUST:
+	1. Extract the UUID after "AiVA Product ID:"
+	2. Set product_search_type = "single"
+	3. Set product_id = the extracted UUID
+	4. Set product_search_query = null
+
+	EXAMPLE INPUT:
+	"is ki length kya hai?
+	AiVA Product ID: 01ba7c2b-7ac7-4c52-9d12-0c2896426270
+	Shopify Product ID: 9048659034365"
+
+	REQUIRED OUTPUT:
+	{
+	  "response": "Main is product ki details check kar rahi hoon...",
+	  "product_search_needed": true,
+	  "product_search_type": "single",
+	  "product_id": "01ba7c2b-7ac7-4c52-9d12-0c2896426270",
+	  "product_search_query": null,
+	  "ready_to_search": true,
+	  "needs_clarification": false
+	}
+
+	❌ WRONG (DO NOT DO THIS):
+	{
+	  "product_search_type": "multi",
+	  "product_search_query": "Dreamy 2 Piece dress length"
+	}
+
+	✅ CORRECT:
+	{
+	  "product_search_type": "single",
+	  "product_id": "01ba7c2b-7ac7-4c52-9d12-0c2896426270"
+	}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	📜 HISTORY REFERENCE DETECTION
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	If user references a product from conversation history:
+
+	"pehle wala" / "the first one" → Look for 1st product in your last response
+	"second option" / "doosra" → Look for 2nd product you mentioned
+	"the blue one" / "neeli wali" → Match by color from products you showed
+	"last one" / "aakhri wala" → Look for last product in your response
+
+	IF YOU CAN IDENTIFY THE PRODUCT:
+	- Find its product_id from the conversation history
+	- Use product_search_type = "single" with that product_id
+
+	IF YOU CANNOT IDENTIFY:
+	- Set needs_clarification = true
+	- Ask user to specify or reply to the product message
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	⚡ DECISION FLOWCHART
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	User asks about product(s)
+	         │
+	         ▼
+	┌─────────────────────────────────────┐
+	│ Does message contain Product ID?    │
+	│ (AiVA Product ID: xxx)              │
+	└─────────────────────────────────────┘
+	         │
+	    YES  │  NO
+	         ▼         ▼
+	┌─────────────┐   ┌─────────────────────────────────┐
+	│ SINGLE      │   │ Is user referencing a specific  │
+	│ search_type │   │ product from history?           │
+	│ = "single"  │   └─────────────────────────────────┘
+	│ Extract ID  │            │
+	└─────────────┘       YES  │  NO / UNCLEAR
+	                           ▼         ▼
+	                    ┌─────────────┐   ┌─────────────────────────────┐
+	                    │ SINGLE      │   │ Is this a general product   │
+	                    │ Use ID from │   │ search request?             │
+	                    │ history     │   └─────────────────────────────┘
+	                    └─────────────┘            │
+	                                          YES  │  UNCLEAR
+	                                               ▼         ▼
+	                                        ┌─────────────┐   ┌─────────────┐
+	                                        │ MULTI       │   │ ASK FOR     │
+	                                        │ search_type │   │ CLARIFICATION│
+	                                        │ = "multi"   │   │ needs_      │
+	                                        └─────────────┘   │ clarification│
+	                                                          │ = true      │
+	                                                          └─────────────┘
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	`;
+	
+		if (hasProducts) {
+			systemPrompt += productSearchDecisionInstructions;
+		}
+		
         const closureInstructions = `
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2346,10 +2815,17 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	` : ''}
 
 	${hasProducts ? `
+	🔗 PURCHASE URL RULES - CRITICAL: 
 	WHEN SEARCHING PRODUCTS (set product_search_needed = true):
 	- User requests to see products
 	- After collecting sufficient preferences
 	- When ready_to_search = true
+	
+	- ONLY use purchase_url from search results - NEVER generate URLs yourself
+	- If purchase_url is null/missing → Say "I'll share the link once I find it" and search again
+	- NEVER modify or construct URLs - use EXACTLY what's provided
+	- Format: Share the exact URL from product data, don't add parameters
+	- If no URL available → Direct user to website: "You can find this on [store website]"
 	` : ''}
 
 	WHEN TO TRANSFER TO HUMAN (set agent_transfer = true):
