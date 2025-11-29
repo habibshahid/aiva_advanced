@@ -68,7 +68,6 @@ const authenticate = (req, res, next) => {
  */
 router.get('/', authenticate, checkPermission('agents.view'), async (req, res) => {
     try {
-		console.log('##########', req.user)
         const agents = await AgentService.listAgents(req.user.tenant_id, req.query);
         res.json({ agents });
     } catch (error) {

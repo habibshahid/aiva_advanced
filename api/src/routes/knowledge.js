@@ -575,7 +575,6 @@ router.post('/search', authenticate, async (req, res) => {
 
   try {
     const { kb_id, query, image_base64, search_type, top_k, filters } = req.body;
-
     // Validate KB exists
     const kb = await KnowledgeService.getKnowledgeBase(kb_id);
     if (!kb) {
