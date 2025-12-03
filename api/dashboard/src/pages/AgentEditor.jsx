@@ -117,7 +117,7 @@ const AgentEditor = () => {
   const [showParameterForm, setShowParameterForm] = useState(false);
 
   // Add this handler function after your state declarations
-	const handleProviderChange = (newProvider) => {
+	/*const handleProviderChange = (newProvider) => {
 	  if (newProvider === 'openai') {
 		setAgent({
 		  ...agent,
@@ -141,6 +141,35 @@ const AgentEditor = () => {
 		  model: null
 		});
 		toast.success('Switched to Deepgram - defaults applied');
+	  }
+	};*/
+	const handleProviderChange = (newProvider) => {
+	  if (newProvider === 'openai') {
+		setAgent({
+		  ...agent,
+		  provider: newProvider,
+		  voice: agent.voice || 'shimmer',
+		  model: agent.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+		  language: agent.language || 'en'
+		});
+	  } else if (newProvider === 'deepgram') {
+		setAgent({
+		  ...agent,
+		  provider: newProvider,
+		  deepgram_model: agent.deepgram_model || 'nova-2',
+		  deepgram_voice: agent.deepgram_voice || 'shimmer',
+		  deepgram_language: agent.deepgram_language || 'en'
+		});
+	  } else if (newProvider === 'custom') {
+		// NEW: Custom provider defaults
+		setAgent({
+		  ...agent,
+		  provider: newProvider,
+		  tts_provider: agent.tts_provider || 'uplift',
+		  custom_voice: agent.custom_voice || 'v_meklc281',
+		  language_hints: agent.language_hints || ['ur', 'en'],
+		  llm_model: agent.llm_model || 'llama-3.3-70b-versatile'
+		});
 	  }
 	};
 	
@@ -317,6 +346,16 @@ const AgentEditor = () => {
 			deepgram_model: loadedAgent.deepgram_model || 'nova-2',
 			deepgram_voice: loadedAgent.deepgram_voice || 'shimmer',
 			deepgram_language: loadedAgent.deepgram_language || 'en',
+			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
+			kb_id: loadedAgent.kb_id || null
+		  });
+		} else if (loadedAgent.provider === 'custom') {
+		  setAgent({
+			...loadedAgent,
+			tts_provider: loadedAgent.tts_provider || 'uplift',
+			custom_voice: loadedAgent.custom_voice || 'v_meklc281',
+			language_hints: loadedAgent.language_hints || ['ur', 'en'],
+			llm_model: loadedAgent.llm_model || 'llama-3.3-70b-versatile',
 			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
 			kb_id: loadedAgent.kb_id || null
 		  });
@@ -942,20 +981,23 @@ const AgentEditor = () => {
 			<div>
 			  <label className="block text-sm font-medium text-gray-700">Provider</label>
 			  <select
-				  value={agent.provider || 'openai'}
-				  onChange={(e) => handleProviderChange(e.target.value)}
-				  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-				>
+				value={agent.provider || 'openai'}
+				onChange={(e) => handleProviderChange(e.target.value)}
+				className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+			  >
 				<option value="openai">OpenAI Realtime API</option>
 				<option value="deepgram">Deepgram</option>
+				<option value="custom">Custom (Intellicon AiVA)</option>
 			  </select>
 			  <p className="mt-1 text-xs text-gray-500">
 				{agent.provider === 'deepgram' 
 				  ? 'Deepgram provides more natural sounding voices'
+				  : agent.provider === 'custom'
+				  ? 'Custom stack: Best for Urdu/Pakistani languages, lowest cost (~$0.01/min)'
 				  : 'OpenAI provides superior conversation handling and function calling'}
 			  </p>
 			</div>
-            {agent.provider === 'openai' ? (
+            {agent.provider === 'openai' && (
 			  <div>
 				<label className="block text-sm font-medium text-gray-700">Voice</label>
 				<select
@@ -975,7 +1017,8 @@ const AgentEditor = () => {
 				  <option value="cedar">Cedar</option>
 				</select>
 			  </div>
-			) : (
+			)}
+			{agent.provider === 'deepgram' && (
 			  <>
 				<div>
 				  <label className="block text-sm font-medium text-gray-700">
@@ -1148,6 +1191,215 @@ const AgentEditor = () => {
 				  </p>
 				</div>
 			  </>
+			)}
+			{/* Custom Provider Configuration */}
+			{agent.provider === 'custom' && (
+			  <div className="col-span-2 space-y-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
+				<div className="flex items-center gap-2 mb-3">
+				  <span className="text-2xl">🎯</span>
+				  <h4 className="font-semibold text-purple-900">Custom Voice Provider Settings</h4>
+				</div>
+				
+				<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+				  {/* TTS Provider Selection - NOW WITH OPENAI! */}
+				  <div>
+					<label className="block text-sm font-medium text-gray-700">
+					  Text-to-Speech Provider
+					</label>
+					<select
+					  value={agent.tts_provider || 'uplift'}
+					  onChange={(e) => {
+						const newTtsProvider = e.target.value;
+						let defaultVoice = 'ur-PK-female';
+						if (newTtsProvider === 'azure') defaultVoice = 'ur-PK-UzmaNeural';
+						if (newTtsProvider === 'openai') defaultVoice = 'nova';
+						setAgent({ 
+						  ...agent, 
+						  tts_provider: newTtsProvider,
+						  custom_voice: defaultVoice
+						});
+					  }}
+					  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					>
+					  <option value="uplift">🇵🇰 Uplift AI (Pakistani Languages)</option>
+					  <option value="azure">☁️ Azure TTS (Microsoft)</option>
+					  <option value="openai">🤖 OpenAI TTS (High Quality)</option>
+					</select>
+					<p className="mt-1 text-xs text-gray-500">
+					  {agent.tts_provider === 'uplift' 
+						? 'Best for Urdu/Punjabi - ~$0.004/min'
+						: agent.tts_provider === 'openai'
+						? 'Same voices as Realtime API - ~$0.009/min'
+						: 'Azure neural voices - ~$0.005/min'}
+					</p>
+				  </div>
+				  
+				  {/* Voice Selection - DYNAMIC BASED ON TTS PROVIDER */}
+				  <div>
+					<label className="block text-sm font-medium text-gray-700">Voice</label>
+					
+					{/* Uplift Voices */}
+					{(agent.tts_provider === 'uplift' || !agent.tts_provider) && (
+					  <select
+						value={agent.custom_voice || 'v_meklc281'}
+						onChange={(e) => setAgent({ ...agent, custom_voice: e.target.value })}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					  >
+						<optgroup label="🇵🇰 Urdu Voices">
+						  <option value="v_meklc281">👩 Ayesha - Info/Education V2 (Default)</option>
+						  <option value="v_8eelc901">👩 Fatima - Info/Education</option>
+						  <option value="v_30s70t3a">👨 Asad - News Anchor</option>
+						  <option value="v_yypgzenx">👴 Dada Jee - Storyteller</option>
+						  <option value="v_kwmp7zxt">👧 Zara - Gen Z (Beta)</option>
+						</optgroup>
+						<optgroup label="🏔️ Sindhi Voices">
+						  <option value="v_sd0kl3m9">👩 Samina - Female</option>
+						  <option value="v_sd6mn4p2">👨 Waqar - Male (Calm)</option>
+						  <option value="v_sd9qr7x5">👨 Imran - Male (News)</option>
+						</optgroup>
+						<optgroup label="⛰️ Balochi Voices">
+						  <option value="v_bl0ab8c4">👨 Karim - Male</option>
+						  <option value="v_bl1de2f7">👩 Nazia - Female</option>
+						</optgroup>
+					  </select>
+					)}
+					
+					{/* Azure Voices */}
+					{agent.tts_provider === 'azure' && (
+					  <select
+						value={agent.custom_voice || 'ur-PK-UzmaNeural'}
+						onChange={(e) => setAgent({ ...agent, custom_voice: e.target.value })}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					  >
+						<option value="ur-PK-UzmaNeural">👩 Uzma (Female - Urdu)</option>
+						<option value="ur-PK-AsadNeural">👨 Asad (Male - Urdu)</option>
+						<option value="en-US-JennyNeural">👩 Jenny (Female - English)</option>
+						<option value="en-US-GuyNeural">👨 Guy (Male - English)</option>
+					  </select>
+					)}
+					
+					
+					{/* OpenAI Voices - NEW! */}
+					{agent.tts_provider === 'openai' && (
+					  <select
+						value={agent.custom_voice || 'nova'}
+						onChange={(e) => setAgent({ ...agent, custom_voice: e.target.value })}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					  >
+						<option value="nova">🌟 Nova (Friendly, Upbeat)</option>
+						<option value="alloy">⚖️ Alloy (Neutral, Balanced)</option>
+						<option value="echo">💬 Echo (Warm, Conversational)</option>
+						<option value="fable">📖 Fable (Expressive, Narrative)</option>
+						<option value="onyx">🎭 Onyx (Deep, Authoritative)</option>
+						<option value="shimmer">✨ Shimmer (Clear, Pleasant)</option>
+					  </select>
+					)}
+				  </div>
+				  
+				  {/* Language Hints */}
+				  <div>
+					<label className="block text-sm font-medium text-gray-700">
+					  Speech Recognition Languages
+					</label>
+					<select
+					  value={JSON.stringify(agent.language_hints || ['ur', 'en'])}
+					  onChange={(e) => setAgent({ ...agent, language_hints: JSON.parse(e.target.value) })}
+					  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					>
+					  <optgroup label="Common">
+						<option value='["ur", "en"]'>🇵🇰 Urdu + 🇬🇧 English (Recommended)</option>
+						<option value='["ur"]'>🇵🇰 Urdu Only</option>
+						<option value='["en"]'>🇬🇧 English Only</option>
+					  </optgroup>
+					  <optgroup label="Pakistani Languages">
+						<option value='["ur", "en", "pa"]'>Urdu + English + Punjabi</option>
+						<option value='["sd", "ur", "en"]'>Sindhi + Urdu + English</option>
+						<option value='["sd", "en"]'>Sindhi + English</option>
+						<option value='["bal", "ur", "en"]'>Balochi + Urdu + English</option>
+						<option value='["ps", "ur", "en"]'>Pashto + Urdu + English</option>
+					  </optgroup>
+					  <optgroup label="Other">
+						<option value='["hi", "en"]'>🇮🇳 Hindi + English</option>
+						<option value='["ar", "en"]'>🇸🇦 Arabic + English</option>
+					  </optgroup>
+					</select>
+					<p className="mt-1 text-xs text-gray-500">
+					  Languages the STT should expect - improves accuracy
+					</p>
+				  </div>
+				  
+				  {/* LLM Model Selection */}
+				  <div>
+					<label className="block text-sm font-medium text-gray-700">
+					  AI Model (LLM)
+					</label>
+					<select
+					  value={agent.llm_model || 'llama-3.3-70b-versatile'}
+					  onChange={(e) => setAgent({ ...agent, llm_model: e.target.value })}
+					  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+					>
+					  <option value="llama-3.3-70b-versatile">🦙 Llama 3.3 70B (Groq - Fast & Free)</option>
+					  <option value="llama-3.3-70b-specdec">⚡ Llama 3.3 70B Specdec (Fastest)</option>
+					  <option value="gpt-4o-mini">🤖 GPT-4o Mini (OpenAI)</option>
+					  <option value="gpt-4o">🧠 GPT-4o (OpenAI - Best)</option>
+					</select>
+					<p className="mt-1 text-xs text-gray-500">
+					  Groq is 10x faster and mostly free tier
+					</p>
+				  </div>
+				</div>
+				
+				{/* Cost Comparison Card - UPDATED WITH OPENAI TTS */}
+				<div className="mt-4 p-4 bg-white rounded-lg border border-green-200 shadow-sm">
+				  <div className="flex items-start gap-3">
+					<div className="text-3xl">💰</div>
+					<div className="flex-1">
+					  <h5 className="font-semibold text-green-800">Cost Comparison</h5>
+					  <div className="mt-2 grid grid-cols-4 gap-2 text-sm">
+						<div className="text-center p-2 bg-red-50 rounded">
+						  <div className="font-bold text-red-600">$0.30</div>
+						  <div className="text-xs text-gray-500">OpenAI Realtime</div>
+						</div>
+						<div className="text-center p-2 bg-yellow-50 rounded">
+						  <div className="font-bold text-yellow-600">$0.05</div>
+						  <div className="text-xs text-gray-500">Deepgram</div>
+						</div>
+						<div className={`text-center p-2 rounded ${agent.tts_provider === 'openai' ? 'bg-blue-50 border-2 border-blue-400' : 'bg-blue-50'}`}>
+						  <div className="font-bold text-blue-600">$0.02</div>
+						  <div className="text-xs text-gray-500">Custom+OpenAI</div>
+						</div>
+						<div className={`text-center p-2 rounded ${agent.tts_provider !== 'openai' ? 'bg-green-50 border-2 border-green-400' : 'bg-green-50'}`}>
+						  <div className="font-bold text-green-600">$0.01</div>
+						  <div className="text-xs text-gray-500">Custom+Uplift ✓</div>
+						</div>
+					  </div>
+					  <p className="mt-2 text-xs text-green-700">
+						{agent.tts_provider === 'openai' 
+						  ? 'OpenAI TTS: High quality voices, ~$0.02/min total'
+						  : agent.tts_provider === 'azure'
+						  ? 'Azure TTS: Good quality, ~$0.01/min total'
+						  : 'Uplift TTS: Best for Urdu, ~$0.01/min total'}
+					  </p>
+					</div>
+				  </div>
+				</div>
+				
+				{/* Features Badge */}
+				<div className="flex flex-wrap gap-2 mt-3">
+				  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+					✅ {agent.tts_provider === 'openai' ? 'High Quality' : 'Urdu Native'}
+				  </span>
+				  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+					✅ Code-Switching
+				  </span>
+				  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+					✅ Function Calling
+				  </span>
+				  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+					✅ ~300ms Latency
+				  </span>
+				</div>
+			  </div>
 			)}
 
             <div>

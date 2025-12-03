@@ -40,7 +40,7 @@ class DynamicAgentLoader {
             );
             
             const agent = response.data.agent;
-            
+			
             if (!agent || !agent.is_active) {
                 logger.warn(`Agent ${agentId} not found or inactive`);
                 return null;
@@ -157,11 +157,26 @@ class DynamicAgentLoader {
 			},
 			is_active: true
 		};
+		let languageHints = agent.language_hints;
+		if (typeof languageHints === 'string') {
+			try {
+				languageHints = JSON.parse(languageHints);
+			} catch (e) {
+				languageHints = ['ur', 'en'];
+			}
+		}
 		return {
 			id: agent.id,
 			name: agent.name,
 			type: agent.type,
-			provider: agent.provider || 'openai',  // ADD THIS
+			provider: agent.provider || 'openai',
+			tts_provider: agent.tts_provider || 'uplift',
+			custom_voice: agent.custom_voice || 'v_meklc281',
+			language_hints: languageHints || ['ur', 'en'],
+			llm_model: agent.llm_model || 'gpt-4o-mini',
+			openai_tts_model: 'tts-1',           // Hardcoded
+			uplift_output_format: 'MP3_22050_32', //'ULAW_8000_8', //'MP3_22050_32', // Hardcoded for telephony
+			uplift_resample_16to8: true,
 			greeting: agent.greeting || `Hello! This is ${agent.name}. How can I help you?`,
 			instructions: agent.instructions,
 			tools: openAITools,

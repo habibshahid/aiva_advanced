@@ -236,7 +236,11 @@ class AsteriskOpenAIBridge {
 					${Object.entries(customData).map(([key, value]) => `${key}: ${value}`).join('\n')}
 
 					===== END OF CONTEXT =====
-
+					===== CRITICAL LLM TEXT GENERATION INSTRUCTIONS =====
+					- When generating URDU or ROMAN Urdu text, never use Markdown. Never use *
+					- When generating Amounts in Rupees never use Rs but use Rupee or Rupees
+					- Never Generate amount like = 399 rupees but rather say whose total is three hunder ninty nine rupees or in urdu jis ka total teen soo nenyanway rupees
+					===== END OF CRITICAL LLM TEXT GENERATION INSTRUCTIONS =====
 					`;
 
 					// Prepend context to instructions
@@ -256,7 +260,7 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 → Let the function handle the transfer message
 `;
 					const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent." + transferInstructions;
-
+					
 					// Create connection
 					const connection = await this.connectionManager.createConnection(
 						clientKey,
@@ -279,6 +283,14 @@ IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or 
 							deepgram_model: agentConfig.config?.deepgram_model,
 							deepgram_voice: agentConfig.config?.deepgram_voice,
 							deepgram_language: agentConfig.config?.deepgram_language,
+							// Custom Provider fields (Soniox STT + Groq LLM + Uplift/Azure/OpenAI TTS)
+							tts_provider: agentConfig.tts_provider,
+							custom_voice: agentConfig.custom_voice,
+							language_hints: agentConfig.language_hints,
+							llm_model: agentConfig.llm_model,
+							openai_tts_model: agentConfig.openai_tts_model,
+							uplift_output_format: agentConfig.uplift_output_format,
+							uplift_resample_16to8: agentConfig.uplift_resample_16to8,
 							// Metadata
 							agentId: agentConfig.id,
 							tenantId: tenantId,

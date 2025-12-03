@@ -27,6 +27,15 @@ const validateProvider = (req, res, next) => {
             }
             // Deepgram voice is optional (has defaults)
             break;
+		case 'custom':
+            if (!req.body.llm_model) {
+                errors.push('LLM model is required when using Custom provider');
+            }
+			if (!req.body.tts_provider) {
+                errors.push('TTS Provider is required when using Custom provider');
+            }
+            // Deepgram voice is optional (has defaults)
+            break;
             
         default:
             errors.push(`Invalid provider: ${selectedProvider}. Must be 'openai' or 'deepgram'`);

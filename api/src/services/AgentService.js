@@ -8,35 +8,42 @@ class AgentService {
         const agentId = uuidv4();
         
         const [result] = await db.query(
-            `INSERT INTO yovo_tbl_aiva_agents (
-                id, tenant_id, name, type, instructions, voice, language, 
-				model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
-				temperature, max_tokens, vad_threshold, 
-				silence_duration_ms, greeting, kb_id, conversation_strategy
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                agentId,
-				tenantId,
-				agentData.name,
-				agentData.type,
-				agentData.instructions,
-				agentData.voice || 'shimmer',
-				agentData.language || 'ur',
-				agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
-				agentData.chat_model || 'gpt-4o-mini',  // ADDED: chat_model in correct position
-				agentData.provider || 'openai',
-				agentData.deepgram_model || null,
-				agentData.deepgram_voice || null,
-				agentData.deepgram_language || 'en',
-				agentData.temperature || 0.6,
-				agentData.max_tokens || 4096,
-				agentData.vad_threshold || 0.5,
-				agentData.silence_duration_ms || 500,
-				agentData.greeting || null,
-				agentData.kb_id || null,
-				JSON.stringify(agentData.conversation_strategy) || null
-            ]
-        );
+        `INSERT INTO yovo_tbl_aiva_agents (
+            id, tenant_id, name, type, instructions, voice, language, 
+            model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
+            tts_provider, custom_voice, language_hints, llm_model,
+            temperature, max_tokens, vad_threshold, 
+            silence_duration_ms, greeting, kb_id, conversation_strategy
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            agentId,
+            tenantId,
+            agentData.name,
+            agentData.type,
+            agentData.instructions,
+            agentData.voice || 'shimmer',
+            agentData.language || 'ur',
+            agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+            agentData.chat_model || 'gpt-4o-mini',
+            agentData.provider || 'openai',
+            agentData.deepgram_model || null,
+            agentData.deepgram_voice || null,
+            agentData.deepgram_language || 'en',
+            // NEW: Custom provider fields
+            agentData.tts_provider || 'uplift',
+            agentData.custom_voice || 'ur-PK-female',
+            JSON.stringify(agentData.language_hints || ['ur', 'en']),
+            agentData.llm_model || 'llama-3.3-70b-versatile',
+            // End new fields
+            agentData.temperature || 0.6,
+            agentData.max_tokens || 4096,
+            agentData.vad_threshold || 0.5,
+            agentData.silence_duration_ms || 500,
+            agentData.greeting || null,
+            agentData.kb_id || null,
+            JSON.stringify(agentData.conversation_strategy) || null
+        ]
+    );
         
         // Cache in Redis
         await this.cacheAgent(agentId);
@@ -202,40 +209,41 @@ class AgentService {
     // Update agent
     async updateAgent(agentId, updates) {
         const fields = [];
-        const values = [];
-        
-        const allowedFields = [
-            'name', 'instructions', 'voice', 'language', 'model', 'chat_model',
-			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',  // NEW
+		const values = [];
+		
+		const allowedFields = [
+			'name', 'instructions', 'voice', 'language', 'model', 'chat_model',
+			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',
+			'tts_provider', 'custom_voice', 'language_hints', 'llm_model',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
 			'silence_duration_ms', 'greeting', 'is_active', 'kb_id', 'conversation_strategy' 
-        ];
-        
-        for (const field of allowedFields) {
-            if (updates[field] !== undefined) {
-                fields.push(`${field} = ?`);
-				if(field === 'conversation_strategy'){
+		];
+		
+		for (const field of allowedFields) {
+			if (updates[field] !== undefined) {
+				fields.push(`${field} = ?`);
+				// Handle JSON fields
+				if (field === 'conversation_strategy' || field === 'language_hints') {
 					values.push(JSON.stringify(updates[field]));
-				}
-				else{
+				} else {
 					values.push(updates[field]);
 				}
-            }
-        }
-        
-        if (fields.length === 0) {
-            return this.getAgent(agentId);
-        }
-        
-        values.push(agentId);
-        
-        await db.query(
-            `UPDATE yovo_tbl_aiva_agents SET ${fields.join(', ')} WHERE id = ?`,
-            values
-        );
-        
-        // Invalidate cache
-        await redisClient.del(`agent:${agentId}`);
+			}
+		}
+		
+		if (fields.length === 0) {
+			return this.getAgent(agentId);
+		}
+		
+		values.push(agentId);
+		
+		await db.query(
+			`UPDATE yovo_tbl_aiva_agents SET ${fields.join(', ')} WHERE id = ?`,
+			values
+		);
+		
+		// Invalidate cache
+		await redisClient.del(`agent:${agentId}`);
         
         return this.getAgent(agentId);
     }
@@ -338,6 +346,9 @@ class AgentService {
 		]
 	  );
 
+	  await redisClient.del(`agent:${agentId}`);
+        
+	  this.getAgent(agentId);
 	  // Return updated config
 	  return this.getChatIntegration(agentId);
 	}

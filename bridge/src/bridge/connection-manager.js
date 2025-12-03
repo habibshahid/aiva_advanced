@@ -56,8 +56,8 @@ class ConnectionManager extends EventEmitter {
      */
     async createConnection(clientKey, rtpClient, config = {}) {
 		try {
-			logger.info(`Creating connection for ${clientKey} with provider: ${config.provider || 'openai'}`);
 			
+			logger.info(`Creating connection for ${clientKey} with provider: ${config.provider || 'openai'}`);
 			const sessionId = config.sessionId || clientKey;
 			
 			// Validate provider config
@@ -149,6 +149,12 @@ class ConnectionManager extends EventEmitter {
 		if (!connection) {
 			return;
 		}
+		
+		 if (connection.isClosing) {
+			logger.debug(`Connection ${clientKey} already closing, skipping duplicate`);
+			return;
+		}
+		connection.isClosing = true;
 		
 		try {
 			logger.info(`Closing connection for ${clientKey} (${connection.providerName})`);
@@ -346,48 +352,8 @@ class ConnectionManager extends EventEmitter {
      * Handle incoming RTP audio
      * UPDATED: Provider-aware audio handling
      */
-    /*async handleRTPAudio(clientKey, audioData) {
-		this.updateConnectionActivity(clientKey);
-		
-		const connection = this.connections.get(clientKey);
-
-		if (!connection) {
-			//console.log('[AUDIO] No connection found for', clientKey);
-			return;
-		}
-		
-		// Temporarily skip the connection check
-		//console.log('[AUDIO] Received', audioData.length, 'bytes');
-		
-		// Convert µ-law to PCM16
-		const pcmBuffer = AudioConverter.convertUlawToPCM16(audioData);
-		
-		// Resample from 8kHz to 24kHz
-		const resampledBuffer = AudioConverter.resample8to24(pcmBuffer);
-		
-		// Add to buffer
-		connection.audioBuffer = Buffer.concat([connection.audioBuffer, resampledBuffer]);
-		
-		// Send when buffer is full or timeout
-		const now = Date.now();
-		if (connection.audioBuffer.length >= this.audioBufferSize || 
-			(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= this.audioBufferInterval)) {
-			
-			//console.log('[AUDIO] Sending to provider:', connection.audioBuffer.length, 'bytes');
-			
-			try {
-				await connection.provider.sendAudio(connection.audioBuffer);
-				//console.log('[AUDIO] Successfully sent');
-			} catch (error) {
-				//console.error('[AUDIO] Send failed:', error.message);
-			}
-			
-			connection.audioBuffer = Buffer.alloc(0);
-			connection.lastAudioSent = now;
-		}
-	}*/
 	
-	async handleRTPAudio(clientKey, audioData) {
+	/*async handleRTPAudio(clientKey, audioData) {
 		this.updateConnectionActivity(clientKey);
 		
 		const connection = this.connections.get(clientKey);
@@ -429,13 +395,73 @@ class ConnectionManager extends EventEmitter {
 				connection.lastAudioSent = now;
 			}
 		}
+	}*/
+	
+	async handleRTPAudio(clientKey, audioData) {
+		this.updateConnectionActivity(clientKey);
+		
+		const connection = this.connections.get(clientKey);
+		if (!connection || !connection.provider) {
+			return;
+		}
+		
+		if (connection.providerName === 'deepgram') {
+			// Deepgram: Buffer µ-law audio
+			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
+			
+			const now = Date.now();
+			const targetBufferSize = 2048;
+			const bufferInterval = 500;
+			
+			if (connection.audioBuffer.length >= targetBufferSize || 
+				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
+				await connection.provider.sendAudio(connection.audioBuffer);
+				connection.audioBuffer = Buffer.alloc(0);
+				connection.lastAudioSent = now;
+			}
+			
+		} else if (connection.providerName === 'custom') {
+			// ============================================
+			// NEW: Custom provider accepts mulaw directly
+			// Soniox STT handles mulaw 8kHz natively
+			// ============================================
+			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
+			
+			const now = Date.now();
+			const targetBufferSize = 1600;  // 100ms of mulaw audio at 8kHz (8000 * 0.1 * 2 bytes)
+			const bufferInterval = 100;     // Send at least every 100ms
+			
+			if (connection.audioBuffer.length >= targetBufferSize || 
+				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
+				
+				// Send mulaw directly - no conversion needed!
+				await connection.provider.sendAudio(connection.audioBuffer);
+				
+				connection.audioBuffer = Buffer.alloc(0);
+				connection.lastAudioSent = now;
+			}
+			
+		} else if (connection.providerName === 'openai') {
+			// OpenAI: Convert µ-law to PCM16, resample 8kHz to 24kHz
+			const pcmBuffer = AudioConverter.convertUlawToPCM16(audioData);
+			const resampledBuffer = AudioConverter.resample8to24(pcmBuffer);
+			
+			connection.audioBuffer = Buffer.concat([connection.audioBuffer, resampledBuffer]);
+			
+			const now = Date.now();
+			if (connection.audioBuffer.length >= this.audioBufferSize || 
+				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= this.audioBufferInterval)) {
+				await connection.provider.sendAudio(connection.audioBuffer);
+				connection.audioBuffer = Buffer.alloc(0);
+				connection.lastAudioSent = now;
+			}
+		}
 	}
-    
     /**
      * Handle provider audio output
      * UPDATED: Provider-aware resampling
      */
-    handleProviderAudio(connection, audioData) {
+    /*handleProviderAudio(connection, audioData) {
 		this.updateConnectionActivity(connection.clientKey);
 		
 		try {
@@ -473,6 +499,64 @@ class ConnectionManager extends EventEmitter {
 			
 			// ADD THIS LOG
 			//console.log(`[AUDIO-OUT] Converted to µ-law: ${ulawBuffer.length} bytes`);
+			
+			// Add to audio queue for RTP transmission
+			connection.audioQueue.addAudio(ulawBuffer);
+			
+		} catch (error) {
+			logger.error('Error processing provider audio:', error);
+		}
+	}*/
+	
+	handleProviderAudio(connection, audioData) {
+		this.updateConnectionActivity(connection.clientKey);
+		
+		try {
+			// Decode base64
+			let pcmBuffer;
+			if (typeof audioData === 'string') {
+				pcmBuffer = Buffer.from(audioData, 'base64');
+			} else {
+				pcmBuffer = audioData;
+			}
+			
+			// Ensure even length for PCM16
+			if (pcmBuffer.length % 2 !== 0) {
+				pcmBuffer = Buffer.concat([pcmBuffer, Buffer.from([0])]);
+			}
+			
+			// Resample based on provider output format
+			let downsampledBuffer;
+			
+			if (connection.providerName === 'custom') {
+				// ============================================
+				// NEW: Custom provider audio handling
+				// 
+				// Uplift AI outputs MP3 22kHz - requires decoding
+				// Azure TTS outputs PCM16 24kHz - same as OpenAI
+				// 
+				// For initial integration, use Azure TTS (PCM16 24kHz)
+				// or convert MP3 to PCM in the custom provider before emitting
+				// ============================================
+				
+				// Assuming PCM16 24kHz output (from Azure TTS or decoded MP3)
+				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+				
+			} else if (connection.providerName === 'openai') {
+				// OpenAI outputs PCM16 24kHz
+				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+				
+			} else if (connection.providerName === 'deepgram') {
+				// Deepgram outputs PCM16 24kHz
+				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+				
+			} else {
+				// Unknown provider - assume raw PCM16 8kHz
+				downsampledBuffer = pcmBuffer;
+			}
+			
+			// Convert PCM16 to µ-law for Asterisk
+			const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
 			
 			// Add to audio queue for RTP transmission
 			connection.audioQueue.addAudio(ulawBuffer);
