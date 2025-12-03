@@ -75,6 +75,12 @@ class AzureTTS extends EventEmitter {
         
         // State
         this.isProcessing = false;
+		// Audio buffer for smooth playback (match OpenAI TTS behavior)
+        this.audioBuffer = Buffer.alloc(0);
+        
+        // Buffer size before emitting (prevents choppy audio and static burst)
+        // 4800 bytes = 100ms at 24kHz 16-bit mono
+        this.minBufferSize = config.minBufferSize || 4800;
     }
     
     /**
@@ -263,19 +269,44 @@ class AzureTTS extends EventEmitter {
                 }
                 
                 let totalBytes = 0;
+                let emittedChunks = 0;
+                
+                // Reset audio buffer at start of synthesis
+                this.audioBuffer = Buffer.alloc(0);
                 
                 res.on('data', (chunk) => {
                     totalBytes += chunk.length;
                     
-                    // Emit for streaming playback
-                    this.emit('audio.delta', {
-                        delta: chunk.toString('base64'),
-                        format: 'pcm16',
-                        sampleRate: 24000
-                    });
+                    // Buffer audio chunks (like OpenAI TTS)
+                    this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
+                    
+                    // Emit when buffer reaches minimum size
+                    while (this.audioBuffer.length >= this.minBufferSize) {
+                        const audioChunk = this.audioBuffer.slice(0, this.minBufferSize);
+                        this.audioBuffer = this.audioBuffer.slice(this.minBufferSize);
+                        emittedChunks++;
+                        
+                        // Emit for streaming playback
+                        this.emit('audio.delta', {
+                            delta: audioChunk.toString('base64'),
+                            format: 'pcm16',
+                            sampleRate: 24000
+                        });
+                    }
                 });
                 
                 res.on('end', () => {
+                    // Emit any remaining buffered audio
+                    if (this.audioBuffer.length > 0) {
+                        emittedChunks++;
+                        this.emit('audio.delta', {
+                            delta: this.audioBuffer.toString('base64'),
+                            format: 'pcm16',
+                            sampleRate: 24000
+                        });
+                        this.audioBuffer = Buffer.alloc(0);
+                    }
+                    
                     this.isProcessing = false;
                     
                     const durationSeconds = totalBytes / 48000;
