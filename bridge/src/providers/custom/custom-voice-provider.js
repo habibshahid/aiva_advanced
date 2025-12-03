@@ -63,6 +63,37 @@ try {
 }
 
 /**
+ * Apply fade-in effect to PCM16 audio buffer to prevent pop/burst at start
+ * @param {Buffer} pcmBuffer - PCM16 audio buffer (base64 decoded)
+ * @param {number} fadeMs - Fade duration in milliseconds (default 30ms)
+ * @param {number} sampleRate - Audio sample rate (default 24000)
+ * @returns {Buffer} - Audio buffer with fade-in applied
+ */
+function applyFadeIn(pcmBuffer, fadeMs = 30, sampleRate = 24000) {
+    const fadeSamples = Math.floor((fadeMs / 1000) * sampleRate);
+    const numSamples = pcmBuffer.length / 2;  // 16-bit = 2 bytes per sample
+    
+    // Only fade if buffer is large enough
+    if (numSamples < fadeSamples) {
+        return pcmBuffer;
+    }
+    
+    const output = Buffer.alloc(pcmBuffer.length);
+    pcmBuffer.copy(output);
+    
+    for (let i = 0; i < fadeSamples; i++) {
+        // Exponential fade-in curve for more natural sound
+        const fadeMultiplier = Math.pow(i / fadeSamples, 2);
+        
+        const sample = output.readInt16LE(i * 2);
+        const fadedSample = Math.round(sample * fadeMultiplier);
+        output.writeInt16LE(Math.max(-32768, Math.min(32767, fadedSample)), i * 2);
+    }
+    
+    return output;
+}
+
+/**
  * Clean text for natural speech - removes formatting that shouldn't be spoken
  * This makes LLM output sound more natural when spoken by TTS
  */
@@ -117,7 +148,6 @@ CRITICAL SPEECH RULES:
 - NEVER use bullet points, numbered lists, asterisks, dashes, or any formatting
 - NEVER use symbols like =, *, -, #, :, or special characters in your response
 - NEVER say "equals", "colon", "dash" or read out any symbols
-- Keep responses SHORT and conversational - 2-3 sentences maximum unless specifically asked for details
 - Use natural Urdu connectors like "اور", "پھر", "تو", "جی", "ویسے"
 - For prices, say them naturally in words: "تیرہ سو روپے" NOT "1300 روپے" or "1300 = روپے"
 - For lists, speak naturally: "پہلے یہ ہے، پھر یہ، اور آخر میں یہ"
@@ -701,44 +731,76 @@ class CustomVoiceProvider extends BaseProvider {
                 });
             }
             
-        } else {
-            // Azure and OpenAI TTS output PCM - forward directly
-            // Track if we should emit audio (for cancellation handling)
-            let currentTtsRequestId = null;
-            
-            this.tts.on('synthesis.started', ({ requestId }) => {
-                currentTtsRequestId = requestId;
-                console.log(`[CUSTOM-PROVIDER] TTS synthesis started: ${requestId}`);
-            });
-            
-            this.tts.on('audio.delta', ({ delta, requestId }) => {
-                // Only emit if this is the current request (not cancelled)
-                if (requestId && currentTtsRequestId && requestId !== currentTtsRequestId) {
-                    console.log(`[CUSTOM-PROVIDER] Ignoring audio from cancelled request: ${requestId}`);
-                    return;
-                }
-                this.emit('audio.delta', { delta: delta });
-            });
-            
-            this.tts.on('audio.done', ({ requestId }) => {
-                // Only signal done if this is the current request
-                if (requestId && currentTtsRequestId && requestId !== currentTtsRequestId) {
-                    console.log(`[CUSTOM-PROVIDER] Ignoring audio.done from cancelled request: ${requestId}`);
-                    return;
-                }
-                this.emit('audio.done');
-                this.conversationManager.onAgentSpeechEnded();
-            });
-            
-            // Handle cancellation for Azure/OpenAI
-            this.tts.on('synthesis.cancelled', ({ requestId }) => {
-                console.log(`[CUSTOM-PROVIDER] TTS synthesis cancelled: ${requestId}`);
-                // Clear the current request so we ignore any late-arriving audio
-                if (requestId === currentTtsRequestId) {
-                    currentTtsRequestId = null;
-                }
-            });
-        }
+        } 
+		else {
+			// Azure and OpenAI TTS output PCM
+			const ttsProvider = this.config.ttsProvider.toUpperCase();
+			console.log(`[CUSTOM-PROVIDER] Setting up ${ttsProvider} TTS handlers`);
+			
+			// Initialize first chunk flag
+			this.isFirstAudioChunk = true;
+			
+			// Reset flag when synthesis starts
+			this.tts.on('synthesis.started', ({ requestId }) => {
+				console.log(`[${ttsProvider}-TTS] ▶ Synthesis STARTED: ${requestId}`);
+				this.isFirstAudioChunk = true;
+				console.log(`[${ttsProvider}-TTS] isFirstAudioChunk = TRUE`);
+			});
+			
+			this.tts.on('audio.delta', ({ delta }) => {
+				const chunkSize = delta ? Buffer.from(delta, 'base64').length : 0;
+				
+				let processedDelta = delta;
+				
+				// Apply fade-in to first chunk to prevent pop/burst sound
+				if (this.isFirstAudioChunk) {
+					console.log(`[${ttsProvider}-TTS] 🔊 FIRST CHUNK: ${chunkSize} bytes - applying fade-in`);
+					this.isFirstAudioChunk = false;
+					
+					try {
+						const pcmBuffer = Buffer.from(delta, 'base64');
+						
+						// Log first 5 samples BEFORE fade-in
+						if (pcmBuffer.length >= 10) {
+							const before = [];
+							for (let i = 0; i < 5; i++) {
+								before.push(pcmBuffer.readInt16LE(i * 2));
+							}
+							console.log(`[${ttsProvider}-TTS] Samples BEFORE fade-in:`, before);
+						}
+						
+						const fadedBuffer = applyFadeIn(pcmBuffer, 30, 24000);
+						
+						// Log first 5 samples AFTER fade-in
+						if (fadedBuffer.length >= 10) {
+							const after = [];
+							for (let i = 0; i < 5; i++) {
+								after.push(fadedBuffer.readInt16LE(i * 2));
+							}
+							console.log(`[${ttsProvider}-TTS] Samples AFTER fade-in:`, after);
+						}
+						
+						processedDelta = fadedBuffer.toString('base64');
+						console.log(`[${ttsProvider}-TTS] ✓ Fade-in applied to 24kHz PCM`);
+					} catch (err) {
+						console.error(`[${ttsProvider}-TTS] ✗ Fade-in error:`, err.message);
+					}
+				}
+				
+				this.emit('audio.delta', { delta: processedDelta });
+			});
+			
+			this.tts.on('audio.done', () => {
+				console.log(`[${ttsProvider}-TTS] ■ Synthesis DONE`);
+				this.emit('audio.done');
+				this.conversationManager.onAgentSpeechEnded();
+			});
+			
+			this.tts.on('synthesis.cancelled', ({ requestId }) => {
+				console.log(`[${ttsProvider}-TTS] ✗ Synthesis CANCELLED: ${requestId}`);
+				this.isFirstAudioChunk = true;  // Reset for next synthesis
+			});
+		}
         
         // ========== Conversation Manager Events ==========
         

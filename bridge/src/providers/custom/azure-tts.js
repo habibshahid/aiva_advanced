@@ -151,6 +151,10 @@ class AzureTTS extends EventEmitter {
         this.metrics.requests++;
         this.metrics.charactersProcessed += text.length;
         
+		const requestId = `azure_${Date.now()}`;
+		console.log('[AZURE-TTS] Synthesis started:', requestId);
+		this.emit('synthesis.started', { requestId });
+
         return new Promise((resolve, reject) => {
             const options = {
                 hostname: `${this.config.region}.tts.speech.microsoft.com`,
@@ -369,9 +373,10 @@ class AzureTTS extends EventEmitter {
      * Cancel current processing
      */
     cancel() {
-        this.isProcessing = false;
-        this.emit('cancelled');
-    }
+		this.isProcessing = false;
+		this.emit('synthesis.cancelled', { requestId: `azure_cancelled_${Date.now()}` });
+		this.emit('cancelled');
+	}
     
     /**
      * Get metrics

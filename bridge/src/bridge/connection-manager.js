@@ -101,6 +101,8 @@ class ConnectionManager extends EventEmitter {
 				audioBuffer: Buffer.alloc(0),
 				lastAudioSent: Date.now(),
 				isReceivingAudio: false,
+				isFirstAudioChunk: true,
+				audioOutputBytes: 0,
 				baseInstructions: config.instructions || '',
 				agentId: config.agentId,
 				tenantId: config.tenantId,
@@ -283,28 +285,44 @@ class ConnectionManager extends EventEmitter {
         provider.on('speech.started', () => {
             this.emit('userSpeechStarted', connection);
             connection.audioQueue.clear();
+			connection.isReceivingAudio = false;
+			//connection.isFirstAudioChunk = true;
+			connection.audioOutputBytes = 0;
         });
         
         provider.on('speech.stopped', () => {
             this.emit('userSpeechStopped', connection);
         });
         
+		provider.on('speech.cancelled', () => {
+			connection.isReceivingAudio = false;
+			connection.audioOutputBytes = 0;
+			connection.audioQueue.clear();
+			this.emit('agentSpeechStopped', connection);
+		});
+
         // Audio output
         provider.on('audio.delta', (event) => {
-            if (!connection.isReceivingAudio) {
-                connection.isReceivingAudio = true;
-                this.emit('agentSpeechStarted', connection);
-            }
-            
-            this.handleProviderAudio(connection, event.delta);
-        });
+			if (!connection.isReceivingAudio) {
+				connection.isReceivingAudio = true;
+				connection.isFirstAudioChunk = true;
+				connection.audioOutputBytes = 0;  // Reset byte counter
+				connection.audioQueue.clear();
+				console.log(`[CONN-MGR] *** NEW SPEECH *** - Reset audioOutputBytes to 0`);
+				this.emit('agentSpeechStarted', connection);
+			}
+			
+			this.handleProviderAudio(connection, event.delta);
+		});
         
         provider.on('audio.done', () => {
-            if (connection.isReceivingAudio) {
-                connection.isReceivingAudio = false;
-                this.emit('agentSpeechStopped', connection);
-            }
-        });
+			if (connection.isReceivingAudio) {
+				connection.isReceivingAudio = false;
+				connection.isFirstAudioChunk = true;
+				connection.audioOutputBytes = 0;  // Reset for next speech
+				this.emit('agentSpeechStopped', connection);
+			}
+		});
         
         // Transcripts
         provider.on('transcript.user', (event) => {
@@ -555,6 +573,35 @@ class ConnectionManager extends EventEmitter {
 				downsampledBuffer = pcmBuffer;
 			}
 			
+			const FADE_IN_BYTES = 800;  // 50ms at 8kHz (8000 samples/sec * 0.05 * 2 bytes)
+			const startPosition = connection.audioOutputBytes || 0;
+
+			if (startPosition < FADE_IN_BYTES) {
+				const numSamples = downsampledBuffer.length / 2;
+				let samplesModified = 0;
+				
+				for (let i = 0; i < numSamples; i++) {
+					const bytePosition = startPosition + (i * 2);
+					
+					if (bytePosition < FADE_IN_BYTES) {
+						// Exponential fade curve
+						const fadeMultiplier = Math.pow(bytePosition / FADE_IN_BYTES, 2);
+						const sample = downsampledBuffer.readInt16LE(i * 2);
+						const fadedSample = Math.round(sample * fadeMultiplier);
+						downsampledBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, fadedSample)), i * 2);
+						samplesModified++;
+					}
+				}
+				
+				if (samplesModified > 0) {
+					console.log(`[AUDIO-OUT] Fade-in: bytes ${startPosition}-${startPosition + downsampledBuffer.length}, modified ${samplesModified} samples`);
+				}
+			}
+
+			// Update cumulative byte counter
+			connection.audioOutputBytes = (connection.audioOutputBytes || 0) + downsampledBuffer.length;
+
+
 			// Convert PCM16 to µ-law for Asterisk
 			const ulawBuffer = AudioConverter.convertPCM16ToUlaw(downsampledBuffer);
 			
