@@ -215,8 +215,8 @@ class OpenAIRealtimeClient extends EventEmitter {
                 break;
                 
             case 'error':
-                logger.error('OpenAI error:', message);
-                this.emit('error', message);
+                logger.error('OpenAI error:', JSON.stringify(message.error || message, null, 2));
+				this.emit('error', message.error || message);
                 break;
                 
             default:

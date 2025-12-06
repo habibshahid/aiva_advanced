@@ -1,6 +1,12 @@
 /**
- * Python Service Client
+ * Python Service Client - ASYNC VERSION
  * HTTP client for communicating with the Python knowledge processing service
+ * 
+ * CHANGES FROM ORIGINAL:
+ * - Added uploadDocumentSync() for backward compatibility
+ * - Added waitForDocumentCompletion() for polling
+ * - Reduced default timeout for uploadDocument (now async)
+ * - uploadDocument now expects quick response from async endpoint
  */
 
 const axios = require('axios');
@@ -11,7 +17,7 @@ class PythonServiceClient {
   constructor() {
     this.baseUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:62002';
     this.apiKey = process.env.PYTHON_SERVICE_API_KEY;
-    this.timeout = parseInt(process.env.PYTHON_SERVICE_TIMEOUT_MS) || 120000; // 60 seconds default
+    this.timeout = parseInt(process.env.PYTHON_SERVICE_TIMEOUT_MS) || 120000; // 120 seconds default
     
     // Create axios instance with defaults
     this.client = axios.create({
@@ -35,7 +41,6 @@ class PythonServiceClient {
       }
     );
 
-
     // Add response interceptor for logging
     this.client.interceptors.response.use(
       (response) => {
@@ -43,7 +48,7 @@ class PythonServiceClient {
         return response;
       },
       (error) => {
-		  console.log(error)
+        console.log(error);
         if (error.response) {
           logger.error(`Python Service Error: ${error.response.status} ${error.response.data?.error || error.message}`);
         } else if (error.request) {
@@ -70,17 +75,20 @@ class PythonServiceClient {
   }
 
   /**
-   * Upload and process document
+   * Upload document for ASYNC processing (NEW BEHAVIOR)
+   * Returns immediately with job info, document processes in background.
+   * Use getDocumentStatus() to poll for progress.
+   * 
    * @param {Object} params - Upload parameters
    * @param {string} params.kb_id - Knowledge base ID
    * @param {string} params.tenant_id - Tenant ID
+   * @param {string} params.document_id - Document ID
    * @param {Buffer} params.file - File buffer
    * @param {string} params.filename - Original filename
    * @param {string} params.file_type - File MIME type
    * @param {Object} params.metadata - Additional metadata
-   * @returns {Promise<Object>} Processing result
+   * @returns {Promise<Object>} Upload result with status "queued"
    */
-   
   async uploadDocument({ kb_id, tenant_id, document_id, file, filename, file_type, metadata = {} }) {
     try {
       const FormData = require('form-data');
@@ -89,14 +97,54 @@ class PythonServiceClient {
       formData.append('file', file, filename);
       formData.append('kb_id', kb_id);
       formData.append('tenant_id', tenant_id);
-	  formData.append('document_id', document_id);
+      formData.append('document_id', document_id);
       formData.append('metadata', JSON.stringify(metadata));
 
+      // Async endpoint - returns quickly after file upload
       const response = await this.client.post('/api/v1/documents/upload', formData, {
         headers: {
           ...formData.getHeaders()
         },
-        timeout: 300000 // 5 minutes for large files
+        timeout: 60000 // 60 seconds for file transfer only
+      });
+
+      return response.data;
+    } catch (error) {
+      throw new Error(`Document upload failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Upload document SYNCHRONOUSLY (for backward compatibility / small files)
+   * WARNING: May timeout for large documents. Use uploadDocument() for large files.
+   * 
+   * @param {Object} params - Upload parameters
+   * @param {string} params.kb_id - Knowledge base ID
+   * @param {string} params.tenant_id - Tenant ID
+   * @param {string} params.document_id - Document ID
+   * @param {Buffer} params.file - File buffer
+   * @param {string} params.filename - Original filename
+   * @param {string} params.file_type - File MIME type
+   * @param {Object} params.metadata - Additional metadata
+   * @returns {Promise<Object>} Complete processing result
+   */
+  async uploadDocumentSync({ kb_id, tenant_id, document_id, file, filename, file_type, metadata = {} }) {
+    try {
+      const FormData = require('form-data');
+      const formData = new FormData();
+      
+      formData.append('file', file, filename);
+      formData.append('kb_id', kb_id);
+      formData.append('tenant_id', tenant_id);
+      formData.append('document_id', document_id);
+      formData.append('metadata', JSON.stringify(metadata));
+
+      // Sync endpoint - waits for full processing
+      const response = await this.client.post('/api/v1/documents/upload-sync', formData, {
+        headers: {
+          ...formData.getHeaders()
+        },
+        timeout: 300000 // 5 minutes for full processing
       });
 
       return response.data;
@@ -107,16 +155,72 @@ class PythonServiceClient {
 
   /**
    * Get document processing status
+   * Use this to poll for async document processing progress
+   * 
    * @param {string} documentId - Document ID
-   * @returns {Promise<Object>} Document status
+   * @returns {Promise<Object>} Document status with progress info
    */
   async getDocumentStatus(documentId) {
     try {
       const response = await this.client.get(`/api/v1/documents/${documentId}/status`);
       return response.data;
     } catch (error) {
+      if (error.response?.status === 404) {
+        return null;
+      }
       throw new Error(`Failed to get document status: ${error.message}`);
     }
+  }
+
+  /**
+   * Poll for document completion (NEW METHOD)
+   * Waits until document processing is complete or fails
+   * 
+   * @param {string} documentId - Document ID
+   * @param {Object} options - Polling options
+   * @param {number} options.maxAttempts - Maximum polling attempts (default: 120)
+   * @param {number} options.intervalMs - Polling interval in ms (default: 5000)
+   * @param {Function} options.onProgress - Progress callback (receives status object)
+   * @returns {Promise<Object>} Final status
+   */
+  async waitForDocumentCompletion(documentId, options = {}) {
+    const maxAttempts = options.maxAttempts || 120; // 10 minutes with 5s interval
+    const intervalMs = options.intervalMs || 5000;
+    const onProgress = options.onProgress || (() => {});
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const status = await this.getDocumentStatus(documentId);
+        
+        if (!status) {
+          throw new Error('Document not found');
+        }
+
+        // Call progress callback
+        onProgress(status);
+
+        // Check if completed or failed
+        if (status.status === 'completed') {
+          return status;
+        }
+        
+        if (status.status === 'failed') {
+          throw new Error(status.error_message || 'Document processing failed');
+        }
+
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+        
+      } catch (error) {
+        if (error.message.includes('Document not found')) {
+          throw error;
+        }
+        // Log error but continue polling
+        console.warn(`Polling attempt ${attempt + 1} failed: ${error.message}`);
+      }
+    }
+
+    throw new Error('Document processing timed out');
   }
 
   /**
@@ -380,7 +484,7 @@ class PythonServiceClient {
    * @param {string} kbId - Knowledge base ID
    * @returns {Promise<Object>} Delete result
    */
-  async deleteImage(imageId, kbId) {
+  async deleteImage(kbId, imageId) {
     try {
       const response = await this.client.delete(`/api/v1/images/${imageId}?kb_id=${kbId}`);
       return response.data;

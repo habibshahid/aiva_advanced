@@ -86,6 +86,16 @@ async def search_knowledge(request: SearchRequest):
                 include_products=include_products
             )
             
+        product_results = results.get("product_results", [])
+        if len(product_results) > top_k:
+            product_results = sorted(
+                product_results,
+                key=lambda x: x.get("score", x.get("similarity_score", 0)),
+                reverse=True
+            )[:top_k]
+            results["product_results"] = product_results
+            logger.info(f"📦 Trimmed product results: {len(product_results)} (requested top_k={top_k})")
+            
         processing_time = int((time.time() - start_time) * 1000)
         
         # Check if results came from cache

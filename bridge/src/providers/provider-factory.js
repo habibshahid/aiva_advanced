@@ -24,10 +24,23 @@ class ProviderFactory {
         
         switch (provider.toLowerCase()) {
             case 'openai':
-                return new OpenAIProvider({
-                    apiKey: process.env.OPENAI_API_KEY,
-                    model: agentConfig.model,
-                    voice: agentConfig.voice,
+				const REALTIME_MODELS = [
+					'gpt-4o-realtime-preview-2024-12-17',
+					'gpt-4o-mini-realtime-preview-2024-12-17'
+				];
+				const requestedModel = agentConfig.model || process.env.OPENAI_MODEL;
+				const realtimeModel = REALTIME_MODELS.includes(requestedModel) 
+					? requestedModel 
+					: 'gpt-4o-mini-realtime-preview-2024-12-17';
+				
+				if (requestedModel && !REALTIME_MODELS.includes(requestedModel)) {
+					logger.warn(`Model "${requestedModel}" is not a realtime model. Using "${realtimeModel}" instead.`);
+				}
+				
+				return new OpenAIProvider({
+					apiKey: process.env.OPENAI_API_KEY,
+					model: realtimeModel,
+					voice: agentConfig.voice,
                     temperature: agentConfig.temperature,
                     maxTokens: agentConfig.max_tokens,
                     vadThreshold: agentConfig.vad_threshold,

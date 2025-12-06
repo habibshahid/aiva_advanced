@@ -254,10 +254,10 @@ When a customer requests to speak with a human agent:
 
 The queue names should be specified in your instructions above. Common queues are: sales, support, billing, general.
 
-IMPORTANT: If someone says "transfer me", "speak to human", "talk to agent", or similar:
-→ Call transfer_to_agent function FIRST
-→ Do NOT generate a spoken response
-→ Let the function handle the transfer message
+IMPORTANT: Before calling the search_knowledge function:
+→ FIRST say something brief like "Let me look that up for you, please hold on" or "One moment while I check our records"
+→ THEN call the search_knowledge function
+→ This prepares the caller for a brief pause while searching
 `;
 					const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent." + transferInstructions;
 					

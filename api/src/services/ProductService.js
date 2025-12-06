@@ -445,9 +445,8 @@ class ProductService {
 		'SELECT COUNT(DISTINCT p.id) as total FROM'
 	  ).replace(/ORDER BY.+/, '');
 	  
-	  console.log('countQuery', countQuery)
 	  const [countResult] = await db.query(countQuery, params);
-	  const totalProducts = countResult[0].total || 0;
+	  const totalProducts = ((countResult[0].total) ? countResult[0].total : countResult.length) || 0;
 	  const totalPages = Math.ceil(totalProducts / limit);
 
 	  // Sorting

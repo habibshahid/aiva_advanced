@@ -490,6 +490,18 @@ class EnhancedSearchService:
         # Final trim to top_k
         final_results = all_results[:top_k]
         
+        # ✅ Also trim product results to top_k
+        product_results = results.get("product_results", [])
+        original_product_count = len(product_results)
+        if len(product_results) > top_k:
+            # Sort by score and take top_k
+            product_results = sorted(
+                product_results, 
+                key=lambda x: x.get("score", x.get("similarity_score", 0)), 
+                reverse=True
+            )[:top_k]
+            logger.info(f"📦 Trimmed product results: {original_product_count} → {len(product_results)}")  # ← CHANGE TO INFO
+
         # Build response
         search_time = int((time.time() - start_time) * 1000)
         
@@ -498,7 +510,7 @@ class EnhancedSearchService:
             "returned": len(final_results),
             "text_results": final_results,
             "image_results": results.get("image_results", []),
-            "product_results": results.get("product_results", []),
+            "product_results": product_results,
             "query_tokens": results.get("query_tokens", 0),
             "embedding_model": results.get("embedding_model", ""),
             "chunks_searched": results.get("chunks_searched", 0),

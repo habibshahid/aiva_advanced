@@ -173,15 +173,31 @@ class KnowledgeService {
     // Delete files from storage
     for (const doc of documents) {
       try {
-		console.log(doc.storage_url);
-        await fs.unlink(process.env.APP_BASE_URL + doc.storage_url);
+		//await fs.unlink(process.env.APP_BASE_URL + doc.storage_url);
+		this.deleteDocument(doc.id)
       } catch (error) {
         console.error(`Failed to delete file ${doc.storage_url}:`, error);
+      }
+    }
+	const [images] = await db.query(
+      'SELECT id, storage_url FROM yovo_tbl_aiva_images WHERE kb_id = ?',
+      [kbId]
+    );
+	
+	for (const image of images) {
+      try {
+		//await fs.unlink(process.env.APP_BASE_URL + doc.storage_url);
+		this.deleteImage(kbId, image.id)
+      } catch (error) {
+        console.error(`Failed to delete image file ${image.storage_url}:`, error);
       }
     }
 
     // Delete KB (cascade will handle related records)
     await db.query('DELETE FROM yovo_tbl_aiva_knowledge_bases WHERE id = ?', [kbId]);
+	
+	this.updateKBMetadata(kbId);
+	return true;
   }
 
   /**
@@ -237,75 +253,388 @@ class KnowledgeService {
     };
   }
 
-  /**
-   * Process document asynchronously
-   * @private
-   */
-  async _processDocumentAsync(documentId, kbId, tenantId, filePath, filename, fileSizeBytes) {
-    try {
-      // Read file
-      const fileBuffer = await fs.readFile(filePath);
+	/**
+ * Process document asynchronously
+ * Now uses Python service's async processing - returns immediately
+ * Cost is calculated by Python and stored in processing_stats when complete
+ * @private
+ */
+async _processDocumentAsync(documentId, kbId, tenantId, filePath, filename, fileSizeBytes) {
+  try {
+    // Read file
+    const fileBuffer = await fs.readFile(filePath);
 
-      // Send to Python service for processing
-      const result = await PythonServiceClient.uploadDocument({
-        kb_id: kbId,
+    // Send to Python service for ASYNC processing
+    // This returns immediately with status "queued"
+    const result = await PythonServiceClient.uploadDocument({
+      kb_id: kbId,
+      tenant_id: tenantId,
+      document_id: documentId,
+      file: fileBuffer,
+      filename: filename,
+      file_type: path.extname(filename).substring(1),
+      metadata: {
+        file_size_bytes: fileSizeBytes  // Pass file size for cost calculation
+      }
+    });
+
+    console.log(`Document ${documentId} queued for processing:`, result.status);
+
+    // Store file size for later cost calculation
+    await redisClient.setEx(
+      `doc_pending:${documentId}`,
+      86400, // 24 hours
+      JSON.stringify({
         tenant_id: tenantId,
-		document_id: documentId,
-        file: fileBuffer,
-        filename: filename,
-        file_type: path.extname(filename).substring(1),
-        metadata: {}
-      });
-
-      // Calculate processing cost
-      const costBreakdown = CostCalculator.calculateKnowledgeOperationCost({
-        pages_processed: result.processing_results?.total_pages || 0,
-        embedding_tokens: result.embeddings?.total_tokens_embedded || 0,
-        images_processed: result.processing_results?.extracted_images || 0,
+        kb_id: kbId,
         file_size_bytes: fileSizeBytes,
-        embedding_model: result.embeddings?.embedding_model
-      });
+        queued_at: new Date().toISOString()
+      })
+    );
 
-      // Update document status
-      await db.query(
-        `UPDATE yovo_tbl_aiva_documents 
-         SET status = 'completed', 
-             processing_stats = ?,
-             updated_at = NOW()
-         WHERE id = ?`,
-        [
-          JSON.stringify(result.processing_results),
-          documentId
-        ]
-      );
+    // Update KB metadata immediately (document count)
+    await this.updateKBMetadata(kbId);
 
-      // Update KB stats
-      await this.updateKBStats(kbId);
+  } catch (error) {
+    console.error(`Document upload failed for ${documentId}:`, error);
 
-      // Store cost for later deduction
-      await redisClient.setEx(
-        `doc_cost:${documentId}`,
-        86400, // 24 hours
-        JSON.stringify(costBreakdown)
-      );
-
-      console.log(`Document ${documentId} processed successfully`);
-	  await this.updateKBMetadata(kbId);
-
-    } catch (error) {
-      console.error(`Document processing failed for ${documentId}:`, error);
-
-      // Update document status to failed
-      await db.query(
-        `UPDATE yovo_tbl_aiva_documents 
-         SET status = 'failed', 
-             error_message = ?,
-             updated_at = NOW()
-         WHERE id = ?`,
-        [error.message, documentId]
-      );
-    }
+    // Update document status to failed
+    await db.query(
+      `UPDATE yovo_tbl_aiva_documents 
+       SET status = 'failed', 
+           error_message = ?,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [error.message, documentId]
+    );
   }
+}
+
+
+/**
+ * Get document processing status
+ * Fetches real-time status from Python service for documents being processed
+ * Also handles cost deduction when document processing completes
+ * 
+ * @param {string} documentId - Document ID
+ * @returns {Promise<Object>} Document status with progress info
+ */
+async getDocumentStatus(documentId) {
+  try {
+    // First get the document from DB
+    const [docs] = await db.query(
+      'SELECT * FROM yovo_tbl_aiva_documents WHERE id = ?',
+      [documentId]
+    );
+
+    if (!docs || docs.length === 0) {
+      return null;
+    }
+
+    const doc = docs[0];
+
+    // If document is still processing, get real-time status from Python service
+    if (doc.status === 'processing' || doc.status === 'queued') {
+      try {
+        const pythonStatus = await PythonServiceClient.getDocumentStatus(documentId);
+        
+        if (pythonStatus) {
+          // Check if processing just completed - deduct credits
+          if (pythonStatus.status === 'completed') {
+            await this._handleDocumentCompletion(documentId, doc.kb_id);
+          }
+          
+          return {
+            id: doc.id,
+            kb_id: doc.kb_id,
+            filename: doc.original_filename || doc.filename,
+            file_type: doc.file_type,
+            file_size_bytes: doc.file_size_bytes,
+            status: pythonStatus.status,
+            progress: pythonStatus.progress || 0,
+            current_step: pythonStatus.current_step,
+            total_chunks: pythonStatus.total_chunks || 0,
+            processed_chunks: pythonStatus.processed_chunks || 0,
+            error_message: pythonStatus.error_message,
+            created_at: doc.created_at,
+            updated_at: doc.updated_at
+          };
+        }
+      } catch (pythonError) {
+        console.warn(`Could not get Python service status for ${documentId}:`, pythonError.message);
+        // Fall through to return DB status
+      }
+    }
+
+    // Return status from database
+    let processingStats = {};
+    if (doc.processing_stats) {
+      try {
+        processingStats = typeof doc.processing_stats === 'string' 
+          ? JSON.parse(doc.processing_stats) 
+          : doc.processing_stats;
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    }
+
+    return {
+      id: doc.id,
+      kb_id: doc.kb_id,
+      filename: doc.original_filename || doc.filename,
+      file_type: doc.file_type,
+      file_size_bytes: doc.file_size_bytes,
+      status: doc.status,
+      progress: doc.status === 'completed' ? 100 : 0,
+      current_step: doc.status === 'completed' ? 'Completed' : doc.status,
+      total_chunks: processingStats.total_chunks || 0,
+      processed_chunks: processingStats.total_chunks || 0,
+      error_message: doc.error_message,
+      processing_stats: processingStats,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at
+    };
+
+  } catch (error) {
+    console.error('Error getting document status:', error);
+    throw error;
+  }
+}
+
+// ============================================================
+// ADD: Helper method to handle document completion
+// ============================================================
+
+/**
+ * Handle document processing completion
+ * Deducts credits and updates KB stats
+ * @private
+ * @param {string} documentId - Document ID
+ * @param {string} kbId - Knowledge base ID
+ */
+async _handleDocumentCompletion(documentId, kbId) {
+  try {
+    // Check if we already processed this completion
+    const alreadyProcessed = await redisClient.get(`doc_completed:${documentId}`);
+    if (alreadyProcessed) {
+      return;
+    }
+
+    // Get pending doc info
+    const pendingData = await redisClient.get(`doc_pending:${documentId}`);
+    if (!pendingData) {
+      console.log(`No pending data for document ${documentId}, skipping cost deduction`);
+      return;
+    }
+
+    const pendingInfo = JSON.parse(pendingData);
+
+    // Get the document with processing stats from DB
+    const [docs] = await db.query(
+      'SELECT * FROM yovo_tbl_aiva_documents WHERE id = ?',
+      [documentId]
+    );
+
+    if (!docs || docs.length === 0) {
+      return;
+    }
+
+    const doc = docs[0];
+    let processingStats = {};
+    
+    if (doc.processing_stats) {
+      try {
+        processingStats = typeof doc.processing_stats === 'string'
+          ? JSON.parse(doc.processing_stats)
+          : doc.processing_stats;
+      } catch (e) {
+        console.error('Error parsing processing_stats:', e);
+      }
+    }
+
+    // Calculate cost
+    const costBreakdown = CostCalculator.calculateKnowledgeOperationCost({
+      pages_processed: processingStats.total_pages || 0,
+      embedding_tokens: processingStats.total_tokens || 0,
+      images_processed: processingStats.extracted_images || 0,
+      file_size_bytes: pendingInfo.file_size_bytes,
+      embedding_model: processingStats.embedding_model || 'text-embedding-3-small'
+    });
+
+    // Deduct credits
+    if (costBreakdown.total > 0) {
+      try {
+        await CreditService.deductCredits(
+          pendingInfo.tenant_id,
+          costBreakdown.total,
+          'document_processing',
+          {
+            document_id: documentId,
+            kb_id: kbId,
+            pages: processingStats.total_pages,
+            chunks: processingStats.total_chunks,
+            tokens: processingStats.total_tokens
+          },
+          documentId
+        );
+        console.log(`Deducted ${costBreakdown.total} credits for document ${documentId}`);
+      } catch (creditError) {
+        console.error('Error deducting credits:', creditError);
+      }
+    }
+
+    // Store cost for reference
+    await redisClient.setEx(
+      `doc_cost:${documentId}`,
+      86400 * 7, // 7 days
+      JSON.stringify(costBreakdown)
+    );
+
+    // Mark as completed to prevent duplicate processing
+    await redisClient.setEx(
+      `doc_completed:${documentId}`,
+      86400, // 24 hours
+      'true'
+    );
+
+    // Cleanup pending data
+    await redisClient.del(`doc_pending:${documentId}`);
+
+    // Update KB stats
+    await this.updateKBStats(kbId);
+    await this.updateKBMetadata(kbId);
+
+    console.log(`Document ${documentId} completion handled successfully`);
+
+  } catch (error) {
+    console.error(`Error handling document completion for ${documentId}:`, error);
+  }
+}
+
+// ============================================================
+// ADD: Method to manually trigger cost deduction (optional)
+// ============================================================
+
+/**
+ * Manually deduct cost for a completed document
+ * Use this if automatic deduction was missed
+ * 
+ * @param {string} documentId - Document ID
+ * @returns {Promise<Object>} Cost breakdown
+ */
+async deductDocumentCost(documentId) {
+  const doc = await this.getDocument(documentId);
+  
+  if (!doc) {
+    throw new Error('Document not found');
+  }
+  
+  if (doc.status !== 'completed') {
+    throw new Error('Document is not completed yet');
+  }
+
+  // Check if already deducted
+  const existingCost = await redisClient.get(`doc_cost:${documentId}`);
+  if (existingCost) {
+    return JSON.parse(existingCost);
+  }
+
+  // Trigger completion handling
+  await this._handleDocumentCompletion(documentId, doc.kb_id);
+
+  // Return the cost
+  const cost = await redisClient.get(`doc_cost:${documentId}`);
+  return cost ? JSON.parse(cost) : null;
+}
+
+// ============================================================
+// ADD: List documents with real-time status (optional enhancement)
+// ============================================================
+
+/**
+ * List documents with real-time processing status
+ * Enriches document list with current progress for processing documents
+ * 
+ * @param {string} kbId - Knowledge base ID
+ * @param {Object} options - List options
+ * @returns {Promise<Object>} Documents with status
+ */
+async listDocumentsWithStatus(kbId, options = {}) {
+  const { page = 1, limit = 20, status: filterStatus } = options;
+  const offset = (page - 1) * limit;
+
+  let query = 'SELECT * FROM yovo_tbl_aiva_documents WHERE kb_id = ?';
+  const params = [kbId];
+
+  if (filterStatus) {
+    query += ' AND status = ?';
+    params.push(filterStatus);
+  }
+
+  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const [documents] = await db.query(query, params);
+
+  // Get count
+  let countQuery = 'SELECT COUNT(*) as total FROM yovo_tbl_aiva_documents WHERE kb_id = ?';
+  const countParams = [kbId];
+  
+  if (filterStatus) {
+    countQuery += ' AND status = ?';
+    countParams.push(filterStatus);
+  }
+
+  const [countResult] = await db.query(countQuery, countParams);
+  const total = countResult[0].total;
+
+  // Enrich processing documents with real-time status
+  const enrichedDocuments = await Promise.all(
+    documents.map(async (doc) => {
+      if (doc.status === 'processing' || doc.status === 'queued') {
+        try {
+          const pythonStatus = await PythonServiceClient.getDocumentStatus(doc.id);
+          if (pythonStatus) {
+            // Check for completion
+            if (pythonStatus.status === 'completed') {
+              await this._handleDocumentCompletion(doc.id, kbId);
+            }
+            
+            return {
+              ...doc,
+              status: pythonStatus.status,
+              progress: pythonStatus.progress || 0,
+              current_step: pythonStatus.current_step,
+              total_chunks: pythonStatus.total_chunks || 0,
+              processed_chunks: pythonStatus.processed_chunks || 0
+            };
+          }
+        } catch (e) {
+          // Ignore errors, return original doc
+        }
+      }
+      
+      // Parse processing_stats for completed documents
+      if (doc.processing_stats) {
+        try {
+          doc.processing_stats = typeof doc.processing_stats === 'string'
+            ? JSON.parse(doc.processing_stats)
+            : doc.processing_stats;
+        } catch (e) {
+          // Ignore
+        }
+      }
+      
+      return doc;
+    })
+  );
+
+  return {
+    documents: enrichedDocuments,
+    total
+  };
+}
+
 
   /**
    * Get document
@@ -335,6 +664,28 @@ class KnowledgeService {
     };
   }
 
+  /**
+   * Get document
+   * @param {string} documentId - Document ID
+   * @returns {Promise<Object|null>} Document or null
+   */
+  async getImage(imageId) {
+    const [images] = await db.query(
+      'SELECT * FROM yovo_tbl_aiva_images WHERE id = ?',
+      [imageId]
+    );
+
+    if (images.length === 0) {
+      return null;
+    }
+
+    const image = images[0];
+
+    return {
+      ...image
+    };
+  }
+  
   /**
    * List documents in KB
    * @param {string} kbId - KB ID
@@ -397,9 +748,10 @@ class KnowledgeService {
 
     // Delete file from storage
     try {
-      await fs.unlink(process.env.APP_BASE_URL + doc.storage_url);
+	  const filename = doc.storage_url.startsWith('/etc/aiva-oai') ? doc.storage_url : process.env.APP_BASE_URL + doc.storage_url
+      await fs.unlink(filename);
     } catch (error) {
-      console.error(`Failed to delete file ${doc.storage_url}:`, error);
+      console.error(`Failed to delete file ${filename}:`, error);
     }
 
     // Delete from Python service (vectors, chunks)
@@ -795,13 +1147,38 @@ class KnowledgeService {
    * @param {string} imageId - Image ID
    * @returns {Promise<Object>} Delete result
    */
-  async deleteImage(kbId, imageId) {
+  /*async deleteImage(kbId, imageId) {
     try {
       return await PythonServiceClient.deleteImage(imageId, kbId);
     } catch (error) {
       console.error('Error deleting image:', error);
       throw error;
     }
+  }*/
+
+  async deleteImage(kbId, imageId) {
+    // Get document info
+    const image = await this.getImage(imageId);
+    if (!image) {
+      throw new Error('Image not found');
+    }
+
+    // Delete from Python service (vectors, chunks)
+    try {
+      await PythonServiceClient.deleteImage(kbId, imageId);
+	  const filename = image.storage_url.startsWith('/etc/aiva-oai') ? image.storage_url : process.env.APP_BASE_URL + image.storage_url
+      await fs.unlink(filename);
+	  return true;
+	} catch (error) {
+      console.error(`Failed to delete from Python service:`, error);
+    }
+
+    // Delete from database
+    await db.query('DELETE FROM yovo_tbl_aiva_images WHERE id = ?', [imageId]);
+
+    // Update KB stats
+    await this.updateKBStats(doc.kb_id);
+	await this.updateKBMetadata(doc.kb_id);
   }
 
   /**

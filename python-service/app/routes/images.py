@@ -335,6 +335,7 @@ async def delete_image(image_id: str, kb_id: str = Query(...)):
     Delete an image
     """
     try:
+        print(f"{kb_id}")
         # Delete from database
         conn = mysql.connector.connect(
             host=settings.DB_HOST,

@@ -298,13 +298,26 @@ class ChatService {
         // Get or create session
 		console.log('@@@@@@@@@@', message)
         let session;
+		let agent;
+		
         if (sessionId) {
             session = await this.getSession(sessionId);
             if (!session) {
-                throw new Error('Session not found');
+				agent = await AgentService.getAgent(agentId);
+				if (!agent) {
+					throw new Error('Agent not found');
+				}
+
+                session = await this.createSession({
+					tenantId: agent.tenant_id,
+					agentId: agentId,
+					userId: userId,
+					sessionName: message.substring(0, 50)
+				});
+				sessionId = session.id;
             }
         } else {
-            const agent = await AgentService.getAgent(agentId);
+            agent = await AgentService.getAgent(agentId);
             if (!agent) {
                 throw new Error('Agent not found');
             }
@@ -334,7 +347,7 @@ class ChatService {
 			: 0.0;
 			
         // Get agent with full configuration
-        const agent = await AgentService.getAgent(session.agent_id);
+        agent = await AgentService.getAgent(session.agent_id);
 
         // Get conversation history
         const history = await this.getConversationHistory(sessionId, 10);
@@ -1152,42 +1165,19 @@ class ChatService {
             }
         ];
 
-        // Prepare tools/functions
-        const tools = agent.functions && agent.functions.length > 0 ?
-			agent.functions.map(fn => ({
-				type: 'function',
-				function: {
-					name: fn.name,
-					description: fn.description,
-					parameters: fn.parameters
-				}
-			})) :
-			undefined;
-
-		// Call OpenAI
-		const model = agent.chat_model || 'gpt-4o-mini';
-		const hasTools = tools && tools.length > 0;
+        const model = agent.chat_model || 'gpt-4o-mini';
 
 		const completion = await this.openai.chat.completions.create({
 			model: model,
 			messages: messages,
-			tools: hasTools ? tools : undefined,
-			// ⚠️ JSON mode conflicts with tool_calls - only use when no tools
-			response_format: hasTools ? undefined : { type: "json_object" },
+			response_format: { type: "json_object" },  // ✅ ALWAYS use JSON mode
 			temperature: parseFloat(agent.temperature) || 0.7,
 			max_tokens: agent.max_tokens || 4096
 		});
 
 		const aiMessage = completion.choices[0].message;
-		const finishReason = completion.choices[0].finish_reason;
 
-		console.log('🤖 OpenAI Response:', {
-			finish_reason: finishReason,
-			has_content: !!aiMessage.content,
-			has_tool_calls: !!aiMessage.tool_calls
-		});
-
-		// ✅ Calculate first call cost IMMEDIATELY
+		// Calculate first call cost
 		let llmCost = CostCalculator.calculateChatCost({
 			prompt_tokens: completion.usage.prompt_tokens,
 			completion_tokens: completion.usage.completion_tokens,
@@ -1197,144 +1187,149 @@ class ChatService {
 		console.log('💰 First LLM call cost:', llmCost.final_cost);
 
 		let llmDecision;
-		let executedFunctionCalls = []; // Track function calls for response
+
+		// Parse JSON response (should always be valid JSON now)
+		try {
+			llmDecision = JSON.parse(aiMessage.content);
+			console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
+		} catch (parseError) {
+			console.error('❌ Failed to parse LLM response as JSON:', parseError.message);
+			console.error('📄 Raw response:', aiMessage.content?.substring(0, 500));
+			
+			// Fallback - try to extract useful info
+			llmDecision = {
+				response: aiMessage.content || "I apologize, but I couldn't process your request. Please try again.",
+				product_search_needed: false,
+				knowledge_search_needed: false,
+				product_search_type: "none",
+				product_id: null,
+				needs_clarification: false,
+				function_call_needed: false,
+				function_name: null,
+				function_arguments: null,
+				agent_transfer: false,
+				order_intent_detected: false,
+				conversation_complete: false,
+				user_wants_to_end: false
+			};
+		}
 
 		// ============================================
-		// 🔧 HANDLE TOOL CALLS SCENARIO
+		// 🔧 HANDLE FUNCTION CALLS (from JSON decision)
 		// ============================================
-		if (finishReason === 'tool_calls' && aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
-			console.log('🔧 Model requested tool calls - executing functions first');
-			
-			// Execute all tool calls
-			const toolResults = [];
-			
-			for (const toolCall of aiMessage.tool_calls) {
-				const functionName = toolCall.function.name;
-				const functionArgs = JSON.parse(toolCall.function.arguments);
-				
-				console.log(`📞 Executing function: ${functionName}`, functionArgs);
-				
-				const functionResult = await this._executeFunction(
-					agent,
-					functionName,
-					functionArgs
-				);
-				
-				executedFunctionCalls.push({
-					function_id: toolCall.id,
-					function_name: functionName,
-					arguments: functionArgs,
-					result: functionResult,
-					status: 'success'
-				});
-				
-				toolResults.push({
-					tool_call_id: toolCall.id,
-					role: 'tool',
-					content: JSON.stringify(functionResult)
-				});
-			}
-			
-			// Make second call to get final response with tool results
-			const messagesWithToolResults = [
-				...messages,
-				aiMessage, // Include assistant's tool call message
-				...toolResults // Include tool results
-			];
-			
-			const finalCompletion = await this.openai.chat.completions.create({
-				model: model,
-				messages: messagesWithToolResults,
-				response_format: { type: "json_object" }, // Now safe to use JSON mode
-				temperature: parseFloat(agent.temperature) || 0.7,
-				max_tokens: agent.max_tokens || 4096
-			});
-			
-			const finalMessage = finalCompletion.choices[0].message;
-			
-			// ✅ Calculate second call cost
-			const secondCallCost = CostCalculator.calculateChatCost({
-				prompt_tokens: finalCompletion.usage.prompt_tokens,
-				completion_tokens: finalCompletion.usage.completion_tokens,
-				cached_tokens: finalCompletion.usage.prompt_tokens_details?.cached_tokens || 0
-			}, model);
-			
-			console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
-			
-			// ✅ Combine costs
-			llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
-			console.log('💰 Combined LLM cost (with tool calls):', llmCost.final_cost);
-			
-			// Parse final response
-			try {
-				llmDecision = JSON.parse(finalMessage.content);
-				console.log('🤖 LLM Decision (after tool execution):', JSON.stringify(llmDecision, null, 2));
-			} catch (parseError) {
-				console.error('❌ Failed to parse final response:', finalMessage.content);
-				llmDecision = {
-					response: finalMessage.content || "I've processed your request.",
-					product_search_needed: false,
-					knowledge_search_needed: false,
-					product_search_type: "none",
-					product_id: null,
-					needs_clarification: false,
-					agent_transfer: false,
-					order_intent_detected: false,
-					conversation_complete: false,
-					user_wants_to_end: false
-				};
-			}
+		let executedFunctionCalls = [];
 
-		} else {
-			// ============================================
-			// 📝 NORMAL RESPONSE (no tool calls)
-			// ============================================
+		if (llmDecision && llmDecision.function_call_needed && llmDecision.function_name) {
+			console.log(`🔧 Function call requested: ${llmDecision.function_name}`);
+			console.log(`📋 Arguments:`, llmDecision.function_arguments);
 			
-			if (aiMessage.content) {
+			// Verify function exists
+			const requestedFunction = agent.functions?.find(
+				fn => fn.name === llmDecision.function_name && fn.is_active !== false
+			);
+			
+			if (requestedFunction) {
 				try {
-					// Try JSON parse first
-					llmDecision = JSON.parse(aiMessage.content);
-					console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
-				} catch (jsonError) {
-					// Not valid JSON - wrap the response
-					console.log('⚠️ Response not JSON (tools enabled), wrapping response');
-					llmDecision = {
-						response: aiMessage.content,
-						product_search_needed: false,
-						knowledge_search_needed: true,
-						product_search_type: "none",
-						product_id: null,
-						needs_clarification: false,
-						collecting_preferences: false,
-						preferences_collected: {},
-						ready_to_search: false,
-						agent_transfer: false,
-						order_intent_detected: false,
-						conversation_complete: false,
-						user_wants_to_end: false
-					};
+					// Execute the function
+					const functionResult = await this._executeFunction(
+						agent,
+						llmDecision.function_name,
+						llmDecision.function_arguments || {}
+					);
+					
+					console.log(`✅ Function executed:`, functionResult);
+					
+					executedFunctionCalls.push({
+						function_id: uuidv4(),
+						function_name: llmDecision.function_name,
+						arguments: llmDecision.function_arguments,
+						result: functionResult,
+						status: 'success'
+					});
+					
+					// Make second LLM call with function result
+					console.log('🔄 Calling LLM again with function result...');
+					
+					const messagesWithFunctionResult = [
+						...messages,
+						{
+							role: 'assistant',
+							content: JSON.stringify(llmDecision)
+						},
+						{
+							role: 'user',
+							content: `[FUNCTION RESULT for ${llmDecision.function_name}]:\n${JSON.stringify(functionResult, null, 2)}\n\nBased on this function result, provide your final response to the user. Remember to respond in valid JSON format.`
+						}
+					];
+					
+					const functionFollowupCompletion = await this.openai.chat.completions.create({
+						model: model,
+						messages: messagesWithFunctionResult,
+						response_format: { type: "json_object" },
+						temperature: parseFloat(agent.temperature) || 0.7,
+						max_tokens: agent.max_tokens || 4096
+					});
+					
+					// Calculate second call cost
+					const secondCallCost = CostCalculator.calculateChatCost({
+						prompt_tokens: functionFollowupCompletion.usage.prompt_tokens,
+						completion_tokens: functionFollowupCompletion.usage.completion_tokens,
+						cached_tokens: functionFollowupCompletion.usage.prompt_tokens_details?.cached_tokens || 0
+					}, model);
+					
+					console.log('💰 Function followup LLM cost:', secondCallCost.final_cost);
+					llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
+					
+					// Parse final response
+					try {
+						const finalDecision = JSON.parse(functionFollowupCompletion.choices[0].message.content);
+						console.log('✅ Final response after function call:', finalDecision.response?.substring(0, 100));
+						
+						// Update llmDecision with final response
+						llmDecision.response = finalDecision.response;
+						llmDecision.function_call_needed = false; // Don't call again
+						
+						// Preserve any other decisions from final response
+						if (finalDecision.agent_transfer !== undefined) {
+							llmDecision.agent_transfer = finalDecision.agent_transfer;
+						}
+						if (finalDecision.conversation_complete !== undefined) {
+							llmDecision.conversation_complete = finalDecision.conversation_complete;
+						}
+						if (finalDecision.user_wants_to_end !== undefined) {
+							llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
+						}
+						
+					} catch (parseError) {
+						console.error('❌ Failed to parse function followup response:', parseError.message);
+						// Use the raw content as response
+						llmDecision.response = functionFollowupCompletion.choices[0].message.content || 
+							"I've processed your request.";
+					}
+					
+				} catch (functionError) {
+					console.error(`❌ Function execution failed:`, functionError);
+					
+					executedFunctionCalls.push({
+						function_id: uuidv4(),
+						function_name: llmDecision.function_name,
+						arguments: llmDecision.function_arguments,
+						result: { error: functionError.message },
+						status: 'error'
+					});
+					
+					// Update response to indicate failure
+					llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again or let me know how else I can help.";
 				}
 			} else {
-				// No content at all - shouldn't happen but handle it
-				console.error('❌ No content in response');
-				llmDecision = {
-					response: "I apologize, but I couldn't process your request. Please try again.",
-					product_search_needed: false,
-					knowledge_search_needed: false,
-					product_search_type: "none",
-					product_id: null,
-					needs_clarification: false,
-					agent_transfer: false,
-					order_intent_detected: false,
-					conversation_complete: false,
-					user_wants_to_end: false
-				};
+				console.warn(`⚠️ Function not found or inactive: ${llmDecision.function_name}`);
+				llmDecision.response = "I apologize, but I'm unable to perform that action at the moment. How else can I help you?";
 			}
 		}
 
-		// ✅ Use executedFunctionCalls later instead of functionCalls
+		// Use executedFunctionCalls for the response
 		const functionCalls = executedFunctionCalls;
-
+		
         let shouldCloseSession = false;
 
         if (llmDecision && llmDecision.conversation_complete && llmDecision.user_wants_to_end) {
@@ -1600,9 +1595,41 @@ class ChatService {
 		- DO NOT set product_search_needed = true
 		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 				} else {
+					const INITIAL_PRODUCTS_COUNT = 3;
+					const initialProducts = knowledgeResults.product_results.slice(0, INITIAL_PRODUCTS_COUNT);
+					const remainingProducts = knowledgeResults.product_results.slice(INITIAL_PRODUCTS_COUNT);
+					const hasMoreProducts = remainingProducts.length > 0;
+					
+					// Format initial products for display
+					const initialProductContext = initialProducts.map((product, idx) =>
+						`[Product ${idx + 1}]
+		Name: ${product.name || product.title}
+		Product ID: ${product.product_id}
+		Price: PKR ${product.price}${product.compare_at_price ? ` (was PKR ${product.compare_at_price})` : ''}
+		Description: ${product.description?.substring(0, 150) || 'No description'}...
+		Availability: ${product.availability || (product.total_inventory > 0 ? 'In Stock' : 'Out of Stock')}
+		${product.available_sizes?.length > 0 ? `Available Sizes: ${product.available_sizes.join(', ')}` : ''}
+		Purchase URL: ${product.purchase_url || 'N/A'}`
+					).join('\n\n');
+					
+					// Format remaining products (for "show more")
+					const remainingProductContext = remainingProducts.length > 0 
+						? remainingProducts.map((product, idx) =>
+							`[Product ${idx + INITIAL_PRODUCTS_COUNT + 1}]
+		Name: ${product.name || product.title}
+		Product ID: ${product.product_id}
+		Price: PKR ${product.price}${product.compare_at_price ? ` (was PKR ${product.compare_at_price})` : ''}
+		Description: ${product.description?.substring(0, 150) || 'No description'}...
+		Availability: ${product.availability || (product.total_inventory > 0 ? 'In Stock' : 'Out of Stock')}
+		${product.available_sizes?.length > 0 ? `Available Sizes: ${product.available_sizes.join(', ')}` : ''}
+		Purchase URL: ${product.purchase_url || 'N/A'}`
+						).join('\n\n')
+						: '';
+						
 					// MULTI PRODUCT - Show list of products
 					productContext = knowledgeResults.product_results.map((product, idx) =>
 						`[Product ${idx + 1}]
+		Product ID: ${product.product_id}
 		Name: ${product.name || product.title}
 		Price: PKR ${product.price}${product.compare_at_price ? ` (was PKR ${product.compare_at_price})` : ''}
 		Description: ${product.description?.substring(0, 150) || 'No description'}...
@@ -1616,16 +1643,31 @@ class ChatService {
 		PRODUCT SEARCH RESULTS
 		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-		Found ${knowledgeResults.product_results.length} products:
+		Total Products Found: ${knowledgeResults.product_results.length}
+		Showing: Top ${initialProducts.length} most relevant products
 
-		${productContext}
+		📦 TOP ${initialProducts.length} PRODUCTS TO SHOW:
+		${initialProductContext}
+
+		${hasMoreProducts ? `
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		📋 ADDITIONAL ${remainingProducts.length} PRODUCTS (Show when user asks for more):
+		${remainingProductContext}
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		` : ''}
 
 		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-		CRITICAL: Present these products naturally to the user.
-		- DO NOT say "I need to search" - you already have the results
-		- DO NOT set product_search_needed=true again
-		- Present the products in a helpful, conversational way
+		⚠️ CRITICAL PRESENTATION RULES:
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		
+		1. INITIALLY SHOW ONLY THE TOP ${INITIAL_PRODUCTS_COUNT} PRODUCTS listed above
+		2. DO NOT show all ${knowledgeResults.product_results.length} products at once
+		3. ${hasMoreProducts ? `After showing top ${INITIAL_PRODUCTS_COUNT}, tell the user: "I have ${remainingProducts.length} more options. Would you like to see more?"` : ''}
+		4. When user says "show more", "aur dikhao", "more options", etc. → Show the ADDITIONAL products
+		5. Present products in a helpful, conversational way
+		6. DO NOT say "I need to search" - you already have the results
+		7. DO NOT set product_search_needed=true again
+		
 		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 				}
 
@@ -2132,6 +2174,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "product_search_type": "single" | "multi" | "none",
 	  "product_id": "uuid-of-specific-product (only if search_type=single)",
 	  "product_search_query": "search query (only if search_type=multi)",
+	  "show_more_products": true/false,
 	  "collecting_preferences": true/false,
 	  "preferences_collected": { "preference_name": "value or null" },
 	  "ready_to_search": true/false,
@@ -2140,6 +2183,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "knowledge_search_needed": true/false,
 	  "knowledge_search_query": "search query (if searching knowledge base)",
 	  ` : ''}
+	  "function_call_needed": true/false,
+	  "function_name": "name_of_function_to_call (only if function_call_needed=true)",
+	  "function_arguments": { "arg1": "value1" },
 	  "needs_clarification": true/false,
 	  "agent_transfer": true/false,
 	  "order_intent_detected": true/false,
@@ -2280,23 +2326,45 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	}
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	📜 HISTORY REFERENCE DETECTION
+	📜 HISTORY REFERENCE DETECTION - CRITICAL FOR SINGLE LOOKUPS
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-	If user references a product from conversation history:
+	When user references a product from conversation history:
 
-	"pehle wala" / "the first one" → Look for 1st product in your last response
-	"second option" / "doosra" → Look for 2nd product you mentioned
-	"the blue one" / "neeli wali" → Match by color from products you showed
-	"last one" / "aakhri wala" → Look for last product in your response
+	STEP 1: Look for the product in your PREVIOUS RESPONSES
+	- Find the product name they're referring to
+	- Extract its Product ID from your previous message
 
-	IF YOU CAN IDENTIFY THE PRODUCT:
-	- Find its product_id from the conversation history
-	- Use product_search_type = "single" with that product_id
+	STEP 2: Use product_search_type = "single" with that Product ID
 
-	IF YOU CANNOT IDENTIFY:
-	- Set needs_clarification = true
-	- Ask user to specify or reply to the product message
+	EXAMPLES:
+	
+	User previously saw: "Product ID: abc-123, Name: Pine Trees Shawl"
+	User now asks: "is ki length kya hai?" or "what's the length of this?"
+	
+	✅ CORRECT:
+	{
+	  "product_search_type": "single",
+	  "product_id": "abc-123",
+	  "product_search_query": null
+	}
+	
+	❌ WRONG:
+	{
+	  "product_search_type": "multi",
+	  "product_search_query": "Pine Trees Shawl length"
+	}
+
+	REFERENCE KEYWORDS:
+	- "pehle wala" / "the first one" → Find 1st product's ID from your last response
+	- "is ki" / "this one" / "yeh wali" → Find the product from context
+	- Product name mentioned → Find its ID from conversation history
+
+	IF YOU CAN FIND THE PRODUCT ID FROM HISTORY:
+	→ Use product_search_type = "single" with that product_id
+
+	IF YOU CANNOT FIND THE PRODUCT ID:
+	→ Set needs_clarification = true and ask which product
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	⚡ DECISION FLOWCHART
@@ -2334,6 +2402,79 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	                                                          │ = true      │
 	                                                          └─────────────┘
 
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	5️⃣ SHOW MORE PRODUCTS (show_more_products = true)
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Use when user asks to see more products after initial results:
+	✅ "show more" / "aur dikhao" / "more options"
+	✅ "what else do you have" / "aur kya hai"
+	✅ "next" / "agle products"
+	✅ "any other options" / "koi aur"
+
+	RESPONSE FORMAT:
+	{
+	  "response": "Here are more options for you...",
+	  "product_search_needed": false,
+	  "product_search_type": "none",
+	  "show_more_products": true
+	}
+
+	⚠️ IMPORTANT: When show_more_products = true:
+	- Use the ADDITIONAL PRODUCTS from the previous search results
+	- DO NOT perform a new search
+	- Present the next batch of products from context
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	6️⃣ PURCHASE INTENT AFTER SHOWING PRODUCTS
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	When user says "buy it", "order it", "I want this", etc. AFTER you showed products:
+
+	STEP 1: Check conversation history - how many products were shown?
+
+	IF ONLY 1 PRODUCT WAS SHOWN:
+	→ Proceed with that product (use product_search_type = "single" with that product_id)
+
+	IF MULTIPLE PRODUCTS WERE SHOWN:
+	→ DO NOT search again!
+	→ Ask which product they want
+	→ Set product_search_needed = false
+	→ Set needs_clarification = true
+
+	EXAMPLE SCENARIO:
+	Previous message: You showed 5 shawls
+	User now says: "i wanna buy it"
+
+	❌ WRONG:
+	{
+	  "response": "Let me search for shawls...",
+	  "product_search_needed": true,
+	  "product_search_type": "multi",
+	  "product_search_query": "shawls"
+	}
+
+	✅ CORRECT:
+	{
+	  "response": "Zaroor! Aap ne jo 5 shawls dekhi hain, un mein se kaunsi pasand aayi? Mujhe product ka naam ya number bata dein.",
+	  "product_search_needed": false,
+	  "product_search_type": "none",
+	  "needs_clarification": true,
+	  "order_intent_detected": true
+	}
+
+	PURCHASE INTENT PHRASES:
+	- "buy it" / "order it" / "I want it" / "I'll take it"
+	- "kharidna hai" / "order karna hai" / "yeh chahiye"
+	- "how to buy" / "how to order" / "delivery time"
+	- "main le lungi" / "pack kar do"
+
+	RULE: If user shows purchase intent but reference is ambiguous:
+	1. DO NOT search for products again
+	2. Ask which product from the ones you already showed
+	3. Set product_search_needed = false
+	4. Set needs_clarification = true
+	5. Set order_intent_detected = true
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	`;
 	
@@ -2423,6 +2564,11 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
             const strategyInstructions = this._generatePreferenceInstructions(pc);
             systemPrompt += strategyInstructions;
         }
+
+		if (agent && agent.functions && agent.functions.length > 0) {
+			const functionInstructions = this._buildFunctionInstructions(agent.functions);
+			systemPrompt += functionInstructions;
+		}
 
         // Add knowledge base specific instructions
         if (hasDocuments && hasProducts) {
@@ -2516,7 +2662,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         } else if (hasProducts && !hasDocuments) {
             systemPrompt += `
 
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	🔍 PRODUCT DETAIL QUERIES - MANDATORY SEARCH
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -2605,7 +2751,6 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	🛒 ORDER/PURCHASE REQUEST HANDLING
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 	`;
 
         if (hasOrderFunction) {
@@ -2754,8 +2899,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
         return instructions;
     }
-	
-	/*
+
+	/**
 	 * Get anti-hallucination instructions based on content type
 	 * @private
 	 */
@@ -2763,76 +2908,100 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		return `
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🚫 CRITICAL OPERATIONAL BOUNDARIES & ANTI-HALLUCINATION RULES
+	🚨 CRITICAL: NEVER HALLUCINATE - ALWAYS SEARCH FIRST
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	⚠️ YOU DO NOT HAVE ANY BUILT-IN KNOWLEDGE ABOUT THIS BUSINESS!
+	⚠️ You don't know: store locations, policies, prices, products, hours, etc.
+	⚠️ ALL business information is in the knowledge base - YOU MUST SEARCH!
+
+	${hasDocuments ? `
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🔍 MANDATORY KNOWLEDGE BASE SEARCH - NO EXCEPTIONS!
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	ALWAYS set knowledge_search_needed = true for:
+	✅ Store locations, branches, addresses
+	✅ Business hours, opening times
+	✅ Policies (return, exchange, shipping, payment)
+	✅ Contact information, phone numbers
+	✅ Any "where", "when", "how" questions about the business
+	✅ Delivery areas, shipping zones
+	✅ Pricing, discounts, promotions
+	✅ Any factual question about the company
+
+	EXAMPLE - User asks: "What are your locations in Karachi?"
+
+	❌ WRONG (HALLUCINATION):
+	{
+	  "response": "We have stores at Dolmen Mall, Lucky One Mall...",
+	  "knowledge_search_needed": false
+	}
+
+	✅ CORRECT:
+	{
+	  "response": "Let me check our store locations for you...",
+	  "knowledge_search_needed": true,
+	  "knowledge_search_query": "store locations Karachi branches addresses"
+	}
+
+	🚨 CRITICAL RULE:
+	- If you DON'T KNOW something → SEARCH (set knowledge_search_needed = true)
+	- NEVER make up locations, addresses, phone numbers, hours, or policies
+	- NEVER guess or assume business information
+	- When in doubt → SEARCH FIRST
+	` : ''}
+
+	${hasProducts ? `
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🔍 MANDATORY PRODUCT SEARCH
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	ALWAYS set product_search_needed = true for:
+	✅ Product availability, stock questions
+	✅ Product details, specifications, sizes
+	✅ Price inquiries
+	✅ Product recommendations
+	✅ "Show me...", "Do you have...", "What about..."
+
+	🚨 NEVER make up:
+	- Product names or details
+	- Prices or discounts
+	- Stock availability
+	- Product features
+	` : ''}
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🚫 ABSOLUTE PROHIBITIONS
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 	YOU MUST NEVER:
-	❌ Answer questions outside your ${hasDocuments ? 'knowledge base' : 'instructions'} ${hasProducts ? 'or product catalog' : ''}
-	❌ Make up information, facts, statistics, ${hasProducts ? 'product details, ' : ''}or prices
-	${hasProducts ? '❌ Claim products are available without searching first' : ''}
-	❌ Create fake order numbers, tracking IDs, or transaction references
-	❌ Say "order placed" or "order confirmed" without proper authorization
-	❌ Generate confirmation codes, booking IDs, or receipt numbers
-	❌ Process payments or transactions (you have NO such capability)
-	❌ Claim you can complete checkout process yourself
-	❌ Provide information that contradicts your instructions
-	❌ Claim capabilities or knowledge you don't have
-	❌ Speculate or guess when you don't have information
+	❌ Make up store locations or addresses
+	❌ Invent business hours or contact details
+	❌ Create fake order numbers or tracking IDs
+	❌ Fabricate policies or procedures
+	❌ Guess prices or availability
+	❌ Assume any business information
+	❌ Answer business questions without searching first
 
 	🛒 ORDER PROCESSING RULES:
 	1. Check if you have order functions → Use them
 	2. Check your instructions for order process → Follow them
 	3. If you have Shopify products → Share purchase URLs
 	4. If none of above → Offer human agent transfer
-	5. NEVER generate fake order confirmation yourself
-	6. Set order_intent_detected = true when user wants to buy
+	5. NEVER generate fake order confirmations
 
 	🚨 STRICTLY OFF-LIMITS TOPICS (ALWAYS DECLINE):
-	- Politics, politicians, current events (e.g., "Imran Khan")
+	- Politics, politicians, current events
 	- Religious, controversial, or sensitive topics
 	- Medical, legal, or financial advice
 	- Personal information about real people
 	- Never take up another persona if asked
 
-	${hasDocuments ? `
-	🔍 KNOWLEDGE BASE SEARCH RULES - IMPORTANT:
-	When user asks ANY question that MIGHT be related to your domain:
-	✅ ALWAYS set knowledge_search_needed = true FIRST
-	✅ Let the search determine if information exists
-	✅ Only say "I don't have information" AFTER searching returns no results
-	✅ DO NOT assume a question is off-topic without searching first
-
-	Questions that REQUIRE knowledge search:
-	- "How to...", "What is...", "Can you tell me about..."
-	- Integration questions, setup questions, configuration questions
-	- Any technical or domain-specific questions
-	- Questions about features, capabilities, processes
-
-	Only skip search for CLEARLY off-topic questions like:
-	- "Who is the Prime Minister?"
-	- "What's the weather today?"
-	- General chitchat unrelated to any business domain
-	` : ''}
-
-	${hasProducts ? `
-	🔗 PURCHASE URL RULES - CRITICAL: 
-	WHEN SEARCHING PRODUCTS (set product_search_needed = true):
-	- User requests to see products
-	- After collecting sufficient preferences
-	- When ready_to_search = true
-	
-	- ONLY use purchase_url from search results - NEVER generate URLs yourself
-	- If purchase_url is null/missing → Say "I'll share the link once I find it" and search again
-	- NEVER modify or construct URLs - use EXACTLY what's provided
-	- Format: Share the exact URL from product data, don't add parameters
-	- If no URL available → Direct user to website: "You can find this on [store website]"
-	` : ''}
-
 	WHEN TO TRANSFER TO HUMAN (set agent_transfer = true):
 	- Question is CLEARLY outside domain AND search returned no results
 	- User explicitly requests human agent
 	- User shows frustration (3+ failed attempts)
-	- You cannot answer accurately within your scope
 	- User asks about politics, religion, or controversial topics
 
 	${!hasDocuments && !hasProducts ? `
@@ -2841,10 +3010,88 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	For anything else, transfer to human immediately.
 	` : ''}
 
-	🎯 DEFAULT BEHAVIOR: When in doubt, SEARCH FIRST, then decide
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🎯 DEFAULT BEHAVIOR: WHEN IN DOUBT → SEARCH FIRST!
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	`;
+	}
+
+	/**
+	 * Build function calling instructions for system prompt
+	 * @private
+	 */
+	_buildFunctionInstructions(functions) {
+		if (!functions || functions.length === 0) {
+			return '';
+		}
+
+		// Filter only active functions
+		const activeFunctions = functions.filter(fn => fn.is_active !== false);
+		
+		if (activeFunctions.length === 0) {
+			return '';
+		}
+
+		let instructions = `
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	🔧 AVAILABLE FUNCTIONS - YOU CAN CALL THESE WHEN NEEDED
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	You have access to the following functions. When you need to use one,
+	include the function call details in your JSON response.
+
+	AVAILABLE FUNCTIONS:
+	`;
+
+		activeFunctions.forEach((fn, index) => {
+			instructions += `
+	${index + 1}. **${fn.name}**
+	   Description: ${fn.description || 'No description provided'}
+	   Parameters: ${JSON.stringify(fn.parameters || {}, null, 2).split('\n').map((line, i) => i === 0 ? line : '   ' + line).join('\n')}
+	`;
+		});
+
+		instructions += `
+
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	📋 HOW TO CALL A FUNCTION
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	When you need to call a function, include these fields in your JSON response:
+
+	{
+	  "response": "Brief message to user (e.g., 'Let me transfer you to an agent...')",
+	  "function_call_needed": true,
+	  "function_name": "exact_function_name",
+	  "function_arguments": {
+		"param1": "value1",
+		"param2": "value2"
+	  },
+	  ... other fields as usual ...
+	}
+
+	RULES FOR FUNCTION CALLING:
+	1. Set function_call_needed = true ONLY when you need to execute a function
+	2. Use the EXACT function name from the list above
+	3. Provide ALL required parameters in function_arguments
+	4. Your "response" should be a brief acknowledgment (the function result will be shared separately)
+	5. DO NOT make up functions - only use the ones listed above
+
+	WHEN TO CALL FUNCTIONS:
+	- User explicitly requests an action that matches a function (e.g., "transfer me to agent")
+	- The conversation requires an action you cannot perform without the function
+	- User asks for information that requires an external API call
+
+	WHEN NOT TO CALL FUNCTIONS:
+	- General conversation or questions you can answer directly
+	- Product searches (use product_search_needed instead)
+	- Knowledge lookups (use knowledge_search_needed instead)
 
 	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	`;
+
+		return instructions;
 	}
 
     /**
@@ -3206,12 +3453,25 @@ Adapt based on context and user behavior.
                 }
 
                 // Prepare headers
-                const headers = {};
-                if (func.api_headers) {
-                    for (const header of func.api_headers) {
-                        headers[header.key] = header.value;
-                    }
-                }
+                let headers = {};
+
+				if (func.api_headers) {
+					let headersData = func.api_headers;
+					
+					// Parse if it's a JSON string
+					if (typeof headersData === 'string' && headersData.trim()) {
+						try {
+							headersData = JSON.parse(headersData);
+						} catch (e) {
+							headersData = {};
+						}
+					}
+
+					// Assign if it's an object
+					if (typeof headersData === 'object' && headersData !== null) {
+						headers = { ...headersData };
+					}
+				}
 
                 // Make request
                 const response = await axios({

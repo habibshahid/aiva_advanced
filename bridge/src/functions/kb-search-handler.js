@@ -143,7 +143,7 @@ class KBSearchHandler {
                         'X-API-Key': this.managementApiKey,
                         'Content-Type': 'application/json'
                     },
-                    timeout: 10000
+                    timeout: 30000
                 }
             );
 			

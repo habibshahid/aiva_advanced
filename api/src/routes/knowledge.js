@@ -1121,36 +1121,6 @@ router.get('/:kbId/images', authenticate, async (req, res) => {
 });
 
 /**
- * @route DELETE /api/knowledge/:kbId/images/:imageId
- * @desc Delete image
- * @access Private
- */
-router.delete('/:kbId/images/:imageId', authenticate, async (req, res) => {
-  const rb = new ResponseBuilder();
-
-  try {
-    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
-    if (!kb) {
-      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
-    }
-
-    // Check ownership
-    const tenantId = req.user.tenant_id || req.user.id;
-    if (kb.tenant_id !== tenantId && req.user.role !== 'super_admin') {
-      return res.status(403).json(ResponseBuilder.forbidden());
-    }
-
-    const result = await PythonServiceClient.deleteImage(req.params.kbId, req.params.imageId);
-
-    res.json(rb.success(result));
-
-  } catch (error) {
-    console.error('Delete image error:', error);
-    res.status(500).json(ResponseBuilder.serverError(error.message));
-  }
-});
-
-/**
  * @route POST /api/knowledge/:kb_id/images/upload
  * @desc Upload image to knowledge base
  * @access Private
@@ -1313,6 +1283,7 @@ router.get('/:kb_id/images/list', authenticate, async (req, res) => {
  * @desc Delete image from knowledge base
  * @access Private
  */
+
 router.delete('/:kb_id/images/:image_id', authenticate, async (req, res) => {
   try {
     const { kb_id, image_id } = req.params;
@@ -1409,5 +1380,142 @@ router.get('/:kb_id/images/:image_id/view', async (req, res) => {
     }
   }
 });
+
+/**
+ * NEW ROUTES: Document Status & Reprocess Endpoints
+ * 
+ * ADD these routes to api/src/routes/knowledge.js
+ * Place them after the existing /:kbId/documents/:documentId route (around line 280)
+ * 
+ * IMPORTANT: Make sure these imports exist at the top of knowledge.js:
+ * - const db = require('../config/database');  // If not already imported
+ * - const PythonServiceClient = require('../services/PythonServiceClient');
+ */
+
+/**
+ * @route GET /api/knowledge/:kbId/documents/:documentId/status
+ * @desc Get document processing status with real-time progress
+ * @access Private
+ */
+router.get('/:kbId/documents/:documentId/status', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+
+    if (!kb) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Knowledge base')
+      );
+    }
+
+    // Check ownership
+    if (kb.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
+      return res.status(403).json(
+        ResponseBuilder.forbidden()
+      );
+    }
+
+    // Get document status (uses KnowledgeService.getDocumentStatus from KnowledgeService_updates.js)
+    const status = await KnowledgeService.getDocumentStatus(req.params.documentId);
+
+    if (!status) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Document')
+      );
+    }
+
+    // Verify document belongs to KB
+    if (status.kb_id !== req.params.kbId) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Document')
+      );
+    }
+
+    res.json(rb.success(status));
+
+  } catch (error) {
+    console.error('Get document status error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message)
+    );
+  }
+});
+
+/**
+ * @route POST /api/knowledge/:kbId/documents/:documentId/reprocess
+ * @desc Reprocess a document (re-extract and re-embed)
+ * @access Private
+ */
+router.post('/:kbId/documents/:documentId/reprocess', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const kb = await KnowledgeService.getKnowledgeBase(req.params.kbId);
+
+    if (!kb) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Knowledge base')
+      );
+    }
+
+    // Check ownership
+    if (kb.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
+      return res.status(403).json(
+        ResponseBuilder.forbidden()
+      );
+    }
+
+    // Get document
+    const doc = await KnowledgeService.getDocument(req.params.documentId);
+
+    if (!doc) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Document')
+      );
+    }
+
+    // Verify document belongs to KB
+    if (doc.kb_id !== req.params.kbId) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('Document')
+      );
+    }
+
+    // Check if already processing
+    if (doc.status === 'processing' || doc.status === 'queued') {
+      return res.status(400).json(
+        rb.error('Document is already being processed', 400)
+      );
+    }
+
+    // Trigger reprocessing via Python service
+    const result = await PythonServiceClient.reprocessDocument(req.params.documentId);
+
+    // Update document status in DB
+    const db = require('../config/database');
+    await db.query(
+      `UPDATE yovo_tbl_aiva_documents 
+       SET status = 'processing', 
+           error_message = NULL,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [req.params.documentId]
+    );
+
+    res.json(rb.success({
+      document_id: req.params.documentId,
+      status: 'processing',
+      message: 'Document reprocessing started'
+    }));
+
+  } catch (error) {
+    console.error('Reprocess document error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message)
+    );
+  }
+});
+
 
 module.exports = router;

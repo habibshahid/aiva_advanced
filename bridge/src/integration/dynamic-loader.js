@@ -103,7 +103,7 @@ class DynamicAgentLoader {
 		const builtInKBSearchTool = agent.kb_id ? {
 			type: "function",
 			name: "search_knowledge",
-			description: "Search the knowledge base to find relevant information to answer customer questions. Use this when you need specific information about products, policies, procedures, or any other documented information.",
+			description: "Search the knowledge base to find relevant information to answer customer questions. Use this when you need specific information about products, policies, procedures, or any other documented information. IMPORTANT: Before calling this function, ALWAYS first tell the caller something brief like 'Let me look that up for you, please hold on' or 'One moment while I check that information' - then call the function. This prepares them for a brief pause.",
 			parameters: {
 				type: "object",
 				properties: {
