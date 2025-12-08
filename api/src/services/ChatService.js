@@ -1191,6 +1191,9 @@ class ChatService {
 		// Parse JSON response (should always be valid JSON now)
 		try {
 			llmDecision = JSON.parse(aiMessage.content);
+			console.log('@@@@@@@@@@@@@@@@@@@@@@', llmDecision, agent.kb_metadata)
+			llmDecision.knowledge_search_needed = (!llmDecision.knowledge_search_needed && agent.kb_metadata.has_documents) ? true : llmDecision.knowledge_search_needed
+			console.log('@@@@@@@@@@@@@@@@@@@@@@', llmDecision)
 			console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
 		} catch (parseError) {
 			console.error('❌ Failed to parse LLM response as JSON:', parseError.message);
@@ -1551,9 +1554,9 @@ class ChatService {
 					const product = knowledgeResults.product_results[0];
 					
 					productContext = `
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		📦 SPECIFIC PRODUCT DETAILS (User is asking about THIS product)
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 
 		Product Name: ${product.name || product.title}
 		Product ID: ${product.product_id}
@@ -1585,7 +1588,7 @@ class ChatService {
 
 		🔗 Purchase URL: ${product.purchase_url || 'Not available'}
 
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		⚠️ IMPORTANT INSTRUCTIONS:
 		- Answer the user's question using ONLY the above product details
 		- Be SPECIFIC about sizes and availability
@@ -1593,7 +1596,7 @@ class ChatService {
 		- Include the purchase URL when relevant
 		- DO NOT search for more products - you have all the information
 		- DO NOT set product_search_needed = true
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+		--------------------------------------------------------------------`;
 				} else {
 					const INITIAL_PRODUCTS_COUNT = 3;
 					const initialProducts = knowledgeResults.product_results.slice(0, INITIAL_PRODUCTS_COUNT);
@@ -1639,9 +1642,9 @@ class ChatService {
 					).join('\n\n');
 					
 					productContext = `
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		PRODUCT SEARCH RESULTS
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 
 		Total Products Found: ${knowledgeResults.product_results.length}
 		Showing: Top ${initialProducts.length} most relevant products
@@ -1650,15 +1653,15 @@ class ChatService {
 		${initialProductContext}
 
 		${hasMoreProducts ? `
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		📋 ADDITIONAL ${remainingProducts.length} PRODUCTS (Show when user asks for more):
 		${remainingProductContext}
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		` : ''}
 
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		⚠️ CRITICAL PRESENTATION RULES:
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		--------------------------------------------------------------------
 		
 		1. INITIALLY SHOW ONLY THE TOP ${INITIAL_PRODUCTS_COUNT} PRODUCTS listed above
 		2. DO NOT show all ${knowledgeResults.product_results.length} products at once
@@ -1668,7 +1671,7 @@ class ChatService {
 		6. DO NOT say "I need to search" - you already have the results
 		7. DO NOT set product_search_needed=true again
 		
-		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+		--------------------------------------------------------------------`;
 				}
 
 				// Build messages with product context
@@ -1807,15 +1810,15 @@ class ChatService {
                             role: 'system',
                             content: `${systemPrompt}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 SEARCH RESULTS FROM KNOWLEDGE BASE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 
 Query: "${searchQuery}"
 
 ${contextChunks}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 
 CRITICAL: Use the above search results to answer the user's question.
 - Provide a direct answer based on the search results
@@ -1824,7 +1827,7 @@ CRITICAL: Use the above search results to answer the user's question.
 - Answer naturally without mentioning "search results"
 
 Your response MUST be in JSON format with knowledge_search_needed=false.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+--------------------------------------------------------------------`
                         },
                         ...history.map(msg => ({
                             role: msg.role,
@@ -2114,12 +2117,12 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         if (greeting) {
             const greetingInstructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	GREETING MESSAGE ${isFirstMessage ? '⚠️ FIRST MESSAGE - USE GREETING NOW!' : ''}
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 
 	${isFirstMessage ? `
-	🚨 CRITICAL: THIS IS THE FIRST MESSAGE IN THE CONVERSATION!
+	CRITICAL: THIS IS THE FIRST MESSAGE IN THE CONVERSATION!
 
 	You MUST begin your response with this exact greeting:
 	"${greeting}"
@@ -2133,7 +2136,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	Continue the conversation naturally.
 	`}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
             systemPrompt += greetingInstructions;
         }
@@ -2161,9 +2164,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         // Add JSON response format instructions - ALWAYS INCLUDE THIS
         const jsonFormatInstructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	CRITICAL: JSON RESPONSE FORMAT (RFC 8259 COMPLIANT)
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 
 	You MUST ALWAYS respond with valid JSON in this EXACT structure:
 
@@ -2193,29 +2196,29 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "user_wants_to_end": true/false
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
 
         systemPrompt += jsonFormatInstructions;
 
 	const productSearchDecisionInstructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔍 SMART PRODUCT SEARCH DECISION LOGIC
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	SMART PRODUCT SEARCH DECISION LOGIC
+	--------------------------------------------------------------------
 
 	When user asks about products, YOU must decide the search type:
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	1️⃣ SINGLE PRODUCT LOOKUP (product_search_type = "single")
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	1. SINGLE PRODUCT LOOKUP (product_search_type = "single")
+	--------------------------------------------------------------------
 
 	Use when:
-	✅ Message contains "AiVA Product ID: <uuid>" 
-	✅ Message contains "Shopify Product ID: <number>"
-	✅ User replied to a specific product message (WhatsApp reply with product info)
-	✅ User clearly references ONE specific product from conversation history
-	✅ User says "this one", "is wali", "yeh product" AND you can identify which product from context
+	 Message contains "AiVA Product ID: <uuid>" 
+	 Message contains "Shopify Product ID: <number>"
+	 User replied to a specific product message (WhatsApp reply with product info)
+	 User clearly references ONE specific product from conversation history
+	 User says "this one", "is wali", "yeh product" AND you can identify which product from context
 
 	HOW TO DETECT PRODUCT ID IN MESSAGE:
 	- Look for pattern: "AiVA Product ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -2232,15 +2235,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "ready_to_search": true
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	2️⃣ MULTI PRODUCT SEARCH (product_search_type = "multi")
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	2. MULTI PRODUCT SEARCH (product_search_type = "multi")
+	--------------------------------------------------------------------
 
 	Use when:
-	✅ User asks general question: "show me red dresses"
-	✅ User wants recommendations: "kuch formal shirts dikhao"
-	✅ User browsing: "what do you have under 5000?"
-	✅ User searching by category/color/style/price
+	 User asks general question: "show me red dresses"
+	 User wants recommendations: "kuch formal shirts dikhao"
+	 User browsing: "what do you have under 5000?"
+	 User searching by category/color/style/price
 
 	RESPONSE FORMAT:
 	{
@@ -2252,15 +2255,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "ready_to_search": true
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	3️⃣ NEEDS CLARIFICATION (needs_clarification = true)
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	3. NEEDS CLARIFICATION (needs_clarification = true)
+	--------------------------------------------------------------------
 
 	Use when:
-	⚠️ User says "this one" / "is ki" / "yeh wali" but NO product ID in message
-	⚠️ User references "the second one" but you can't identify from history
-	⚠️ Ambiguous which product they mean
-	⚠️ Multiple products were shown and user's reference is unclear
+	 User says "this one" / "is ki" / "yeh wali" but NO product ID in message
+	 User references "the second one" but you can't identify from history
+	 Ambiguous which product they mean
+	 Multiple products were shown and user's reference is unclear
 
 	RESPONSE FORMAT:
 	{
@@ -2270,15 +2273,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "needs_clarification": true
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	4️⃣ NO SEARCH NEEDED (product_search_type = "none")
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	4. NO SEARCH NEEDED (product_search_type = "none")
+	--------------------------------------------------------------------
 
 	Use when:
-	✅ General conversation / greeting
-	✅ Question about policies, shipping, returns
-	✅ You can answer from instructions/knowledge
-	✅ Non-product related query
+	 General conversation / greeting
+	 Question about policies, shipping, returns
+	 You can answer from instructions/knowledge
+	 Non-product related query
 
 	RESPONSE FORMAT:
 	{
@@ -2287,11 +2290,11 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "product_search_type": "none"
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	📱 WHATSAPP REPLY DETECTION - CRITICAL!
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	WHATSAPP REPLY DETECTION - CRITICAL!
+	--------------------------------------------------------------------
 
-	🚨 WHEN MESSAGE CONTAINS "AiVA Product ID:" YOU MUST:
+	WHEN MESSAGE CONTAINS "AiVA Product ID:" YOU MUST:
 	1. Extract the UUID after "AiVA Product ID:"
 	2. Set product_search_type = "single"
 	3. Set product_id = the extracted UUID
@@ -2313,21 +2316,21 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "needs_clarification": false
 	}
 
-	❌ WRONG (DO NOT DO THIS):
+	WRONG (DO NOT DO THIS):
 	{
 	  "product_search_type": "multi",
 	  "product_search_query": "Dreamy 2 Piece dress length"
 	}
 
-	✅ CORRECT:
+	CORRECT:
 	{
 	  "product_search_type": "single",
 	  "product_id": "01ba7c2b-7ac7-4c52-9d12-0c2896426270"
 	}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	📜 HISTORY REFERENCE DETECTION - CRITICAL FOR SINGLE LOOKUPS
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	HISTORY REFERENCE DETECTION - CRITICAL FOR SINGLE LOOKUPS
+	--------------------------------------------------------------------
 
 	When user references a product from conversation history:
 
@@ -2342,14 +2345,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	User previously saw: "Product ID: abc-123, Name: Pine Trees Shawl"
 	User now asks: "is ki length kya hai?" or "what's the length of this?"
 	
-	✅ CORRECT:
+	CORRECT:
 	{
 	  "product_search_type": "single",
 	  "product_id": "abc-123",
 	  "product_search_query": null
 	}
 	
-	❌ WRONG:
+	WRONG:
 	{
 	  "product_search_type": "multi",
 	  "product_search_query": "Pine Trees Shawl length"
@@ -2366,9 +2369,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	IF YOU CANNOT FIND THE PRODUCT ID:
 	→ Set needs_clarification = true and ask which product
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	⚡ DECISION FLOWCHART
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	DECISION FLOWCHART
+	--------------------------------------------------------------------
 
 	User asks about product(s)
 	         │
@@ -2402,15 +2405,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	                                                          │ = true      │
 	                                                          └─────────────┘
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	5️⃣ SHOW MORE PRODUCTS (show_more_products = true)
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 
 	Use when user asks to see more products after initial results:
-	✅ "show more" / "aur dikhao" / "more options"
-	✅ "what else do you have" / "aur kya hai"
-	✅ "next" / "agle products"
-	✅ "any other options" / "koi aur"
+	 "show more" / "aur dikhao" / "more options"
+	 "what else do you have" / "aur kya hai"
+	 "next" / "agle products"
+	 "any other options" / "koi aur"
 
 	RESPONSE FORMAT:
 	{
@@ -2420,14 +2423,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "show_more_products": true
 	}
 
-	⚠️ IMPORTANT: When show_more_products = true:
+	IMPORTANT: When show_more_products = true:
 	- Use the ADDITIONAL PRODUCTS from the previous search results
 	- DO NOT perform a new search
 	- Present the next batch of products from context
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	6️⃣ PURCHASE INTENT AFTER SHOWING PRODUCTS
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	6. PURCHASE INTENT AFTER SHOWING PRODUCTS
+	--------------------------------------------------------------------
 
 	When user says "buy it", "order it", "I want this", etc. AFTER you showed products:
 
@@ -2446,7 +2449,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	Previous message: You showed 5 shawls
 	User now says: "i wanna buy it"
 
-	❌ WRONG:
+	WRONG:
 	{
 	  "response": "Let me search for shawls...",
 	  "product_search_needed": true,
@@ -2454,7 +2457,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "product_search_query": "shawls"
 	}
 
-	✅ CORRECT:
+	CORRECT:
 	{
 	  "response": "Zaroor! Aap ne jo 5 shawls dekhi hain, un mein se kaunsi pasand aayi? Mujhe product ka naam ya number bata dein.",
 	  "product_search_needed": false,
@@ -2475,7 +2478,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	3. Set product_search_needed = false
 	4. Set needs_clarification = true
 	5. Set order_intent_detected = true
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
 	
 		if (hasProducts) {
@@ -2484,18 +2487,18 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		
         const closureInstructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔚 CONVERSATION CLOSURE DETECTION
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	CONVERSATION CLOSURE DETECTION
+	--------------------------------------------------------------------
 
 	DETECT WHEN CONVERSATION IS NATURALLY COMPLETE:
 
 	SET conversation_complete = true WHEN:
-	✅ You've answered user's question completely
-	✅ Products have been shown and user seems satisfied
-	✅ Order/purchase has been explained/completed
-	✅ Information request has been fulfilled
-	✅ User's needs appear to be met
+	 You've answered user's question completely
+	 Products have been shown and user seems satisfied
+	 Order/purchase has been explained/completed
+	 Information request has been fulfilled
+	 User's needs appear to be met
 
 	WHEN conversation_complete = true:
 	- Ask: "Kya main aur kisi tarah se aapki madad kar sakti hoon?" (or English equivalent)
@@ -2548,7 +2551,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Be natural - if user asks new question, continue helping
 	- Only close when user explicitly indicates they're done
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
 
         systemPrompt += closureInstructions;
@@ -2574,23 +2577,102 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         if (hasDocuments && hasProducts) {
             systemPrompt += `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	HYBRID KNOWLEDGE BASE & PRODUCT CATALOG
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 
 	This agent has BOTH a knowledge base (documents) AND a product catalog.
 
 	WHEN TO USE EACH:
 
-	Use knowledge_search_needed = true for:
-	- Questions about policies, procedures, how-to guides, products
-	- General information queries
-	- Documentation lookups
-	- FAQs and support articles
+	--------------------------------------------------------------------
+	KNOWLEDGE BASE AGENT - SEARCH BY DEFAULT
+	--------------------------------------------------------------------
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔍 PRODUCT DETAIL QUERIES - MANDATORY SEARCH
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	This agent has a knowledge base with documents. You MUST search it to answer questions.
+
+	--------------------------------------------------------------------
+	CRITICAL RULE: SEARCH BY DEFAULT
+	--------------------------------------------------------------------
+
+	- You have ZERO built-in knowledge about the content in this knowledge base!
+	- Previous search results in conversation history are for REFERENCE ONLY!
+	- For EACH new question, you MUST search again - even if topic seems familiar!
+
+	DEFAULT BEHAVIOR: knowledge_search_needed = true
+
+	--------------------------------------------------------------------
+	SET knowledge_search_needed = true FOR:
+	--------------------------------------------------------------------
+
+	- ANY question asking for information, data, or facts
+	- ANY question with "what", "how", "why", "when", "where", "who"
+	- ANY question about numbers, amounts, dates, names, details
+	- ANY question about policies, procedures, rules, processes
+	- ANY question about the domain/topic of this agent
+	- ANY follow-up question asking for MORE or DIFFERENT information
+	- ANY comparison, analysis, or summary request
+	- ANY request to explain, describe, or clarify something
+	- EVEN IF you discussed similar topic before - SEARCH AGAIN!
+
+	--------------------------------------------------------------------
+	SET knowledge_search_needed = false ONLY FOR:
+	--------------------------------------------------------------------
+
+	- Greetings: "hi", "hello", "good morning", "assalam o alaikum"
+	- Thanks: "thank you", "thanks", "shukriya", "okay thanks"
+	- Acknowledgments: "ok", "got it", "understood", "alright"
+	- Goodbyes: "bye", "goodbye", "allah hafiz"
+	- Simple confirmations: "yes", "no", "sure"
+	- Requests for clarification about YOUR question: "what do you mean?"
+
+	--------------------------------------------------------------------
+	NEVER HALLUCINATE - EXAMPLES:
+	--------------------------------------------------------------------
+
+	SCENARIO 1: User asks about data
+	User: "What is the stamp duty for 2024?"
+	WRONG: { "response": "The stamp duty is Rs. 50,000...", "knowledge_search_needed": false }
+	RIGHT: { "response": "Let me find that for you.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2024" }
+
+	SCENARIO 2: Follow-up question (MUST SEARCH AGAIN!)
+	[Previous: You searched and found stamp duty 2024 data]
+	User: "What about 2023?"
+	WRONG: { "response": "For 2023 it was Rs. 40,000...", "knowledge_search_needed": false }
+	RIGHT: { "response": "Let me check 2023 data.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023" }
+
+	SCENARIO 3: Comparison (NEW SEARCH NEEDED!)
+	User: "Compare 2023 and 2024"
+	WRONG: Use data from memory/previous context
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023 2024 comparison" }
+
+	SCENARIO 4: Different topic
+	User: "What is the return policy?"
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "return policy refund" }
+
+	SCENARIO 5: Complaint/Issue
+	User: "I have a problem with my order"
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "order issues complaints process" }
+
+	--------------------------------------------------------------------
+	QUICK DECISION RULE:
+	--------------------------------------------------------------------
+
+	Is this message just a greeting, thanks, bye, or simple yes/no?
+	→ NO SEARCH needed
+
+	Is this ANY other type of message?
+	→ SEARCH NEEDED (knowledge_search_needed = true)
+
+	- WHEN IN DOUBT → ALWAYS SEARCH!
+	- SEARCHING TOO MUCH IS BETTER THAN HALLUCINATING!
+	- Never make deceision based on chat history and search Knowledge base always even if the question has been answered before.
+
+	NEVER set product_search_needed as there are no products to search.
+
+	--------------------------------------------------------------------
+	PRODUCT DETAIL QUERIES - MANDATORY SEARCH
+	--------------------------------------------------------------------
 
 	CRITICAL: When user asks about SPECIFIC product details, you MUST search!
 
@@ -2607,7 +2689,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	EXAMPLE SCENARIOS:
 
 	User: "is ki shirt length kya hai?"
-	✅ CORRECT Response:
+	CORRECT Response:
 	{
 	  "response": "Main aap ke liye is product ki details check karti hoon...",
 	  "product_search_needed": true,
@@ -2617,7 +2699,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "knowledge_search_query": "chamomile 3 piece shirt length measurements"
 	}
 
-	❌ WRONG Response:
+	WRONG Response:
 	{
 	  "response": "Mujhe details nahi mil rahi...",
 	  "product_search_needed": false,
@@ -2636,35 +2718,107 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Include specific attribute: "shirt length measurements size"
 	- Use both product_search AND knowledge_search for specifications
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	You can use BOTH in the same response if needed:
 	- Search knowledge base for policies, then search products for items
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
         } else if (hasDocuments && !hasProducts) {
             systemPrompt += `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	KNOWLEDGE BASE ONLY (NO PRODUCTS)
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	KNOWLEDGE BASE AGENT - SEARCH BY DEFAULT
+	--------------------------------------------------------------------
 
-	This agent has a knowledge base with documents but NO product catalog.
+	This agent has a knowledge base with documents. You MUST search it to answer questions.
 
-	ALWAYS set knowledge_search_needed = true when:
-	- User asks questions about topics in your knowledge base
-	- You need factual information to answer accurately
+	--------------------------------------------------------------------
+	CRITICAL RULE: SEARCH BY DEFAULT
+	--------------------------------------------------------------------
+
+	You have ZERO built-in knowledge about the content in this knowledge base!
+	Previous search results in conversation history are for REFERENCE ONLY!
+	For EACH new question, you MUST search again - even if topic seems familiar!
+
+	DEFAULT BEHAVIOR: knowledge_search_needed = true
+
+	--------------------------------------------------------------------
+	SET knowledge_search_needed = true FOR:
+	--------------------------------------------------------------------
+
+	- ANY question asking for information, data, or facts
+	- ANY question with "what", "how", "why", "when", "where", "who"
+	- ANY question about numbers, amounts, dates, names, details
+	- ANY question about policies, procedures, rules, processes
+	- ANY question about the domain/topic of this agent
+	- ANY follow-up question asking for MORE or DIFFERENT information
+	- ANY comparison, analysis, or summary request
+	- ANY request to explain, describe, or clarify something
+	- EVEN IF you discussed similar topic before - SEARCH AGAIN!
+
+	--------------------------------------------------------------------
+	SET knowledge_search_needed = false ONLY FOR:
+	--------------------------------------------------------------------
+
+	- Greetings: "hi", "hello", "good morning", "assalam o alaikum"
+	- Thanks: "thank you", "thanks", "shukriya", "okay thanks"
+	- Acknowledgments: "ok", "got it", "understood", "alright"
+	- Goodbyes: "bye", "goodbye", "allah hafiz"
+	- Simple confirmations: "yes", "no", "sure"
+	- Requests for clarification about YOUR question: "what do you mean?"
+
+	--------------------------------------------------------------------
+	NEVER HALLUCINATE - EXAMPLES:
+	--------------------------------------------------------------------
+
+	SCENARIO 1: User asks about data
+	User: "What is the stamp duty for 2024?"
+	WRONG: { "response": "The stamp duty is Rs. 50,000...", "knowledge_search_needed": false }
+	RIGHT: { "response": "Let me find that for you.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2024" }
+
+	SCENARIO 2: Follow-up question (MUST SEARCH AGAIN!)
+	[Previous: You searched and found stamp duty 2024 data]
+	User: "What about 2023?"
+	WRONG: { "response": "For 2023 it was Rs. 40,000...", "knowledge_search_needed": false }
+	RIGHT: { "response": "Let me check 2023 data.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023" }
+
+	SCENARIO 3: Comparison (NEW SEARCH NEEDED!)
+	User: "Compare 2023 and 2024"
+	WRONG: Use data from memory/previous context
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023 2024 comparison" }
+
+	SCENARIO 4: Different topic
+	User: "What is the return policy?"
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "return policy refund" }
+
+	SCENARIO 5: Complaint/Issue
+	User: "I have a problem with my order"
+	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "order issues complaints process" }
+
+	--------------------------------------------------------------------
+	QUICK DECISION RULE:
+	--------------------------------------------------------------------
+
+	Is this message just a greeting, thanks, bye, or simple yes/no?
+	→ NO SEARCH needed
+
+	Is this ANY other type of message?
+	→ SEARCH NEEDED (knowledge_search_needed = true)
+
+	 WHEN IN DOUBT → ALWAYS SEARCH!
+	 SEARCHING TOO MUCH IS BETTER THAN HALLUCINATING!
 
 	NEVER set product_search_needed as there are no products to search.
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
         } else if (hasProducts && !hasDocuments) {
             systemPrompt += `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔍 PRODUCT DETAIL QUERIES - MANDATORY SEARCH
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	PRODUCT DETAIL QUERIES - MANDATORY SEARCH
+	--------------------------------------------------------------------
 
 	CRITICAL: When user asks about SPECIFIC product details, you MUST search!
 
@@ -2681,7 +2835,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	EXAMPLE SCENARIOS:
 
 	User: "is ki shirt length kya hai?"
-	✅ CORRECT Response:
+	CORRECT Response:
 	{
 	  "response": "Main aap ke liye is product ki details check karti hoon...",
 	  "product_search_needed": true,
@@ -2691,7 +2845,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "knowledge_search_query": "chamomile 3 piece shirt length measurements"
 	}
 
-	❌ WRONG Response:
+	WRONG Response:
 	{
 	  "response": "Mujhe details nahi mil rahi...",
 	  "product_search_needed": false,
@@ -2710,7 +2864,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Include specific attribute: "shirt length measurements size"
 	- Use both product_search AND knowledge_search for specifications
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
         }
 
@@ -2748,15 +2902,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
         let instructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🛒 ORDER/PURCHASE REQUEST HANDLING
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	ORDER/PURCHASE REQUEST HANDLING
+	--------------------------------------------------------------------
 	`;
 
         if (hasOrderFunction) {
             // Agent HAS order functions - can process orders
             instructions += `
-	✅ YOU HAVE ORDER PROCESSING FUNCTIONS AVAILABLE
+	YOU HAVE ORDER PROCESSING FUNCTIONS AVAILABLE
 
 	When user wants to buy/order:
 	1. Use the available order functions to process the request
@@ -2772,20 +2926,20 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	).map(fn => `- ${fn.name}: ${fn.description}`).join('\n')}
 
 	DO:
-	✅ Use order functions when user wants to buy
-	✅ Collect required information (size, color, address, etc.)
-	✅ Confirm details before processing
-	✅ Call the appropriate function
+	 - Use order functions when user wants to buy
+	 - Collect required information (size, color, address, etc.)
+	 - Confirm details before processing
+	 - Call the appropriate function
 
 	DON'T:
-	❌ Generate fake order numbers yourself
-	❌ Claim order is placed without calling function
-	❌ Skip collecting required information
+	 - Generate fake order numbers yourself
+	 - Claim order is placed without calling function
+	 - Skip collecting required information
 	`;
         } else if (instructionsMentionOrders) {
             // Instructions mention order process - follow them
             instructions += `
-	⚠️ NO ORDER FUNCTIONS, BUT INSTRUCTIONS MENTION ORDER PROCESS
+	NO ORDER FUNCTIONS, BUT INSTRUCTIONS MENTION ORDER PROCESS
 
 	Your instructions contain information about orders/purchases.
 	Follow those instructions exactly.
@@ -2798,20 +2952,20 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	5. Set order_intent_detected = true
 
 	DO:
-	✅ Follow order instructions from your base prompt
-	✅ Guide user through the specified process
-	✅ Share any URLs/links mentioned in instructions
-	✅ Transfer to human if instructions say so
+	 Follow order instructions from your base prompt
+	 Guide user through the specified process
+	 Share any URLs/links mentioned in instructions
+	 Transfer to human if instructions say so
 
 	DON'T:
-	❌ Generate fake order numbers
-	❌ Process orders without proper authorization
-	❌ Claim order is placed when it's not
+	 Generate fake order numbers
+	 Process orders without proper authorization
+	 Claim order is placed when it's not
 	`;
         } else if (hasShopify && hasProducts) {
             // Has Shopify + products - share purchase URLs
             instructions += `
-	🛍️ SHOPIFY STORE INTEGRATION AVAILABLE
+	SHOPIFY STORE INTEGRATION AVAILABLE
 
 	You have access to a Shopify store with products.
 	When user wants to buy/order:
@@ -2832,21 +2986,21 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	Kya aapko kisi aur product ki zarurat hai?"
 
 	DO:
-	✅ Search and show the requested product
-	✅ Share direct purchase URL from Shopify
-	✅ Explain how to complete purchase on website
-	✅ Offer to help find more products
+	 Search and show the requested product
+	 Share direct purchase URL from Shopify
+	 Explain how to complete purchase on website
+	 Offer to help find more products
 
 	DON'T:
-	❌ Generate order numbers yourself
-	❌ Claim you can process the order directly
-	❌ Say "order placed" without user going to website
-	❌ Make up fake tracking IDs
+	 Generate order numbers yourself
+	 Claim you can process the order directly
+	 Say "order placed" without user going to website
+	 Make up fake tracking IDs
 	`;
         } else {
             // No order capability - offer agent transfer
             instructions += `
-	❌ NO ORDER PROCESSING CAPABILITY
+	NO ORDER PROCESSING CAPABILITY
 
 	You have NO functions, NO order instructions, and NO store integration.
 	When user wants to buy/order:
@@ -2864,22 +3018,22 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	Kya main aapko human agent se connect kar doon?"
 
 	DO:
-	✅ Be honest about limitations
-	✅ Offer human agent transfer
-	✅ Set agent_transfer = true
-	✅ Be helpful and polite
+	 Be honest about limitations
+	 Offer human agent transfer
+	 Set agent_transfer = true
+	 Be helpful and polite
 
 	DON'T:
-	❌ Generate fake order numbers
-	❌ Pretend you can process orders
-	❌ Give false hope about order placement
-	❌ Make up confirmation IDs
+	 Generate fake order numbers
+	 Pretend you can process orders
+	 Give false hope about order placement
+	 Make up confirmation IDs
 	`;
         }
 
         instructions += `
 
-	🚨 CRITICAL: ORDER INTENT DETECTION
+	CRITICAL: ORDER INTENT DETECTION
 
 	SET order_intent_detected = true WHEN:
 	- User says "I want to buy/order/purchase"
@@ -2894,7 +3048,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- NEVER claim order is placed without proper authorization
 	- NEVER create transaction IDs, tracking numbers, etc.
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
 
         return instructions;
@@ -2907,45 +3061,37 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	_getAntiHallucinationInstructions(hasDocuments, hasProducts) {
 		return `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🚨 CRITICAL: NEVER HALLUCINATE - ALWAYS SEARCH FIRST
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	CRITICAL: NEVER HALLUCINATE - ALWAYS SEARCH FIRST
+	--------------------------------------------------------------------
 
-	⚠️ YOU DO NOT HAVE ANY BUILT-IN KNOWLEDGE ABOUT THIS BUSINESS!
-	⚠️ You don't know: store locations, policies, prices, products, hours, etc.
-	⚠️ ALL business information is in the knowledge base - YOU MUST SEARCH!
+	 YOU DO NOT HAVE ANY BUILT-IN KNOWLEDGE ABOUT THIS BUSINESS!
+	 You don't know: store locations, policies, prices, products, hours, etc.
+	 ALL business information is in the knowledge base - YOU MUST SEARCH!
 
 	${hasDocuments ? `
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔍 MANDATORY KNOWLEDGE BASE SEARCH - NO EXCEPTIONS!
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	MANDATORY KNOWLEDGE BASE SEARCH - NO EXCEPTIONS!
+	--------------------------------------------------------------------
 
-	ALWAYS set knowledge_search_needed = true for:
-	✅ Store locations, branches, addresses
-	✅ Business hours, opening times
-	✅ Policies (return, exchange, shipping, payment)
-	✅ Contact information, phone numbers
-	✅ Any "where", "when", "how" questions about the business
-	✅ Delivery areas, shipping zones
-	✅ Pricing, discounts, promotions
-	✅ Any factual question about the company
+	ALWAYS set knowledge_search_needed = true
 
 	EXAMPLE - User asks: "What are your locations in Karachi?"
 
-	❌ WRONG (HALLUCINATION):
+	WRONG (HALLUCINATION):
 	{
 	  "response": "We have stores at Dolmen Mall, Lucky One Mall...",
 	  "knowledge_search_needed": false
 	}
 
-	✅ CORRECT:
+	CORRECT:
 	{
 	  "response": "Let me check our store locations for you...",
 	  "knowledge_search_needed": true,
 	  "knowledge_search_query": "store locations Karachi branches addresses"
 	}
 
-	🚨 CRITICAL RULE:
+	CRITICAL RULE:
 	- If you DON'T KNOW something → SEARCH (set knowledge_search_needed = true)
 	- NEVER make up locations, addresses, phone numbers, hours, or policies
 	- NEVER guess or assume business information
@@ -2953,45 +3099,45 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	` : ''}
 
 	${hasProducts ? `
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🔍 MANDATORY PRODUCT SEARCH
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	MANDATORY PRODUCT SEARCH
+	--------------------------------------------------------------------
 
 	ALWAYS set product_search_needed = true for:
-	✅ Product availability, stock questions
-	✅ Product details, specifications, sizes
-	✅ Price inquiries
-	✅ Product recommendations
-	✅ "Show me...", "Do you have...", "What about..."
+	Product availability, stock questions
+	Product details, specifications, sizes
+	Price inquiries
+	Product recommendations
+	"Show me...", "Do you have...", "What about..."
 
-	🚨 NEVER make up:
+	NEVER make up:
 	- Product names or details
 	- Prices or discounts
 	- Stock availability
 	- Product features
 	` : ''}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🚫 ABSOLUTE PROHIBITIONS
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	ABSOLUTE PROHIBITIONS
+	--------------------------------------------------------------------
 
 	YOU MUST NEVER:
-	❌ Make up store locations or addresses
-	❌ Invent business hours or contact details
-	❌ Create fake order numbers or tracking IDs
-	❌ Fabricate policies or procedures
-	❌ Guess prices or availability
-	❌ Assume any business information
-	❌ Answer business questions without searching first
+	 - Make up store locations or addresses
+	 - Invent business hours or contact details
+	 - Create fake order numbers or tracking IDs
+	 - Fabricate policies or procedures
+	 - Guess prices or availability
+	 - Assume any business information
+	 - Answer business questions without searching first
 
-	🛒 ORDER PROCESSING RULES:
+	ORDER PROCESSING RULES:
 	1. Check if you have order functions → Use them
 	2. Check your instructions for order process → Follow them
 	3. If you have Shopify products → Share purchase URLs
 	4. If none of above → Offer human agent transfer
 	5. NEVER generate fake order confirmations
 
-	🚨 STRICTLY OFF-LIMITS TOPICS (ALWAYS DECLINE):
+	STRICTLY OFF-LIMITS TOPICS (ALWAYS DECLINE):
 	- Politics, politicians, current events
 	- Religious, controversial, or sensitive topics
 	- Medical, legal, or financial advice
@@ -3005,14 +3151,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- User asks about politics, religion, or controversial topics
 
 	${!hasDocuments && !hasProducts ? `
-	⚠️ CRITICAL: You have NO knowledge base and NO product catalog.
+	CRITICAL: You have NO knowledge base and NO product catalog.
 	Answer ONLY based on your base instructions.
 	For anything else, transfer to human immediately.
 	` : ''}
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	🎯 DEFAULT BEHAVIOR: WHEN IN DOUBT → SEARCH FIRST!
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	DEFAULT BEHAVIOR: WHEN IN DOUBT → SEARCH FIRST!
+	--------------------------------------------------------------------
+	knowledge_search_needed=true
 	`;
 	}
 
@@ -3034,9 +3181,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 		let instructions = `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	🔧 AVAILABLE FUNCTIONS - YOU CAN CALL THESE WHEN NEEDED
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 
 	You have access to the following functions. When you need to use one,
 	include the function call details in your JSON response.
@@ -3054,9 +3201,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 		instructions += `
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	📋 HOW TO CALL A FUNCTION
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
+	HOW TO CALL A FUNCTION
+	--------------------------------------------------------------------
 
 	When you need to call a function, include these fields in your JSON response:
 
@@ -3088,7 +3235,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Product searches (use product_search_needed instead)
 	- Knowledge lookups (use knowledge_search_needed instead)
 
-	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	--------------------------------------------------------------------
 	`;
 
 		return instructions;
@@ -3104,15 +3251,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         if (strategy === 'immediate_search') {
             return `
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 PRODUCT SEARCH STRATEGY: IMMEDIATE SEARCH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 
 When user requests products:
-✅ Search IMMEDIATELY - set product_search_needed = true
-✅ Use user's query as search query
-✅ Do NOT ask preference questions
-✅ Show products right away
+ Search IMMEDIATELY - set product_search_needed = true
+ Use user's query as search query
+ Do NOT ask preference questions
+ Show products right away
 
 Example:
 User: "show me dresses"
@@ -3125,7 +3272,7 @@ Response: {
   "ready_to_search": true
 }
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 `;
         }
 
@@ -3136,9 +3283,9 @@ Response: {
 
             let instructions = `
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 PRODUCT SEARCH STRATEGY: ${strategy === 'ask_questions' ? 'ASK QUESTIONS' : 'MINIMAL QUESTIONS'}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 
 PREFERENCES TO COLLECT:
 `;
@@ -3166,7 +3313,7 @@ SEARCH QUERY CONSTRUCTION:
 When ready_to_search = true, build comprehensive query including ALL collected preferences.
 Example: "pink formal dresses wedding under 5000"
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 `;
 
             return instructions;
@@ -3175,9 +3322,9 @@ Example: "pink formal dresses wedding under 5000"
         if (strategy === 'adaptive') {
             return `
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 PRODUCT SEARCH STRATEGY: ADAPTIVE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 
 Use your intelligence to decide:
 - High-value items (>10,000): Ask 2-3 questions
@@ -3188,7 +3335,7 @@ Use your intelligence to decide:
 
 Adapt based on context and user behavior.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--------------------------------------------------------------------
 `;
         }
 

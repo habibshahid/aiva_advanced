@@ -389,6 +389,7 @@ class DocumentJobProcessor:
             
             # Update document in MySQL
             await self._update_document_completed(document_id, processing_stats)
+            await self._update_kb_stats(kb_id)
             
             # Update job status
             await self.update_job_status(
@@ -542,6 +543,101 @@ class DocumentJobProcessor:
             cursor.close()
             conn.close()
 
+    # Add this new method to the DocumentJobProcessor class
+
+    async def _update_kb_stats(self, kb_id: str):
+        """Update KB statistics after document processing"""
+        conn = self._get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        try:
+            # Count completed documents
+            cursor.execute(
+                """SELECT COUNT(*) as count FROM yovo_tbl_aiva_documents 
+                   WHERE kb_id = %s AND status = 'completed'""",
+                (kb_id,)
+            )
+            doc_count = cursor.fetchone()['count']
+            
+            # Count chunks
+            cursor.execute(
+                """SELECT COUNT(*) as count FROM yovo_tbl_aiva_document_chunks 
+                   WHERE kb_id = %s""",
+                (kb_id,)
+            )
+            chunk_count = cursor.fetchone()['count']
+            
+            # Count images
+            cursor.execute(
+                """SELECT COUNT(*) as count FROM yovo_tbl_aiva_images 
+                   WHERE kb_id = %s""",
+                (kb_id,)
+            )
+            image_count = cursor.fetchone()['count']
+            
+            # Count products
+            cursor.execute(
+                """SELECT COUNT(*) as count FROM yovo_tbl_aiva_products 
+                   WHERE kb_id = %s AND status = 'active'""",
+                (kb_id,)
+            )
+            product_count = cursor.fetchone()['count']
+            
+            # Calculate total size
+            cursor.execute(
+                """SELECT COALESCE(SUM(file_size_bytes), 0) as total_bytes 
+                   FROM yovo_tbl_aiva_documents WHERE kb_id = %s""",
+                (kb_id,)
+            )
+            
+            total_size = cursor.fetchone()['total_bytes']
+            total_size_mb = round(float(total_size) / (1024 * 1024), 2) if total_size else 0.0
+            
+            # Build stats JSON
+            stats = json.dumps({
+                "document_count": int(doc_count),
+                "chunk_count": int(chunk_count),
+                "image_count": int(image_count),
+                "product_count": int(product_count),
+                "total_size_mb": float(total_size_mb)
+            })
+            
+            # Count all documents (not just completed) for metadata
+            cursor.execute(
+                """SELECT COUNT(*) as count FROM yovo_tbl_aiva_documents 
+                   WHERE kb_id = %s AND status != 'deleted'""",
+                (kb_id,)
+            )
+            total_doc_count = cursor.fetchone()['count']
+            
+            # Update KB stats and metadata
+            cursor.execute(
+                """UPDATE yovo_tbl_aiva_knowledge_bases 
+                   SET stats = %s,
+                       has_documents = %s,
+                       has_products = %s,
+                       document_count = %s,
+                       product_count = %s,
+                       content_updated_at = NOW()
+                   WHERE id = %s""",
+                (
+                    stats,
+                    total_doc_count > 0,
+                    product_count > 0,
+                    total_doc_count,
+                    product_count,
+                    kb_id
+                )
+            )
+            conn.commit()
+            logger.info(f"Updated KB stats for {kb_id}: docs={doc_count}, chunks={chunk_count}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update KB stats for {kb_id}: {e}")
+            conn.rollback()
+        finally:
+            cursor.close()
+            conn.close()
 
 # Singleton instance
 _job_processor: Optional[DocumentJobProcessor] = None
