@@ -1446,7 +1446,30 @@ const AgentEditor = () => {
                 and perfect for text chat. Upgrade to GPT-4o for complex reasoning tasks.
               </p>
             </div>
+			
+			<div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Knowledge Search
+              </label>
+              <select
+                value={agent.knowledge_search_mode || 'auto'}
+                onChange={(e) => setAgent({ ...agent, knowledge_search_mode: e.target.value })}
+                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              >
+                
+				<option key="auto" value="auto">
+				  Auto - LLM will decide
+				</option>
+				<option key="always" value="always">
+				  Always search the knowledge base
+				</option>
+				<option key="never" value="never">
+				  Follow Instructions only
+				</option>
+              </select>
+            </div>
           </div>
+		  
 		  
           <div>
 			  <div className="flex items-center justify-between mb-2">
@@ -2063,7 +2086,7 @@ const AgentEditor = () => {
                 <strong>GPT-4o Mini:</strong> Faster responses, lower cost (~$0.024/min audio), suitable for simple conversations.
               </p>
             </div>
-
+			
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Temperature: <span className="text-primary-600 font-semibold">{agent.temperature}</span>

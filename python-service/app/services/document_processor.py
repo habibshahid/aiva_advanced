@@ -35,6 +35,7 @@ from app.services.embeddings import EmbeddingService
 from app.services.vector_store import VectorStore
 from app.services.pdf_image_extractor import PDFImageExtractor
 from app.models.responses import DocumentProcessingResult, EmbeddingResult
+from app.services.table_processor import get_table_processor
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,8 @@ class DocumentProcessor:
                 file_content,
                 document_id=document_id,
                 kb_id=kb_id,
-                tenant_id=tenant_id
+                tenant_id=tenant_id,
+                filename=filename
             )
         elif file_ext in ['docx', 'doc'] or 'word' in content_type:
             return await self._extract_docx(file_content)
@@ -248,16 +250,18 @@ class DocumentProcessor:
         file_content: bytes, 
         document_id: str = None, 
         kb_id: str = None, 
-        tenant_id: str = None
+        tenant_id: str = None,
+        filename: str = None  # NEW: Add filename parameter
     ) -> Dict[str, Any]:
         """
-        Extract text AND images from PDF
+        Extract text, images, AND tables from PDF
         
         Args:
             file_content: PDF file bytes
             document_id: Document ID (required for image extraction)
             kb_id: Knowledge base ID (required for image extraction)
             tenant_id: Tenant ID (required for image extraction)
+            filename: Original filename for context
         """
         try:
             import fitz  # PyMuPDF
@@ -277,17 +281,49 @@ class DocumentProcessor:
             
             full_text = "\n\n".join(text_parts)
             
+            # ============================================
+            # NEW: Process tables using TableProcessor
+            # ============================================
+            table_processor = get_table_processor()
+            document_name = filename.rsplit('.', 1)[0] if filename else "Document"
+            
+            table_result = await table_processor.process_document_tables(
+                pdf_content=file_content,
+                document_name=document_name,
+                document_context=document_name
+            )
+            
+            tables_found = table_result.get("tables_found", 0)
+            table_descriptions = table_result.get("table_descriptions", [])
+            table_chunks = table_result.get("table_chunks", [])
+            processing_stats = table_result.get("processing_stats", {})
+            
+            logger.info(f"PDF table processing: {tables_found} tables found, {len(table_descriptions)} descriptions, {len(table_chunks)} row chunks")
+            
+            # Append table descriptions to the document text
+            # This ensures they get chunked and embedded
+            if table_descriptions:
+                table_section = "\n\n" + "=" * 50 + "\n"
+                table_section += "TABLE DATA (Natural Language)\n"
+                table_section += "=" * 50 + "\n\n"
+                
+                for desc in table_descriptions:
+                    table_section += f"\n{desc['content']}\n\n---\n"
+                
+                full_text += table_section
+            
+            # ============================================
+            # END NEW: Table processing
+            # ============================================
+            
             # Extract images if document_id, kb_id, and tenant_id are provided
             extracted_images = []
             image_count = 0
-            
-            print(f"Extracting PDF")
             
             if document_id and kb_id and tenant_id:
                 try:
                     logger.info(f"Extracting images from PDF document {document_id}...")
                     
-                    # Extract images using PyMuPDF
                     extracted_images = await self.pdf_image_extractor.extract_pdf_images(
                         pdf_content=file_content,
                         document_id=document_id,
@@ -297,25 +333,22 @@ class DocumentProcessor:
                     
                     image_count = len(extracted_images)
                     logger.info(f"✅ Extracted {image_count} images from PDF")
-                    print(f"✅ Extracted {image_count} images from PDF")
                     
-                    # Process each extracted image for embeddings
                     if image_count > 0:
                         await self._process_extracted_images(extracted_images, kb_id, tenant_id)
                         
                 except Exception as e:
                     logger.error(f"Error extracting images from PDF: {e}")
-                    # Don't fail the whole document processing if image extraction fails
                     image_count = 0
-            else:
-                logger.warning("Skipping image extraction: document_id, kb_id, or tenant_id not provided")
             
             return {
                 "text": full_text,
                 "pages": total_pages,
                 "images": image_count,
-                "extracted_images": extracted_images,  # Image metadata list
-                "tables": 0  # TODO: Detect tables
+                "extracted_images": extracted_images,
+                "tables": tables_found,  # UPDATED: Now returns actual count
+                "table_chunks": table_chunks,  # NEW: Row-level chunks for precise retrieval
+                "table_processing_stats": processing_stats  # NEW: Stats for monitoring
             }
             
         except Exception as e:
@@ -715,6 +748,7 @@ class DocumentProcessor:
             },
             preserve_formatting=True
         )
+        
         
         # Generate embeddings
         embeddings_result = await self.embedding_service.generate_embeddings_for_chunks(

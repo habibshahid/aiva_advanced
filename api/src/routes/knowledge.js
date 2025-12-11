@@ -1517,5 +1517,23 @@ router.post('/:kbId/documents/:documentId/reprocess', authenticate, async (req, 
   }
 });
 
+router.post('/document-complete', async (req, res) => {
+  // Verify internal key
+  const internalKey = req.headers['x-internal-key'];
+  
+  if (internalKey !== process.env.PYTHON_SERVICE_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { document_id, kb_id } = req.body;
+  
+  try {
+    await KnowledgeService._handleDocumentCompletion(document_id, kb_id);
+    res.json({ success: true, message: 'Cost deduction processed' });
+  } catch (error) {
+    console.error('Document completion webhook error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 module.exports = router;

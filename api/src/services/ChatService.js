@@ -32,30 +32,47 @@ class ChatService {
      * @returns {Promise<Object>} Created session
      */
     async createSession({
-        tenantId,
-        agentId,
-        userId = null,
-        sessionName = null,
-        metadata = {}
-    }) {
-        const sessionId = uuidv4();
+		tenantId,
+		agentId,
+		userId = null,
+		sessionName = null,
+		metadata = {},
+		// New channel fields
+		channel = 'public_chat',
+		channelUserId = null,
+		channelUserName = null,
+		channelMetadata = null,
+		contextData = null,
+		llmContextHints = null
+	}) {
+		const sessionId = uuidv4();
 
-        await db.query(
-            `INSERT INTO yovo_tbl_aiva_chat_sessions (
-        id, tenant_id, agent_id, user_id, session_name, status, metadata
-      ) VALUES (?, ?, ?, ?, ?, 'active', ?)`,
-            [
-                sessionId,
-                tenantId,
-                agentId,
-                userId,
-                sessionName,
-                JSON.stringify(metadata)
-            ]
-        );
+		await db.query(
+			`INSERT INTO yovo_tbl_aiva_chat_sessions (
+				id, tenant_id, agent_id, channel, channel_user_id, channel_user_name,
+				channel_metadata, context_data, llm_context_hints,
+				user_id, session_name, status, metadata
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+			[
+				sessionId,
+				tenantId,
+				agentId,
+				channel,
+				channelUserId,
+				channelUserName,
+				channelMetadata ? JSON.stringify(channelMetadata) : null,
+				contextData ? JSON.stringify(contextData) : null,
+				llmContextHints,
+				userId,
+				sessionName,
+				JSON.stringify(metadata)
+			]
+		);
 
-        return this.getSession(sessionId);
-    }
+		console.log(`📱 Chat session created: ${sessionId} | Channel: ${channel} | User: ${channelUserId || 'anonymous'}`);
+
+		return this.getSession(sessionId);
+	}
 
     /**
      * Get chat session
@@ -63,30 +80,37 @@ class ChatService {
      * @returns {Promise<Object|null>} Session or null
      */
     async getSession(sessionId) {
-        const [sessions] = await db.query(
-            `SELECT 
-        cs.*,
-        a.name as agent_name,
-        a.kb_id
-      FROM yovo_tbl_aiva_chat_sessions cs
-      LEFT JOIN yovo_tbl_aiva_agents a ON cs.agent_id = a.id
-      WHERE cs.id = ?`,
-            [sessionId]
-        );
+		const [sessions] = await db.query(
+			`SELECT 
+				cs.*,
+				a.name as agent_name,
+				a.kb_id,
+				a.knowledge_search_mode
+			FROM yovo_tbl_aiva_chat_sessions cs
+			LEFT JOIN yovo_tbl_aiva_agents a ON cs.agent_id = a.id
+			WHERE cs.id = ?`,
+			[sessionId]
+		);
 
-        if (sessions.length === 0) {
-            return null;
-        }
+		if (sessions.length === 0) {
+			return null;
+		}
 
-        const session = sessions[0];
+		const session = sessions[0];
 
-        return {
-            ...session,
-            metadata: session.metadata ?
-                (typeof session.metadata === 'string' ? JSON.parse(session.metadata) : session.metadata) :
-                {}
-        };
-    }
+		return {
+			...session,
+			metadata: session.metadata ?
+				(typeof session.metadata === 'string' ? JSON.parse(session.metadata) : session.metadata) :
+				{},
+			channel_metadata: session.channel_metadata ?
+				(typeof session.channel_metadata === 'string' ? JSON.parse(session.channel_metadata) : session.channel_metadata) :
+				null,
+			context_data: session.context_data ?
+				(typeof session.context_data === 'string' ? JSON.parse(session.context_data) : session.context_data) :
+				null
+		};
+	}
 
     /**
      * List chat sessions for tenant
@@ -296,7 +320,14 @@ class ChatService {
         userId = null
     }) {
         // Get or create session
-		console.log('@@@@@@@@@@', message)
+		console.log('@@@@@@@@@@', 
+			sessionId,
+			agentId,
+			message,
+			image,
+			userId
+		)
+		
         let session;
 		let agent;
 		
@@ -312,7 +343,13 @@ class ChatService {
 					tenantId: agent.tenant_id,
 					agentId: agentId,
 					userId: userId,
-					sessionName: message.substring(0, 50)
+					sessionName: message.substring(0, 50),
+					channel: channelInfo?.channel || 'public_chat',
+					channelUserId: channelInfo?.channelUserId || null,
+					channelUserName: channelInfo?.channelUserName || null,
+					channelMetadata: channelInfo?.channelMetadata || null,
+					contextData: channelInfo?.contextData || null,
+					llmContextHints: channelInfo?.llmContextHints || null
 				});
 				sessionId = session.id;
             }
@@ -326,7 +363,13 @@ class ChatService {
                 tenantId: agent.tenant_id,
                 agentId: agentId,
                 userId: userId,
-                sessionName: message.substring(0, 50)
+                sessionName: message.substring(0, 50),
+				channel: channelInfo?.channel || 'public_chat',
+				channelUserId: channelInfo?.channelUserId || null,
+				channelUserName: channelInfo?.channelUserName || null,
+				channelMetadata: channelInfo?.channelMetadata || null,
+				contextData: channelInfo?.contextData || null,
+				llmContextHints: channelInfo?.llmContextHints || null
             });
             sessionId = session.id;
         }
@@ -342,17 +385,29 @@ class ChatService {
 		const userMessageId = userMessageResult.messageId || userMessageResult; // Handle both old/new format
 
 		// Track user message analysis cost
-		const userAnalysisCost = typeof userMessageResult === 'object' 
-			? (userMessageResult.analysisCost + userMessageResult.translationCost)
-			: 0.0;
+		const userAnalysisCost = 0;
 			
         // Get agent with full configuration
         agent = await AgentService.getAgent(session.agent_id);
 
+		agent.sessionContext = {
+			channel: session.channel,
+			channel_user_id: session.channel_user_id,
+			channel_user_name: session.channel_user_name,
+			channel_metadata: session.channel_metadata,
+			context_data: session.context_data,
+			llm_context_hints: session.llm_context_hints
+		};
+	
         // Get conversation history
-        const history = await this.getConversationHistory(sessionId, 10);
-		
-        const isFirstMessage = history.length === 0;
+		const history = await this.getConversationHistory(sessionId, 10);
+
+		// Check if this is the first ASSISTANT message (ignore user messages we just saved)
+		// First message = no assistant messages in history yet
+		const assistantMessagesCount = history.filter(msg => msg.role === 'assistant').length;
+		const isFirstMessage = assistantMessagesCount === 0;
+
+		console.log(`📊 History: ${history.length} messages, ${assistantMessagesCount} assistant messages, isFirstMessage: ${isFirstMessage}`);
 
         // ============================================
         // 🖼️ IMAGE DETECTION - AUTOMATIC SEARCH PATH
@@ -1191,10 +1246,74 @@ class ChatService {
 		// Parse JSON response (should always be valid JSON now)
 		try {
 			llmDecision = JSON.parse(aiMessage.content);
-			console.log('@@@@@@@@@@@@@@@@@@@@@@', llmDecision, agent.kb_metadata)
-			llmDecision.knowledge_search_needed = (!llmDecision.knowledge_search_needed && agent.kb_metadata.has_documents) ? true : llmDecision.knowledge_search_needed
-			console.log('@@@@@@@@@@@@@@@@@@@@@@', llmDecision)
+			//console.log('llmDecision Before', llmDecision, agent.kb_metadata)
+			
+			//llmDecision.knowledge_search_needed = (!llmDecision.knowledge_search_needed && agent.kb_metadata.has_documents) ? true : llmDecision.knowledge_search_needed
+			//llmDecision.knowledge_search_query = (!llmDecision.knowledge_search_needed && agent.kb_metadata.has_documents) ? true : (llmDecision.knowledge_search_query ? llmDecision.knowledge_search_query : message)
+			
+			//console.log('llmDecision After', llmDecision)
 			console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
+			
+			// ============================================
+			// 🚨 EMPTY RESPONSE FALLBACK
+			// ============================================
+			if (!llmDecision.response || llmDecision.response.trim() === '') {
+				console.log('⚠️ LLM returned empty response - generating fallback');
+				
+				const isTrivial = this._isTrivialMessage(message);
+				
+				if (isTrivial) {
+					// It's a greeting/thanks/bye - provide appropriate response
+					if (/^(hi|hello|hey|hii+|helo+|assalam|aoa|salam)/i.test(message.toLowerCase().trim())) {
+						// Greeting - use agent's greeting if available, otherwise default
+						llmDecision.response = agent.greeting || "Hello! How can I help you today?";
+						console.log('👋 Using greeting response for trivial message');
+					} else if (/^(thanks|thank|shukriya|thx|ty)/i.test(message.toLowerCase().trim())) {
+						// Thanks
+						llmDecision.response = "You're welcome! Is there anything else I can help you with?";
+					} else if (/^(bye|goodbye|allah\s*hafiz|khuda\s*hafiz)/i.test(message.toLowerCase().trim())) {
+						// Goodbye
+						llmDecision.response = "Goodbye! Feel free to reach out if you need any help. Allah Hafiz!";
+						llmDecision.conversation_complete = true;
+						llmDecision.user_wants_to_end = true;
+					} else {
+						// Other trivial (yes/no/ok)
+						llmDecision.response = "I understand. How can I assist you further?";
+					}
+				} else {
+					// Non-trivial message but empty response - this shouldn't happen
+					llmDecision.response = "I apologize, but I encountered an issue. Could you please repeat your question?";
+					console.log('❌ Empty response for non-trivial message - using error fallback');
+				}
+			}
+			
+			// ============================================
+			// 🔍 KNOWLEDGE SEARCH MODE OVERRIDE
+			// ============================================
+			const searchMode = agent.knowledge_search_mode || 'auto';
+			const isTrivialMsg = this._isTrivialMessage(message);
+
+			// ALWAYS MODE: Force search for non-trivial, PREVENT for trivial
+			if (searchMode === 'always' && agent.kb_id) {
+				if (isTrivialMsg) {
+					// Trivial message - DON'T search even in always mode
+					if (llmDecision.knowledge_search_needed) {
+						console.log('🚫 [OVERRIDE] Trivial message detected → Disabling KB search');
+						llmDecision.knowledge_search_needed = false;
+					}
+				} else if (!llmDecision.knowledge_search_needed) {
+					// Non-trivial message - FORCE search
+					console.log('🔍 [OVERRIDE] knowledge_search_mode=always → Forcing KB search');
+					llmDecision.knowledge_search_needed = true;
+					llmDecision.knowledge_search_query = llmDecision.knowledge_search_query || message;
+				}
+			} else if (searchMode === 'never') {
+				// NEVER mode: Disable knowledge search entirely
+				if (llmDecision.knowledge_search_needed) {
+					console.log('🚫 [OVERRIDE] knowledge_search_mode=never → Disabling search');
+					llmDecision.knowledge_search_needed = false;
+				}
+			}
 		} catch (parseError) {
 			console.error('❌ Failed to parse LLM response as JSON:', parseError.message);
 			console.error('📄 Raw response:', aiMessage.content?.substring(0, 500));
@@ -1226,10 +1345,15 @@ class ChatService {
 			console.log(`🔧 Function call requested: ${llmDecision.function_name}`);
 			console.log(`📋 Arguments:`, llmDecision.function_arguments);
 			
+			const builtInFunctions = ['check_order_status'];
+			const isBuiltInFunction = builtInFunctions.includes(llmDecision.function_name);
+	
 			// Verify function exists
-			const requestedFunction = agent.functions?.find(
-				fn => fn.name === llmDecision.function_name && fn.is_active !== false
-			);
+			const requestedFunction = isBuiltInFunction 
+				? { name: llmDecision.function_name, is_active: true, _builtin: true }
+				: agent.functions?.find(
+					fn => fn.name === llmDecision.function_name && fn.is_active !== false
+				);
 			
 			if (requestedFunction) {
 				try {
@@ -1240,7 +1364,7 @@ class ChatService {
 						llmDecision.function_arguments || {}
 					);
 					
-					console.log(`✅ Function executed:`, functionResult);
+					console.log(`✅ Function executed:`, functionResult.status);
 					
 					executedFunctionCalls.push({
 						function_id: uuidv4(),
@@ -1524,10 +1648,11 @@ class ChatService {
 						}
 					});
 
-					console.log('🔍 Knowledge search results:', {
+					console.log('🔍 Knowledge search results 2:', {
 						text_results: searchResult.results?.text_results?.length || 0,
 						image_results: searchResult.results?.image_results?.length || 0,
-						product_results: searchResult.results?.product_results?.length || 0
+						product_results: searchResult.results?.product_results?.length || 0,
+						//text_result: searchResult.results?.text_results
 					});
 
 					knowledgeResults = searchResult.results;
@@ -1784,10 +1909,11 @@ class ChatService {
                 knowledgeResults = searchResult.results;
                 knowledgeCost = searchResult.cost_breakdown;
 
-                console.log('🔍 Knowledge search results:', {
+                console.log('🔍 Knowledge search results 1:', {
                     text_results: searchResult.results?.text_results?.length || 0,
                     image_results: searchResult.results?.image_results?.length || 0,
-                    product_results: searchResult.results?.product_results?.length || 0
+                    product_results: searchResult.results?.product_results?.length || 0,
+					//text_result: searchResult.results?.text_results
                 });
 
                 // Log first image result to see structure
@@ -1809,7 +1935,6 @@ class ChatService {
                     const messagesWithContext = [{
                             role: 'system',
                             content: `${systemPrompt}
-
 --------------------------------------------------------------------
 SEARCH RESULTS FROM KNOWLEDGE BASE
 --------------------------------------------------------------------
@@ -1849,7 +1974,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 								type: "json_object"
 							},
 							temperature: parseFloat(agent.temperature) || 0.7,
-							max_tokens: 2048  // ✅ Sufficient for JSON response, prevents timeout
+							max_tokens: 4096  // ✅ Sufficient for JSON response, prevents timeout
 						});
 
 						const finalMessage = finalCompletion.choices[0].message;
@@ -2104,44 +2229,183 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         };
     }
 
-
     /**
-     * Build system prompt with conversation strategy based on KB content type
-     * @private
-     */
-    _buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false, kbMetadata = {}, agent = null) {
-        // Start with base instructions
-        let systemPrompt = baseInstructions || '';
+	 * Build system prompt with conversation strategy based on KB content type
+	 * @private
+	 */
+	_buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false, kbMetadata = {}, agent = null) {
+		// Start with base instructions
+		let systemPrompt = baseInstructions || '';
 
-        // Add greeting instructions
-        if (greeting) {
-            const greetingInstructions = `
+		// ============================================
+		// 📱 CHANNEL CONTEXT INJECTION
+		// ============================================
+		if (agent?.sessionContext) {
+			const ctx = agent.sessionContext;
+			
+			let channelContextPrompt = `
+
+		--------------------------------------------------------------------
+		📱 CHANNEL & USER CONTEXT
+		--------------------------------------------------------------------
+
+		`;
+		
+			// Add channel info
+			if (ctx.channel) {
+				channelContextPrompt += `Channel: ${ctx.channel.toUpperCase()}\n`;
+			}
+			
+			// Add user info
+			if (ctx.channel_user_id) {
+				channelContextPrompt += `User ID: ${ctx.channel_user_id}\n`;
+			}
+			if (ctx.channel_user_name) {
+				channelContextPrompt += `User Name: ${ctx.channel_user_name}\n`;
+			}
+			
+			// Add custom context data
+			if (ctx.context_data && Object.keys(ctx.context_data).length > 0) {
+				channelContextPrompt += `\n===== CUSTOM CONTEXT =====\n`;
+				Object.entries(ctx.context_data).forEach(([key, value]) => {
+					channelContextPrompt += `${key}: ${value}\n`;
+				});
+				channelContextPrompt += `===== END OF CUSTOM CONTEXT =====\n`;
+			}
+			
+			// Add LLM-specific hints
+			if (ctx.llm_context_hints) {
+				channelContextPrompt += `\n===== CRITICAL LLM INSTRUCTIONS =====\n`;
+				channelContextPrompt += ctx.llm_context_hints;
+				channelContextPrompt += `\n===== END OF CRITICAL INSTRUCTIONS =====\n`;
+			}
+			
+			// Add channel-specific default instructions
+			const channelDefaults = this._getChannelDefaultInstructions(ctx.channel);
+			if (channelDefaults) {
+				channelContextPrompt += channelDefaults;
+			}
+			
+			channelContextPrompt += `
+		--------------------------------------------------------------------
+		`;
+			
+			systemPrompt += channelContextPrompt;
+		}
+			
+		const searchMode = agent?.knowledge_search_mode || 'auto';
+    
+		// ============================================
+		// 🔍 SEARCH MODE INSTRUCTIONS
+		// ============================================
+		if (searchMode === 'always' && agent?.kb_id) {
+			systemPrompt += `
 
 	--------------------------------------------------------------------
-	GREETING MESSAGE ${isFirstMessage ? '⚠️ FIRST MESSAGE - USE GREETING NOW!' : ''}
+	⚠️ MANDATORY KNOWLEDGE BASE SEARCH MODE ENABLED
 	--------------------------------------------------------------------
 
-	${isFirstMessage ? `
-	CRITICAL: THIS IS THE FIRST MESSAGE IN THE CONVERSATION!
+	This agent is configured to ALWAYS search the knowledge base.
 
-	You MUST begin your response with this exact greeting:
-	"${greeting}"
+	SET knowledge_search_needed = true FOR ALL QUESTIONS.
 
-	Then naturally transition to helping the user based on their message.
-	` : `
-	GREETING: "${greeting}"
+	The ONLY exceptions (no search needed):
+	- Pure greetings: "hi", "hello", "assalam o alaikum"
+	- Pure thanks: "thanks", "thank you", "shukriya"  
+	- Pure goodbyes: "bye", "allah hafiz"
+	- Simple confirmations: "yes", "no", "ok"
 
-	This greeting should ONLY be used for the FIRST message of a NEW conversation.
-	Since there are already messages in the conversation history, DO NOT repeat the greeting.
-	Continue the conversation naturally.
-	`}
+	FOR EVERYTHING ELSE → knowledge_search_needed = true
+
+	You have NO built-in knowledge about this data. ALWAYS SEARCH FIRST.
 
 	--------------------------------------------------------------------
 	`;
-            systemPrompt += greetingInstructions;
-        }
+		} else if (searchMode === 'never') {
+			systemPrompt += `
 
-        const KNOWLEDGE_FORMATTING_INSTRUCTION = `
+	--------------------------------------------------------------------
+	KNOWLEDGE SEARCH DISABLED
+	--------------------------------------------------------------------
+
+	This agent does not use knowledge base search.
+	Answer based on your instructions only.
+	Set knowledge_search_needed = false always.
+
+	--------------------------------------------------------------------
+	`;
+	systemPrompt += channelContextPrompt;
+	}
+		// ============================================
+		// 🔍 DETECT WHAT USER HAS ALREADY DEFINED
+		// ============================================
+		const coverage = this._detectInstructionCoverage(baseInstructions);
+		
+		console.log('📋 Instruction coverage:', JSON.stringify(coverage));
+
+		// ============================================
+		// 🌐 LANGUAGE MATCHING RULE (if not defined by user)
+		// ============================================
+		if (!coverage.hasLanguageRules) {
+			const languageRule = `
+
+	--------------------------------------------------------------------
+	🌐 LANGUAGE MATCHING RULE
+	--------------------------------------------------------------------
+
+	RESPOND IN THE SAME LANGUAGE THE CUSTOMER USES:
+	- Customer writes in ENGLISH → Respond in ENGLISH
+	- Customer writes in URDU/ROMAN URDU → Respond in ROMAN URDU
+	- Customer mixes both → Match their primary language
+
+	NOTE: Examples below may show one language for illustration, but YOU must always match the customer's language.
+
+	--------------------------------------------------------------------
+	`;
+			systemPrompt += languageRule;
+		}
+
+		// Add greeting instructions
+		if (greeting) {
+			const greetingInstructions = `
+
+		--------------------------------------------------------------------
+		GREETING MESSAGE ${isFirstMessage ? '⚠️ FIRST MESSAGE - USE GREETING NOW!' : ''}
+		--------------------------------------------------------------------
+
+		${isFirstMessage ? `
+		CRITICAL: THIS IS THE FIRST MESSAGE IN THE CONVERSATION!
+
+		You MUST begin your response with this exact greeting:
+		"${greeting}"
+
+		Then naturally transition to helping the user based on their message.
+
+		EXAMPLE for greeting like "hi" or "hello":
+		{
+		  "response": "${greeting}",
+		  "knowledge_search_needed": false,
+		  "conversation_complete": false,
+		  "user_wants_to_end": false
+		}
+		` : `
+		GREETING: "${greeting}"
+
+		This greeting was already used at the start. DO NOT repeat it.
+		Continue the conversation naturally.
+
+		For simple greetings (hi, hello), respond warmly like:
+		"Hello! How can I help you today?" or "Hi there! What can I assist you with?"
+
+		NEVER return an empty response. Always say something helpful.
+		`}
+
+		--------------------------------------------------------------------
+		`;
+			systemPrompt += greetingInstructions;
+		}
+
+		const KNOWLEDGE_FORMATTING_INSTRUCTION = `
 	KNOWLEDGE BASE FORMATTING:
 	- Knowledge base content is provided with markdown formatting
 	- Headers use # syntax (# Header, ## Subheader)
@@ -2155,14 +2419,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- When these are present, relevant images are provided separately in the images array
 	- Reference these images when answering visual questions
 	`;
-        systemPrompt += KNOWLEDGE_FORMATTING_INSTRUCTION;
+		systemPrompt += KNOWLEDGE_FORMATTING_INSTRUCTION;
 
-        // Determine KB content type
-        const hasProducts = kbMetadata.has_products || false;
-        const hasDocuments = kbMetadata.has_documents || false;
+		// Determine KB content type
+		const hasProducts = kbMetadata.has_products || false;
+		const hasDocuments = kbMetadata.has_documents || false;
 
-        // Add JSON response format instructions - ALWAYS INCLUDE THIS
-        const jsonFormatInstructions = `
+		// Add JSON response format instructions - ALWAYS INCLUDE THIS
+		const jsonFormatInstructions = `
 
 	--------------------------------------------------------------------
 	CRITICAL: JSON RESPONSE FORMAT (RFC 8259 COMPLIANT)
@@ -2199,9 +2463,12 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	--------------------------------------------------------------------
 	`;
 
-        systemPrompt += jsonFormatInstructions;
+		systemPrompt += jsonFormatInstructions;
 
-	const productSearchDecisionInstructions = `
+		// ============================================
+		// PRODUCT SEARCH DECISION LOGIC (Language-neutral examples)
+		// ============================================
+		const productSearchDecisionInstructions = `
 
 	--------------------------------------------------------------------
 	SMART PRODUCT SEARCH DECISION LOGIC
@@ -2224,13 +2491,13 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Look for pattern: "AiVA Product ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 	- Look for pattern: "Shopify Product ID: 1234567890"
 	- Look for pattern: "Purchase URL: https://store.myshopify.com/products/..."
-	
+
 	RESPONSE FORMAT:
 	{
-	  "response": "Main is product ki details check kar rahi hoon...",
+	  "response": "[Acknowledge you're checking product details - use customer's language]",
 	  "product_search_needed": true,
 	  "product_search_type": "single",
-	  "product_id": "8cbaf5af-7212-497e-ba95-6269dfa9199d",  // Extract from message
+	  "product_id": "8cbaf5af-7212-497e-ba95-6269dfa9199d",
 	  "product_search_query": null,
 	  "ready_to_search": true
 	}
@@ -2240,14 +2507,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	--------------------------------------------------------------------
 
 	Use when:
-	 User asks general question: "show me red dresses"
-	 User wants recommendations: "kuch formal shirts dikhao"
+	 User asks general question: "show me red dresses", "kuch formal shirts dikhao"
+	 User wants recommendations
 	 User browsing: "what do you have under 5000?"
 	 User searching by category/color/style/price
 
 	RESPONSE FORMAT:
 	{
-	  "response": "Main aap ke liye products dhundh rahi hoon...",
+	  "response": "[Acknowledge you're searching for products - use customer's language]",
 	  "product_search_needed": true,
 	  "product_search_type": "multi",
 	  "product_id": null,
@@ -2267,7 +2534,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	RESPONSE FORMAT:
 	{
-	  "response": "Aap kis product ke baare mein pooch rahe hain? Please product ka naam batayein ya WhatsApp par us message ko reply karein jis mein product ki photo hai.",
+	  "response": "[Ask which product they mean - use customer's language]",
 	  "product_search_needed": false,
 	  "product_search_type": "none",
 	  "needs_clarification": true
@@ -2285,7 +2552,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	RESPONSE FORMAT:
 	{
-	  "response": "Your answer here...",
+	  "response": "[Your answer - use customer's language]",
 	  "product_search_needed": false,
 	  "product_search_type": "none"
 	}
@@ -2307,7 +2574,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	REQUIRED OUTPUT:
 	{
-	  "response": "Main is product ki details check kar rahi hoon...",
+	  "response": "[Checking product details - match customer's language]",
 	  "product_search_needed": true,
 	  "product_search_type": "single",
 	  "product_id": "01ba7c2b-7ac7-4c52-9d12-0c2896426270",
@@ -2341,17 +2608,17 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	STEP 2: Use product_search_type = "single" with that Product ID
 
 	EXAMPLES:
-	
+
 	User previously saw: "Product ID: abc-123, Name: Pine Trees Shawl"
 	User now asks: "is ki length kya hai?" or "what's the length of this?"
-	
+
 	CORRECT:
 	{
 	  "product_search_type": "single",
 	  "product_id": "abc-123",
 	  "product_search_query": null
 	}
-	
+
 	WRONG:
 	{
 	  "product_search_type": "multi",
@@ -2374,36 +2641,36 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	--------------------------------------------------------------------
 
 	User asks about product(s)
-	         │
-	         ▼
+			 │
+			 ▼
 	┌─────────────────────────────────────┐
 	│ Does message contain Product ID?    │
 	│ (AiVA Product ID: xxx)              │
 	└─────────────────────────────────────┘
-	         │
-	    YES  │  NO
-	         ▼         ▼
+			 │
+		YES  │  NO
+			 ▼         ▼
 	┌─────────────┐   ┌─────────────────────────────────┐
 	│ SINGLE      │   │ Is user referencing a specific  │
 	│ search_type │   │ product from history?           │
 	│ = "single"  │   └─────────────────────────────────┘
 	│ Extract ID  │            │
 	└─────────────┘       YES  │  NO / UNCLEAR
-	                           ▼         ▼
-	                    ┌─────────────┐   ┌─────────────────────────────┐
-	                    │ SINGLE      │   │ Is this a general product   │
-	                    │ Use ID from │   │ search request?             │
-	                    │ history     │   └─────────────────────────────┘
-	                    └─────────────┘            │
-	                                          YES  │  UNCLEAR
-	                                               ▼         ▼
-	                                        ┌─────────────┐   ┌─────────────┐
-	                                        │ MULTI       │   │ ASK FOR     │
-	                                        │ search_type │   │ CLARIFICATION│
-	                                        │ = "multi"   │   │ needs_      │
-	                                        └─────────────┘   │ clarification│
-	                                                          │ = true      │
-	                                                          └─────────────┘
+							   ▼         ▼
+						┌─────────────┐   ┌─────────────────────────────┐
+						│ SINGLE      │   │ Is this a general product   │
+						│ Use ID from │   │ search request?             │
+						│ history     │   └─────────────────────────────┘
+						└─────────────┘            │
+											  YES  │  UNCLEAR
+												   ▼         ▼
+											┌─────────────┐   ┌─────────────┐
+											│ MULTI       │   │ ASK FOR     │
+											│ search_type │   │ CLARIFICATION│
+											│ = "multi"   │   │ needs_      │
+											└─────────────┘   │ clarification│
+															  │ = true      │
+															  └─────────────┘
 
 	--------------------------------------------------------------------
 	5️⃣ SHOW MORE PRODUCTS (show_more_products = true)
@@ -2417,7 +2684,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	RESPONSE FORMAT:
 	{
-	  "response": "Here are more options for you...",
+	  "response": "[Show more products - match customer's language]",
 	  "product_search_needed": false,
 	  "product_search_type": "none",
 	  "show_more_products": true
@@ -2447,7 +2714,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	EXAMPLE SCENARIO:
 	Previous message: You showed 5 shawls
-	User now says: "i wanna buy it"
+	User now says: "i wanna buy it" or "yeh chahiye"
 
 	WRONG:
 	{
@@ -2459,7 +2726,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	CORRECT:
 	{
-	  "response": "Zaroor! Aap ne jo 5 shawls dekhi hain, un mein se kaunsi pasand aayi? Mujhe product ka naam ya number bata dein.",
+	  "response": "[Ask which of the products they want - match customer's language]",
 	  "product_search_needed": false,
 	  "product_search_type": "none",
 	  "needs_clarification": true,
@@ -2467,10 +2734,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	}
 
 	PURCHASE INTENT PHRASES:
-	- "buy it" / "order it" / "I want it" / "I'll take it"
-	- "kharidna hai" / "order karna hai" / "yeh chahiye"
+	- English: "buy it" / "order it" / "I want it" / "I'll take it"
+	- Urdu: "kharidna hai" / "order karna hai" / "yeh chahiye" / "main le lungi" / "pack kar do"
 	- "how to buy" / "how to order" / "delivery time"
-	- "main le lungi" / "pack kar do"
 
 	RULE: If user shows purchase intent but reference is ambiguous:
 	1. DO NOT search for products again
@@ -2480,12 +2746,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	5. Set order_intent_detected = true
 	--------------------------------------------------------------------
 	`;
-	
+
 		if (hasProducts) {
 			systemPrompt += productSearchDecisionInstructions;
 		}
 		
-        const closureInstructions = `
+		// ============================================
+		// CONVERSATION CLOSURE DETECTION (Language-neutral examples)
+		// ============================================
+		const closureInstructions = `
 
 	--------------------------------------------------------------------
 	CONVERSATION CLOSURE DETECTION
@@ -2501,8 +2770,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	 User's needs appear to be met
 
 	WHEN conversation_complete = true:
-	- Ask: "Kya main aur kisi tarah se aapki madad kar sakti hoon?" (or English equivalent)
-	- Or: "Is there anything else I can help you with?"
+	- Ask if there's anything else you can help with (in customer's language)
 	- Be natural and friendly
 	- Wait for user response
 
@@ -2521,9 +2789,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- "Shukriya, bas" / "Bas"
 
 	WHEN user_wants_to_end = true:
-	- Respond with warm closing message
+	- Respond with warm closing message (in customer's language)
 	- Thank them for their time
-	- Use "Allah Hafiz" or "Thank you for contacting us."
 	- Keep it brief and friendly
 	- Set BOTH conversation_complete = true AND user_wants_to_end = true
 
@@ -2532,15 +2799,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	User: "Show me dresses"
 	Assistant: [Shows products]
 	{
-	  "response": "Here are our beautiful dresses... Kya main aur kisi tarah se aapki madad kar sakti hoon?",
+	  "response": "[Your product response + ask if anything else needed - match customer's language]",
 	  "conversation_complete": true,
 	  "user_wants_to_end": false
 	}
 
-	User: "No, that's all"
+	User: "No, that's all" / "Nahi shukriya"
 	Assistant: [Closing message]
 	{
-	  "response": "Thank you for visiting us today! Allah Hafiz!",
+	  "response": "[Thank them and say goodbye - match customer's language]",
 	  "conversation_complete": true,
 	  "user_wants_to_end": true
 	}
@@ -2554,28 +2821,28 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	--------------------------------------------------------------------
 	`;
 
-        systemPrompt += closureInstructions;
+		systemPrompt += closureInstructions;
 
-        // ✅ ADD THIS NEW SECTION: Order/Purchase Intent Handling
-        const orderHandlingInstructions = this._getOrderHandlingInstructions(agent, hasProducts);
-        systemPrompt += orderHandlingInstructions;
+		// ✅ ADD THIS NEW SECTION: Order/Purchase Intent Handling
+		const orderHandlingInstructions = this._getOrderHandlingInstructions(agent, hasProducts);
+		systemPrompt += orderHandlingInstructions;
 
 
-        // Add conversation strategy ONLY if products exist
-        if (hasProducts && conversationStrategy?.preference_collection) {
-            const pc = conversationStrategy.preference_collection;
-            const strategyInstructions = this._generatePreferenceInstructions(pc);
-            systemPrompt += strategyInstructions;
-        }
+		// Add conversation strategy ONLY if products exist
+		if (hasProducts && conversationStrategy?.preference_collection) {
+			const pc = conversationStrategy.preference_collection;
+			const strategyInstructions = this._generatePreferenceInstructions(pc);
+			systemPrompt += strategyInstructions;
+		}
 
 		if (agent && agent.functions && agent.functions.length > 0) {
-			const functionInstructions = this._buildFunctionInstructions(agent.functions);
+			const functionInstructions = this._buildFunctionInstructions(agent.functions, agent);
 			systemPrompt += functionInstructions;
 		}
 
-        // Add knowledge base specific instructions
-        if (hasDocuments && hasProducts) {
-            systemPrompt += `
+		// Add knowledge base specific instructions
+		if (hasDocuments && hasProducts) {
+			systemPrompt += `
 
 	--------------------------------------------------------------------
 	HYBRID KNOWLEDGE BASE & PRODUCT CATALOG
@@ -2627,34 +2894,6 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Requests for clarification about YOUR question: "what do you mean?"
 
 	--------------------------------------------------------------------
-	NEVER HALLUCINATE - EXAMPLES:
-	--------------------------------------------------------------------
-
-	SCENARIO 1: User asks about data
-	User: "What is the stamp duty for 2024?"
-	WRONG: { "response": "The stamp duty is Rs. 50,000...", "knowledge_search_needed": false }
-	RIGHT: { "response": "Let me find that for you.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2024" }
-
-	SCENARIO 2: Follow-up question (MUST SEARCH AGAIN!)
-	[Previous: You searched and found stamp duty 2024 data]
-	User: "What about 2023?"
-	WRONG: { "response": "For 2023 it was Rs. 40,000...", "knowledge_search_needed": false }
-	RIGHT: { "response": "Let me check 2023 data.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023" }
-
-	SCENARIO 3: Comparison (NEW SEARCH NEEDED!)
-	User: "Compare 2023 and 2024"
-	WRONG: Use data from memory/previous context
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023 2024 comparison" }
-
-	SCENARIO 4: Different topic
-	User: "What is the return policy?"
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "return policy refund" }
-
-	SCENARIO 5: Complaint/Issue
-	User: "I have a problem with my order"
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "order issues complaints process" }
-
-	--------------------------------------------------------------------
 	QUICK DECISION RULE:
 	--------------------------------------------------------------------
 
@@ -2666,9 +2905,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	- WHEN IN DOUBT → ALWAYS SEARCH!
 	- SEARCHING TOO MUCH IS BETTER THAN HALLUCINATING!
-	- Never make deceision based on chat history and search Knowledge base always even if the question has been answered before.
-
-	NEVER set product_search_needed as there are no products to search.
+	- Never make decision based on chat history and search Knowledge base always even if the question has been answered before.
 
 	--------------------------------------------------------------------
 	PRODUCT DETAIL QUERIES - MANDATORY SEARCH
@@ -2683,28 +2920,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Price, cost, discount
 	- Availability, stock, inventory
 	- Specifications, features, details
-	- "is ki length kya hai", "fabric kya hai", "size guide"
 	- Any measurement or specification question
-
-	EXAMPLE SCENARIOS:
-
-	User: "is ki shirt length kya hai?"
-	CORRECT Response:
-	{
-	  "response": "Main aap ke liye is product ki details check karti hoon...",
-	  "product_search_needed": true,
-	  "product_search_query": "chamomile shirt length size specifications",
-	  "ready_to_search": true,
-	  "knowledge_search_needed": true,
-	  "knowledge_search_query": "chamomile 3 piece shirt length measurements"
-	}
-
-	WRONG Response:
-	{
-	  "response": "Mujhe details nahi mil rahi...",
-	  "product_search_needed": false,
-	  "knowledge_search_needed": false
-	}
 
 	RULES:
 	1. If you DON'T KNOW a product detail → SEARCH (don't say "I don't have info")
@@ -2713,19 +2929,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	4. NEVER say "I don't have details" without searching first
 	5. Use the product name/ID from conversation context in your search query
 
-	SEARCH QUERY TIPS:
-	- Include product name: "chamomile 3 piece shirt length"
-	- Include specific attribute: "shirt length measurements size"
-	- Use both product_search AND knowledge_search for specifications
-
 	--------------------------------------------------------------------
 	You can use BOTH in the same response if needed:
 	- Search knowledge base for policies, then search products for items
 
 	--------------------------------------------------------------------
 	`;
-        } else if (hasDocuments && !hasProducts) {
-            systemPrompt += `
+		} else if (hasDocuments && !hasProducts) {
+			systemPrompt += `
 
 	--------------------------------------------------------------------
 	KNOWLEDGE BASE AGENT - SEARCH BY DEFAULT
@@ -2769,34 +2980,6 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Requests for clarification about YOUR question: "what do you mean?"
 
 	--------------------------------------------------------------------
-	NEVER HALLUCINATE - EXAMPLES:
-	--------------------------------------------------------------------
-
-	SCENARIO 1: User asks about data
-	User: "What is the stamp duty for 2024?"
-	WRONG: { "response": "The stamp duty is Rs. 50,000...", "knowledge_search_needed": false }
-	RIGHT: { "response": "Let me find that for you.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2024" }
-
-	SCENARIO 2: Follow-up question (MUST SEARCH AGAIN!)
-	[Previous: You searched and found stamp duty 2024 data]
-	User: "What about 2023?"
-	WRONG: { "response": "For 2023 it was Rs. 40,000...", "knowledge_search_needed": false }
-	RIGHT: { "response": "Let me check 2023 data.", "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023" }
-
-	SCENARIO 3: Comparison (NEW SEARCH NEEDED!)
-	User: "Compare 2023 and 2024"
-	WRONG: Use data from memory/previous context
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "stamp duty 2023 2024 comparison" }
-
-	SCENARIO 4: Different topic
-	User: "What is the return policy?"
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "return policy refund" }
-
-	SCENARIO 5: Complaint/Issue
-	User: "I have a problem with my order"
-	RIGHT: { "knowledge_search_needed": true, "knowledge_search_query": "order issues complaints process" }
-
-	--------------------------------------------------------------------
 	QUICK DECISION RULE:
 	--------------------------------------------------------------------
 
@@ -2813,8 +2996,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	--------------------------------------------------------------------
 	`;
-        } else if (hasProducts && !hasDocuments) {
-            systemPrompt += `
+		} else if (hasProducts && !hasDocuments) {
+			systemPrompt += `
 
 	--------------------------------------------------------------------
 	PRODUCT DETAIL QUERIES - MANDATORY SEARCH
@@ -2829,28 +3012,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- Price, cost, discount
 	- Availability, stock, inventory
 	- Specifications, features, details
-	- "is ki length kya hai", "fabric kya hai", "size guide"
 	- Any measurement or specification question
-
-	EXAMPLE SCENARIOS:
-
-	User: "is ki shirt length kya hai?"
-	CORRECT Response:
-	{
-	  "response": "Main aap ke liye is product ki details check karti hoon...",
-	  "product_search_needed": true,
-	  "product_search_query": "chamomile shirt length size specifications",
-	  "ready_to_search": true,
-	  "knowledge_search_needed": true,
-	  "knowledge_search_query": "chamomile 3 piece shirt length measurements"
-	}
-
-	WRONG Response:
-	{
-	  "response": "Mujhe details nahi mil rahi...",
-	  "product_search_needed": false,
-	  "knowledge_search_needed": false
-	}
 
 	RULES:
 	1. If you DON'T KNOW a product detail → SEARCH (don't say "I don't have info")
@@ -2862,17 +3024,16 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	SEARCH QUERY TIPS:
 	- Include product name: "chamomile 3 piece shirt length"
 	- Include specific attribute: "shirt length measurements size"
-	- Use both product_search AND knowledge_search for specifications
 
 	--------------------------------------------------------------------
 	`;
-        }
+		}
 
-        // Anti-hallucination instructions
-        systemPrompt += this._getAntiHallucinationInstructions(hasDocuments, hasProducts);
+		// Anti-hallucination instructions
+		systemPrompt += this._getAntiHallucinationInstructions(hasDocuments, hasProducts);
 
-        return systemPrompt;
-    }
+		return systemPrompt;
+	}
 
 
     /**
@@ -2901,15 +3062,121 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
 
         let instructions = `
-
 	--------------------------------------------------------------------
-	ORDER/PURCHASE REQUEST HANDLING
-	--------------------------------------------------------------------
+    ORDER STATUS CHECK INSTRUCTIONS
+    --------------------------------------------------------------------
+    
+    When customer asks about their ORDER STATUS, TRACKING, or DELIVERY:
+    
+    TRIGGER PHRASES:
+    - "Where is my order?"
+    - "Order status check karna hai"
+    - "Mera order kahan hai?"
+    - "Track my order"
+    - "When will my order arrive?"
+    - "Order delivery status"
+    - "My order number is..."
+    
+    --------------------------------------------------------------------
+    CRITICAL: PARAMETER IDENTIFICATION
+    --------------------------------------------------------------------
+    
+    When customer provides information, identify the correct parameter:
+    
+    📞 PHONE NUMBER (use "phone" parameter):
+    - ANY number that looks like a phone number (7-15 digits)
+    - Pakistani: 03XX, +923XX, 923XX, 00923XX
+    - International: +1XXX, +44XXX, +971XXX, etc.
+    - With or without country code
+    - With or without + prefix
+    - With or without spaces/dashes
+    Examples:
+      "03315757575" → phone: "03315757575"
+      "+923315757575" → phone: "+923315757575"
+      "+1 234 567 8900" → phone: "+1 234 567 8900"
+      "00971501234567" → phone: "00971501234567"
+    
+    📧 EMAIL (use "email" parameter):
+    - MUST contain @ symbol
+    Examples:
+      "test@example.com" → email: "test@example.com"
+      "customer@gmail.com" → email: "customer@gmail.com"
+    
+    🔢 ORDER NUMBER (use "order_number" parameter):
+    - Alphanumeric codes with letters OR short numbers (typically 4-8 digits)
+    - Usually has prefix like CZ-, ORD-, #
+    Examples:
+      "CZ-228913" → order_number: "CZ-228913"
+      "#1001" → order_number: "1001"
+      "ORD-12345" → order_number: "ORD-12345"
+    
+    --------------------------------------------------------------------
+    HOW TO DISTINGUISH PHONE vs ORDER NUMBER
+    --------------------------------------------------------------------
+    
+    PHONE NUMBER indicators:
+    ✓ Starts with + (international format)
+    ✓ Starts with 00 (international dialing)
+    ✓ Starts with 03 (Pakistani mobile)
+    ✓ 10-15 digits long
+    ✓ Customer says "phone", "number", "contact", "mobile"
+    
+    ORDER NUMBER indicators:
+    ✓ Contains letters (CZ-, ORD-, ABC)
+    ✓ Has # prefix
+    ✓ Short (4-8 characters)
+    ✓ Customer says "order", "tracking", "confirmation"
+    
+    WHEN IN DOUBT:
+    - If it's 10+ digits and starts with 0, +, or 00 → PHONE
+    - If it contains letters or is short → ORDER NUMBER
+    
+    --------------------------------------------------------------------
+    EXAMPLES
+    --------------------------------------------------------------------
+    
+    User: "03315757575"
+    → { "phone": "03315757575" }
+    
+    User: "+923315757575"
+    → { "phone": "+923315757575" }
+    
+    User: "+1 555 123 4567"
+    → { "phone": "+1 555 123 4567" }
+    
+    User: "00971501234567"
+    → { "phone": "00971501234567" }
+    
+    User: "My number is 923001234567"
+    → { "phone": "923001234567" }
+    
+    User: "john@gmail.com"
+    → { "email": "john@gmail.com" }
+    
+    User: "CZ-228913_1"
+    → { "order_number": "CZ-228913_1" }
+    
+    User: "#1001"
+    → { "order_number": "1001" }
+    
+    --------------------------------------------------------------------
+    HOW TO HANDLE ORDER STATUS REQUESTS
+    --------------------------------------------------------------------
+    
+    1. If customer provides phone/email/order_number → Call function immediately
+    2. If customer asks about order but doesn't provide info → Ask for ONE of:
+       - Order number (preferred)
+       - Phone number used during order
+       - Email used during order
+    3. After getting function result → Share status details naturally
 	`;
 
         if (hasOrderFunction) {
             // Agent HAS order functions - can process orders
             instructions += `
+	--------------------------------------------------------------------
+	ORDER/PURCHASE REQUEST HANDLING
+	--------------------------------------------------------------------
 	YOU HAVE ORDER PROCESSING FUNCTIONS AVAILABLE
 
 	When user wants to buy/order:
@@ -3150,6 +3417,17 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	- User shows frustration (3+ failed attempts)
 	- User asks about politics, religion, or controversial topics
 
+	### HINDI vs URDU Quick Reference:
+	| ❌ NEVER (Hindi) | ✅ USE INSTEAD (Urdu/English) |
+	|-----------------|------------------------------|
+	| kripya          | please / meherbani se        |
+	| dhanyavaad      | shukriya / thank you         |
+	| namaste         | Assalam-o-Alaikum / Hello    |
+	| swagat          | khush aamdeed / welcome      |
+	| sahayata        | madad / help                 |
+	| uplabdh         | available / dastiyab         |
+	| jankari         | maloomat / information       |
+
 	${!hasDocuments && !hasProducts ? `
 	CRITICAL: You have NO knowledge base and NO product catalog.
 	Answer ONLY based on your base instructions.
@@ -3167,13 +3445,65 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	 * Build function calling instructions for system prompt
 	 * @private
 	 */
-	_buildFunctionInstructions(functions) {
+	_buildFunctionInstructions(functions, agent = null) {
 		if (!functions || functions.length === 0) {
 			return '';
 		}
 
 		// Filter only active functions
 		const activeFunctions = functions.filter(fn => fn.is_active !== false);
+		
+		// ============================================
+        // ADD BUILT-IN ORDER STATUS FUNCTION
+        // ============================================
+        // Add check_order_status if agent has Shopify connected (via kb_id)
+        if (agent && agent.kb_id) {
+            // Check if Shopify store exists for this KB
+            const hasOrderStatusFunction = activeFunctions.some(fn => fn.name === 'check_order_status');
+            
+            if (!hasOrderStatusFunction) {
+                // Add built-in order status function
+                activeFunctions.push({
+                    name: 'check_order_status',
+                    description: `Check the status of a customer order using order number, email, or phone.
+
+PARAMETER RULES:
+- order_number: Order IDs like "CZ-228913", "#1001", "ORD-123"
+- phone: ANY phone number format (local or international):
+  * Pakistani: 03315757575, +923315757575, 923315757575
+  * International: +1234567890, +971501234567, 00441onal234567890
+  * With/without spaces, dashes, or + prefix
+- email: Must contain @ (e.g., customer@example.com)
+
+IDENTIFICATION:
+- 10+ digits starting with 0/+/00/9 → use "phone"
+- Contains @ → use "email"  
+- Contains letters or is short code → use "order_number"
+
+Only ONE parameter is needed to search.`,
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            order_number: {
+                                type: 'string',
+                                description: 'Order number/ID (e.g., CZ-228913, #1001, ORD-123)'
+                            },
+                            email: {
+                                type: 'string',
+                                description: 'Email address (must contain @)'
+                            },
+                            phone: {
+                                type: 'string',
+                                description: 'Phone number in ANY format - local (03315757575) or international (+923315757575, +14155551234)'
+                            }
+                        }
+                    },
+                    is_active: true,
+                    handler_type: 'inline',
+                    _builtin: true
+                });
+            }
+        }
 		
 		if (activeFunctions.length === 0) {
 			return '';
@@ -3447,67 +3777,24 @@ Adapt based on context and user behavior.
     }
 
     /**
-     * Save message to database
-     * @private
-     */
-    async _saveMessage(messageData) {
+	 * Save message to database
+	 * @private
+	 */
+	async _saveMessage(messageData) {
 		const messageId = uuidv4();
 		
 		try {
 			// ============================================
-			// 🎯 AUTOMATIC ANALYSIS FOR USER MESSAGES
+			// 💾 SAVE MESSAGE IMMEDIATELY (NO BLOCKING)
 			// ============================================
-			let analysis = null;
-			let translatedMessage = null;
-			
-			// Only analyze user messages (not assistant responses)
-			if (messageData.role === 'user' && messageData.content) {
-				try {
-					console.info(`Analyzing chat message: ${messageId}`);
-					
-					// Analyze the message
-					analysis = await TranscriptionAnalysisService.analyzeMessage(
-						messageData.content,
-						'customer',
-						{}
-					);
-					
-					// Translate if not English
-					if (analysis.language_detected && analysis.language_detected !== 'en') {
-						const translation = await TranscriptionAnalysisService.translateToEnglish(
-							messageData.content,
-							analysis.language_detected
-						);
-						translatedMessage = translation.translated_text;
-					}
-					
-					console.info(`Message analysis complete: sentiment=${analysis.sentiment}, intent=${analysis.primary_intent}`);
-					
-				} catch (analysisError) {
-					console.error('Error analyzing chat message:', analysisError);
-					analysis = null;
-				}
-			}
-
-			// ============================================
-			// 💾 SAVE MESSAGE WITH ANALYSIS DATA
-			// ============================================
-			// Count: 31 columns = 31 values
 			await db.query(
 				`INSERT INTO yovo_tbl_aiva_chat_messages (
 					id, session_id, role, content, content_html, content_markdown,
 					sources, images, products, function_calls, 
 					cost, cost_breakdown, tokens_input, tokens_output, processing_time_ms,
-					agent_transfer_requested,
-					language_detected, translated_message,
-					sentiment, sentiment_score, sentiment_confidence,
-					profanity_detected, profanity_score, profane_words,
-					intents, primary_intent, intent_confidence,
-					topics, keywords, emotion_tags,
-					analyzed_at, analysis_model, analysis_cost
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					agent_transfer_requested
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				[
-					// Basic message data (16 values)
 					messageId,
 					messageData.sessionId,
 					messageData.role,
@@ -3523,9 +3810,83 @@ Adapt based on context and user behavior.
 					messageData.tokensInput || 0,
 					messageData.tokensOutput || 0,
 					messageData.processingTimeMs || null,
-					messageData.agentTransferRequested ? 1 : 0,
-					
-					// Analysis fields (17 values)
+					messageData.agentTransferRequested ? 1 : 0
+				]
+			);
+
+			// ============================================
+			// 🔄 TRIGGER ASYNC ANALYSIS (NON-BLOCKING)
+			// ============================================
+			if (messageData.role === 'user' && messageData.content) {
+				// Fire-and-forget: Don't await, let it run in background
+				this._analyzeMessageAsync(messageId, messageData.content, messageData.sessionId)
+					.catch(err => console.error('Background analysis error:', err));
+			}
+
+			console.info(`Chat message saved: ${messageId} (analysis running in background)`);
+			
+			return {
+				messageId: messageId,
+				analysisCost: 0, // Will be updated async, return 0 for now
+				translationCost: 0
+			};
+			
+		} catch (error) {
+			console.error('Error saving chat message:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Analyze message in background and update record
+	 * @private
+	 */
+	async _analyzeMessageAsync(messageId, content, sessionId) {
+		try {
+			console.info(`🔄 [ASYNC] Starting background analysis for message: ${messageId}`);
+			const startTime = Date.now();
+			
+			// Analyze the message
+			const analysis = await TranscriptionAnalysisService.analyzeMessage(
+				content,
+				'customer',
+				{}
+			);
+			
+			// Translate if not English
+			let translatedMessage = null;
+			if (analysis.language_detected && analysis.language_detected !== 'en') {
+				const translation = await TranscriptionAnalysisService.translateToEnglish(
+					content,
+					analysis.language_detected
+				);
+				translatedMessage = translation.translated_text;
+			}
+			
+			// ============================================
+			// 💾 UPDATE MESSAGE WITH ANALYSIS DATA
+			// ============================================
+			await db.query(
+				`UPDATE yovo_tbl_aiva_chat_messages SET
+					language_detected = ?,
+					translated_message = ?,
+					sentiment = ?,
+					sentiment_score = ?,
+					sentiment_confidence = ?,
+					profanity_detected = ?,
+					profanity_score = ?,
+					profane_words = ?,
+					intents = ?,
+					primary_intent = ?,
+					intent_confidence = ?,
+					topics = ?,
+					keywords = ?,
+					emotion_tags = ?,
+					analyzed_at = ?,
+					analysis_model = ?,
+					analysis_cost = ?
+				WHERE id = ?`,
+				[
 					analysis?.language_detected || null,
 					translatedMessage || null,
 					analysis?.sentiment || null,
@@ -3540,24 +3901,35 @@ Adapt based on context and user behavior.
 					analysis?.topics ? JSON.stringify(analysis.topics) : null,
 					analysis?.keywords ? JSON.stringify(analysis.keywords) : null,
 					analysis?.emotion_tags ? JSON.stringify(analysis.emotion_tags) : null,
-					analysis ? new Date() : null,
+					new Date(),
 					analysis?.analysis_metadata?.model || null,
-					analysis?.analysis_metadata?.cost || 0.0
-					
-					// TOTAL: 16 + 17 = 33 values to match 33 placeholders
+					analysis?.analysis_metadata?.cost || 0.0,
+					messageId
 				]
 			);
-
-			console.info(`Chat message saved with analysis: ${messageId}`);
-			return {
-				messageId: messageId,
-				analysisCost: analysis?.analysis_metadata?.cost || 0.0,
-				translationCost: translatedMessage ? (analysis?.translation_cost || 0.0) : 0.0
-			};
+			
+			const elapsed = Date.now() - startTime;
+			console.info(`✅ [ASYNC] Analysis complete for ${messageId} in ${elapsed}ms: sentiment=${analysis?.sentiment}, intent=${analysis?.primary_intent}`);
+			
+			// ============================================
+			// 💰 UPDATE SESSION COST WITH ANALYSIS COST
+			// ============================================
+			const analysisCost = (analysis?.analysis_metadata?.cost || 0) + 
+							   (translatedMessage ? 0.0001 : 0); // Add small translation cost if translated
+			
+			if (analysisCost > 0 && sessionId) {
+				await db.query(
+					`UPDATE yovo_tbl_aiva_chat_sessions 
+					 SET total_cost = total_cost + ?
+					 WHERE id = ?`,
+					[analysisCost, sessionId]
+				);
+				console.info(`💰 [ASYNC] Added analysis cost $${analysisCost.toFixed(6)} to session ${sessionId}`);
+			}
 			
 		} catch (error) {
-			console.error('Error saving chat message:', error);
-			throw error;
+			console.error(`❌ [ASYNC] Analysis failed for message ${messageId}:`, error.message);
+			// Don't throw - this is background processing, failure shouldn't affect user
 		}
 	}
 
@@ -3580,6 +3952,17 @@ Adapt based on context and user behavior.
      * @private
      */
     async _executeFunction(agent, functionName, args) {
+        // Find function definition
+        // ============================================
+        // BUILT-IN FUNCTIONS (handled internally)
+        // ============================================
+        
+        // Order Status Check - built-in Shopify integration
+        if (functionName === 'check_order_status') {
+            console.log('📦 Executing built-in function: check_order_status');
+            return await this._handleOrderStatusCheck(agent, args);
+        }
+
         // Find function definition
         const func = agent.functions.find(f => f.name === functionName);
         if (!func) {
@@ -3641,6 +4024,199 @@ Adapt based on context and user behavior.
         return {
             error: 'Function execution not implemented'
         };
+    }
+	
+	/**
+     * Handle order status check (built-in function)
+     * @private
+     */
+    /**
+     * Handle order status check (built-in function)
+     * @private
+     */
+    async _handleOrderStatusCheck(agent, args) {
+        const { order_number, email, phone } = args;
+
+        console.log('📦 [ORDER STATUS] Checking order:', { order_number, email, phone });
+
+        // Validate we have at least one search parameter
+        if (!order_number && !email && !phone) {
+            return {
+                success: false,
+                error: 'Please provide an order number, email, or phone number to check the order status.'
+            };
+        }
+
+        // Check if agent has Shopify connected via kb_id
+        if (!agent.kb_id) {
+            return {
+                success: false,
+                error: 'Order status check is not available for this agent.'
+            };
+        }
+
+        try {
+            const ShopifyService = require('./ShopifyService');
+            
+            // Get store by KB ID
+            const store = await ShopifyService.getStoreByKbId(agent.kb_id);
+            
+            if (!store) {
+                return {
+                    success: false,
+                    error: 'No Shopify store is connected to this agent.'
+                };
+            }
+
+            // Lookup order
+            const result = await ShopifyService.lookupOrder(
+                store.shop_domain,
+                store.access_token,
+                { order_number, email, phone }
+            );
+
+            if (!result.found) {
+                return {
+                    success: false,
+                    found: false,
+                    message: result.message || 'No order found with the provided information.',
+                    searched_variants: result.searched_variants
+                };
+            }
+
+            // Format order details for LLM to use in response
+            const order = result.order;
+            
+            // Build formatted items list
+            const formattedItems = order.line_items.map(item => ({
+                name: item.name,
+                quantity: item.quantity,
+                price: `${order.currency} ${item.price}`,
+                variant: item.variant_title
+            }));
+
+            // Build shipping address string
+            let addressString = null;
+            if (order.shipping_address) {
+                const addr = order.shipping_address;
+                const parts = [addr.address1, addr.city, addr.province, addr.country].filter(Boolean);
+                addressString = parts.join(', ');
+            }
+
+            return {
+                success: true,
+                found: true,
+                order: {
+                    // Basic Info
+					created_at: order.created_at,
+                    order_number: order.order_number,
+                    status: order.status,
+                    status_description: order.status_description,
+                    
+                    // Order Details
+                    items: formattedItems,
+                    item_count: order.item_count,
+                    total_price: `${order.currency} ${order.total_price}`,
+                    order_date: new Date(order.created_at).toLocaleDateString('en-PK', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    }),
+                    
+                    // Shipping
+                    shipping_address: addressString,
+                    shipping_city: order.shipping_address?.city,
+                    
+                    // Order Status URL (for customer to view on website)
+                    order_status_url: order.order_status_url,
+                    
+                    // Tracking Details
+                    has_tracking: order.has_tracking,
+                    tracking: order.tracking ? {
+                        company: order.tracking.company,
+                        number: order.tracking.number,
+                        url: order.tracking.url
+                    } : null,
+                    
+                    // Cancellation
+                    is_cancelled: order.is_cancelled,
+                    cancel_reason: order.cancel_reason,
+                    
+                    // Split order info
+                    split_order_info: order.split_order_info
+                },
+                
+                // Formatting instructions for LLM
+                // Formatting instructions for LLM
+response_format_hint: `
+FORMAT YOUR RESPONSE BASED ON ORDER STATUS:
+
+⚠️ CRITICAL: RESPOND IN THE SAME LANGUAGE AS THE CUSTOMER'S LAST MESSAGE
+- If customer asked in ENGLISH → Respond 100% in English
+- If customer asked in URDU/Roman Urdu → Respond in Roman Urdu
+- NEVER mix languages or default to one language
+
+====================================================================
+IF STATUS = "processing" (Order not yet dispatched):
+====================================================================
+- Tell customer their order is confirmed and being prepared
+- If customer asks about tracking:
+  * English: "Your order has not been dispatched yet. Once dispatched, you'll receive the tracking number via email/SMS."
+  * Urdu: "Aapka order abhi dispatch nahi hua. Jaise hi dispatch hoga, aapko tracking number mil jayega."
+- DO NOT say "tracking number not found" or "could not find tracking"
+- Reassure them the order is being processed
+
+Example response structure (use customer's language):
+- Order Number: [number]
+- Order Date: [date]
+- Expected Delivery: [based on policy - 3-5 working days from order date]
+- Status: Being prepared for dispatch
+- Note: Tracking will be shared once dispatched
+
+====================================================================
+IF STATUS = "shipped" / "in_transit" / "out_for_delivery":
+====================================================================
+Example response structure (use customer's language):
+- Order Number: [number]
+- Order Date: [date]
+- Status: Shipped/In Transit/Out for Delivery
+- Courier: [company]
+- Tracking ID: [number]
+- Track Here: [url]
+
+====================================================================
+IF STATUS = "delivered":
+====================================================================
+- Confirm delivery
+- Ask if they need any help with the product
+
+====================================================================
+IF STATUS = "cancelled":
+====================================================================
+- Be empathetic
+- Explain cancellation reason if available
+- Offer to help with new order
+
+====================================================================
+GENERAL RULES:
+====================================================================
+1. ⚠️ MATCH CUSTOMER'S LANGUAGE - Check their last message
+2. NEVER say "I don't have the tracking number" for processing orders
+   → Instead: "Tracking will be available after dispatch"
+3. Always include Order Status URL if available
+4. Include expected delivery date based on order date + 3-5 working days
+5. Be reassuring and helpful
+`,
+                message: result.message
+            };
+
+        } catch (error) {
+            console.error('❌ [ORDER STATUS] Error:', error);
+            return {
+                success: false,
+                error: `Failed to check order status: ${error.message}`
+            };
+        }
     }
 
     async _formatKnowledgeSources(knowledgeResults) {
@@ -3752,6 +4328,132 @@ Adapt based on context and user behavior.
         // Add thumbnail parameter
         return `${imageUrl}?size=thumbnail`;
     }
+	
+	/**
+	 * Detect which instruction sections are already covered in agent instructions
+	 * @private
+	 */
+	_detectInstructionCoverage(instructions) {
+		if (!instructions) {
+			return {
+				hasLanguageRules: false,
+				hasResponseExamples: false,
+				hasClosureExamples: false,
+				hasOrderStatusFormat: false
+			};
+		}
+
+		return {
+			// Language handling rules
+			hasLanguageRules: /language|respond in (english|urdu|roman)|same language|customer('s)? language/i.test(instructions),
+			
+			// Response format examples
+			hasResponseExamples: /(example|template|format).*(response|reply|message)/i.test(instructions),
+			
+			// Closure/goodbye examples
+			hasClosureExamples: /(goodbye|allah hafiz|closing|end.*(conversation|chat))/i.test(instructions),
+			
+			// Order status format
+			hasOrderStatusFormat: /order.*(status|tracking).*(format|template|response)/i.test(instructions)
+		};
+	}
+	
+	/**
+	 * Check if message is trivial (greeting/thanks/bye) - doesn't need KB search
+	 * @private
+	 */
+	_isTrivialMessage(message) {
+		if (!message) return true;
+		
+		const trivialPatterns = [
+			// Greetings
+			/^(hi|hello|hey|hii+|helo+)[\s!.]*$/i,
+			/^(assalam[- ]?o[- ]?alaikum|aoa|salam)[\s!.]*$/i,
+			/^(good\s*(morning|afternoon|evening|night))[\s!.]*$/i,
+			
+			// Thanks
+			/^(thanks|thank\s*you|shukriya|thx|ty)[\s!.]*$/i,
+			/^(ok+a*y*\s*(thanks|thank\s*you|shukriya)?)[\s!.]*$/i,
+			
+			// Goodbyes
+			/^(bye|goodbye|good\s*bye|allah\s*hafiz|khuda\s*hafiz)[\s!.]*$/i,
+			
+			// Simple confirmations
+			/^(yes|no|ok|okay|sure|alright|got\s*it|understood|ji|haan|nahi)[\s!.]*$/i,
+			
+			// Very short (1-2 chars)
+			/^.{1,2}$/
+		];
+		
+		return trivialPatterns.some(pattern => pattern.test(message.toLowerCase().trim()));
+	}
+	
+	/**
+	 * Get default LLM instructions based on channel
+	 * @private
+	 */
+	_getChannelDefaultInstructions(channel) {
+		const channelInstructions = {
+			whatsapp: `
+	WHATSAPP CHANNEL INSTRUCTIONS:
+	- Keep responses concise (WhatsApp has character limits)
+	- Use emojis sparingly but appropriately
+	- Format lists with line breaks, not bullets
+	- Avoid markdown formatting (* for bold, etc.)
+	- Support both English and Roman Urdu seamlessly
+	`,
+			voice: `
+	VOICE CHANNEL INSTRUCTIONS:
+	- Keep responses conversational and natural
+	- Avoid markdown or special formatting
+	- Spell out numbers (three hundred, not 300)
+	- Use "Rupees" not "Rs" or "PKR"
+	- Avoid abbreviations
+	- Keep sentences short and clear
+	`,
+			sms: `
+	SMS CHANNEL INSTRUCTIONS:
+	- Keep responses very short (160 char limit per segment)
+	- No emojis or special characters
+	- Abbreviations are acceptable
+	- Get to the point quickly
+	`,
+			email: `
+	EMAIL CHANNEL INSTRUCTIONS:
+	- Can use longer, more detailed responses
+	- Proper formatting with paragraphs
+	- Can include links and references
+	- Professional tone
+	`,
+			instagram_dm: `
+	INSTAGRAM DM INSTRUCTIONS:
+	- Casual, friendly tone
+	- Emojis are welcome
+	- Keep responses relatively short
+	- Visual references are good
+	`,
+			fb_messenger: `
+	FACEBOOK MESSENGER INSTRUCTIONS:
+	- Conversational tone
+	- Can use emojis
+	- Medium-length responses
+	- Support quick replies style
+	`,
+			web_chat: `
+	WEB CHAT INSTRUCTIONS:
+	- Can use markdown for formatting
+	- Medium-length responses
+	- Support for rich content
+	`,
+			public_chat: `
+	PUBLIC CHAT INSTRUCTIONS:
+	- Standard formatting allowed
+	- Be helpful and professional
+	`
+		};
+		
+		return channelInstructions[channel] || null;
+	}
 }
 
 module.exports = new ChatService();

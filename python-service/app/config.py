@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     PYTHON_HOST: str = "0.0.0.0"
     PYTHON_PORT: int = 5000
     PYTHON_WORKERS: int = 4
-    PYTHON_API_KEY: str
+    PYTHON_API_KEY: str = os.getenv('PYTHON_API_KEY', '')
     
     # Database
     DB_HOST: str = "localhost"
@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
     
+    # ============================================
+    # TABLE PROCESSING (GPT-based table-to-text)
+    # ============================================
+    ENABLE_TABLE_PROCESSING: bool = True
+    TABLE_PROCESSING_MODEL: str = "gpt-4o-mini"
+    MAX_TABLES_PER_DOC: int = 100
+    DECOMPOSE_TABLES: bool = True
+
+    TABLE_VISION_MODEL: str = "gpt-4o"  # Vision model for table extraction
+    USE_VISION_FOR_TABLES: bool = True 
+
     class Config:
         env_file = ".env"
         case_sensitive = True

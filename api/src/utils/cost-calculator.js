@@ -361,38 +361,80 @@ class CostCalculator {
   }
 
   /**
-   * Calculate complete knowledge operation cost
-   * @param {Object} metrics - Metrics from Python service
-   * @returns {Object} Cost breakdown
-   */
-  calculateKnowledgeOperationCost(metrics) {
-    const costs = [];
+	 * Calculate complete knowledge operation cost
+	 * @param {Object} metrics - Metrics from Python service
+	 * @returns {Object} Cost breakdown
+	 */
+	calculateKnowledgeOperationCost(metrics) {
+	  const costs = [];
 
-    // Document processing
-    if (metrics.pages_processed) {
-      costs.push(this.calculateDocumentProcessingCost(metrics.pages_processed));
-    }
+	  // Document processing (base cost per page)
+	  if (metrics.pages_processed) {
+		costs.push(this.calculateDocumentProcessingCost(metrics.pages_processed));
+	  }
 
-    // Embeddings
-    if (metrics.embedding_tokens) {
-      costs.push(this.calculateEmbeddingCost(
-        metrics.embedding_tokens,
-        metrics.embedding_model || 'text-embedding-3-small'
-      ));
-    }
+	  // Embeddings
+	  if (metrics.embedding_tokens) {
+		costs.push(this.calculateEmbeddingCost(
+		  metrics.embedding_tokens,
+		  metrics.embedding_model || 'text-embedding-3-small'
+		));
+	  }
 
-    // Image processing
-    if (metrics.images_processed) {
-      costs.push(this.calculateImageProcessingCost(metrics.images_processed));
-    }
+	  // Image processing
+	  if (metrics.images_processed) {
+		costs.push(this.calculateImageProcessingCost(metrics.images_processed));
+	  }
 
-    // Storage
-    if (metrics.file_size_bytes) {
-      costs.push(this.calculateStorageCost(metrics.file_size_bytes));
-    }
+	  // Storage
+	  if (metrics.file_size_bytes) {
+		costs.push(this.calculateStorageCost(metrics.file_size_bytes));
+	  }
 
-    return this.combineCosts(costs);
-  }
+	  // ============================================
+	  // NEW: Table Processing Cost (Vision API)
+	  // ============================================
+	  if (metrics.table_processing_cost && metrics.table_processing_cost > 0) {
+		const tableBaseCost = parseFloat(metrics.table_processing_cost);
+		const tableProfitAmount = tableBaseCost * this.profitMargin;
+		const tableFinalCost = tableBaseCost + tableProfitAmount;
+		
+		costs.push({
+		  base_cost: tableBaseCost,
+		  profit_amount: tableProfitAmount,
+		  final_cost: tableFinalCost,
+		  operations: [
+			{
+			  operation: 'table_extraction',
+			  quantity: metrics.detected_tables || 1,
+			  unit_cost: metrics.detected_tables > 0 ? tableBaseCost / metrics.detected_tables : tableBaseCost,
+			  total_cost: tableFinalCost,
+			  details: {
+				tables_processed: metrics.detected_tables || 0,
+				table_chunks_added: metrics.table_chunks_added || 0,
+				model: 'gpt-4o-vision'
+			  }
+			}
+		  ]
+		});
+	  }
+	  // ============================================
+
+	  // Combine all costs
+	  if (costs.length === 0) {
+		return {
+		  base_cost: 0,
+		  profit_amount: 0,
+		  final_cost: 0,
+		  total: 0,
+		  operations: []
+		};
+	  }
+
+	  const combined = this.combineCosts(costs);
+	  combined.total = combined.final_cost; // Ensure 'total' field exists
+	  return combined;
+	}
 
   /**
    * Calculate chat with knowledge cost

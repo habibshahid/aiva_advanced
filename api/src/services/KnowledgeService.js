@@ -458,30 +458,38 @@ async _handleDocumentCompletion(documentId, kbId) {
       embedding_tokens: processingStats.total_tokens || 0,
       images_processed: processingStats.extracted_images || 0,
       file_size_bytes: pendingInfo.file_size_bytes,
-      embedding_model: processingStats.embedding_model || 'text-embedding-3-small'
+      embedding_model: processingStats.embedding_model || 'text-embedding-3-small',
+	  table_processing_cost: processingStats.table_processing_cost || 0,
+	  detected_tables: processingStats.detected_tables || 0,
+	  table_chunks_added: processingStats.table_chunks_added || 0
     });
 
     // Deduct credits
-    if (costBreakdown.total > 0) {
-      try {
-        await CreditService.deductCredits(
-          pendingInfo.tenant_id,
-          costBreakdown.total,
-          'document_processing',
-          {
-            document_id: documentId,
-            kb_id: kbId,
-            pages: processingStats.total_pages,
-            chunks: processingStats.total_chunks,
-            tokens: processingStats.total_tokens
-          },
-          documentId
-        );
-        console.log(`Deducted ${costBreakdown.total} credits for document ${documentId}`);
-      } catch (creditError) {
-        console.error('Error deducting credits:', creditError);
-      }
-    }
+    const totalCost = costBreakdown.final_cost || costBreakdown.total || 0;
+
+	// Deduct credits
+	if (totalCost > 0) {
+	  try {
+		await CreditService.deductCredits(
+		  pendingInfo.tenant_id,
+		  totalCost,  // Use totalCost variable
+		  'document_processing',
+		  {
+			document_id: documentId,
+			kb_id: kbId,
+			pages: processingStats.total_pages,
+			chunks: processingStats.total_chunks,
+			tokens: processingStats.total_tokens,
+			tables: processingStats.detected_tables,  // NEW
+			table_chunks: processingStats.table_chunks_added  // NEW
+		  },
+		  documentId
+		);
+		console.log(`💰 Deducted ${totalCost} credits for document ${documentId}`);
+	  } catch (creditError) {
+		console.error('Error deducting credits:', creditError);
+	  }
+	}
 
     // Store cost for reference
     await redisClient.setEx(

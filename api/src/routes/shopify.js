@@ -962,4 +962,240 @@ router.post('/products/:product_id/refresh', verifyToken, async (req, res) => {
     res.status(500).json(ResponseBuilder.serverError(error.message));
   }
 });
+
+// ============================================
+// ORDER STATUS ROUTES
+// ============================================
+
+/**
+ * @route POST /api/shopify/orders/lookup
+ * @desc Lookup order by order number, email, or phone
+ * @access Private
+ */
+router.post('/orders/lookup', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id, order_number, email, phone } = req.body;
+
+    // Validate - need kb_id and at least one search param
+    if (!kb_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('kb_id is required')
+      );
+    }
+
+    if (!order_number && !email && !phone) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('At least one search parameter is required: order_number, email, or phone')
+      );
+    }
+
+    // Get store by KB ID
+    const store = await ShopifyService.getStoreByKbId(kb_id);
+
+    if (!store) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('No Shopify store connected to this knowledge base')
+      );
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (store.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    // Lookup order
+    const result = await ShopifyService.lookupOrder(
+      store.shop_domain,
+      store.access_token,
+      { order_number, email, phone }
+    );
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Order lookup error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to lookup order')
+    );
+  }
+});
+
+/**
+ * @route POST /api/shopify/orders/lookup-public
+ * @desc Public order lookup (for chat widget / voice without auth)
+ * @access Public (with API key validation)
+ */
+router.post('/orders/lookup-public', async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { kb_id, agent_id, order_number, email, phone } = req.body;
+
+    // Validate
+    if (!kb_id && !agent_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('kb_id or agent_id is required')
+      );
+    }
+
+    if (!order_number && !email && !phone) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('At least one search parameter is required: order_number, email, or phone')
+      );
+    }
+
+    let targetKbId = kb_id;
+
+    // If agent_id provided, get kb_id from agent
+    if (agent_id && !kb_id) {
+      const [agents] = await require('../config/database').query(
+        'SELECT kb_id FROM yovo_tbl_aiva_agents WHERE id = ?',
+        [agent_id]
+      );
+      
+      if (agents.length === 0) {
+        return res.status(404).json(
+          ResponseBuilder.notFound('Agent not found')
+        );
+      }
+      
+      targetKbId = agents[0].kb_id;
+    }
+
+    if (!targetKbId) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('No knowledge base associated with this agent')
+      );
+    }
+
+    // Get store by KB ID
+    const store = await ShopifyService.getStoreByKbId(targetKbId);
+
+    if (!store) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('No Shopify store connected')
+      );
+    }
+
+    // Lookup order
+    const result = await ShopifyService.lookupOrder(
+      store.shop_domain,
+      store.access_token,
+      { order_number, email, phone }
+    );
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Public order lookup error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to lookup order')
+    );
+  }
+});
+
+/**
+ * @route GET /api/shopify/orders/:order_id
+ * @desc Get order details by Shopify order ID
+ * @access Private
+ */
+router.get('/orders/:order_id', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { order_id } = req.params;
+    const { kb_id } = req.query;
+
+    if (!kb_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('kb_id query parameter is required')
+      );
+    }
+
+    // Get store by KB ID
+    const store = await ShopifyService.getStoreByKbId(kb_id);
+
+    if (!store) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('No Shopify store connected to this knowledge base')
+      );
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (store.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    // Get order
+    const result = await ShopifyService.getOrderById(
+      store.shop_domain,
+      store.access_token,
+      order_id
+    );
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Get order error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to get order')
+    );
+  }
+});
+
+/**
+ * @route GET /api/shopify/orders/customer/:email
+ * @desc Get all orders for a customer by email
+ * @access Private
+ */
+router.get('/orders/customer/:email', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+
+  try {
+    const { email } = req.params;
+    const { kb_id, limit = 5 } = req.query;
+
+    if (!kb_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('kb_id query parameter is required')
+      );
+    }
+
+    // Get store by KB ID
+    const store = await ShopifyService.getStoreByKbId(kb_id);
+
+    if (!store) {
+      return res.status(404).json(
+        ResponseBuilder.notFound('No Shopify store connected to this knowledge base')
+      );
+    }
+
+    // Check ownership
+    const tenantId = req.user.tenant_id || req.user.id;
+    if (store.tenant_id !== tenantId && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+
+    // Get customer orders
+    const result = await ShopifyService.getCustomerOrders(
+      store.shop_domain,
+      store.access_token,
+      email,
+      { limit: parseInt(limit) }
+    );
+
+    res.json(rb.success(result));
+
+  } catch (error) {
+    console.error('Get customer orders error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to get customer orders')
+    );
+  }
+});
+
 module.exports = router;

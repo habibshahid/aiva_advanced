@@ -73,12 +73,36 @@ router.post('/sessions', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
-    const { agent_id, session_name, metadata } = req.body;
+    const { 
+      agent_id, 
+      session_name, 
+      metadata,
+      // New channel fields
+      channel,
+      channel_user_id,
+      channel_user_name,
+      channel_metadata,
+      context_data,
+      llm_context_hints
+    } = req.body;
 
     // Validate
     if (!agent_id) {
       return res.status(400).json(
         ResponseBuilder.badRequest('agent_id is required')
+      );
+    }
+
+    // Validate channel if provided
+    const validChannels = [
+      'whatsapp', 'web_chat', 'public_chat', 'fb_pages', 'fb_messenger',
+      'instagram', 'instagram_dm', 'twitter', 'twitter_dm', 'email',
+      'linkedin_feed', 'sms', 'voice', 'api'
+    ];
+    
+    if (channel && !validChannels.includes(channel)) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest(`Invalid channel. Must be one of: ${validChannels.join(', ')}`)
       );
     }
 
@@ -88,7 +112,14 @@ router.post('/sessions', authenticate, async (req, res) => {
       agentId: agent_id,
       userId: req.user.id,
       sessionName: session_name,
-      metadata: metadata || {}
+      metadata: metadata || {},
+      // New channel fields
+      channel: channel || 'public_chat',
+      channelUserId: channel_user_id || null,
+      channelUserName: channel_user_name || null,
+      channelMetadata: channel_metadata || null,
+      contextData: context_data || null,
+      llmContextHints: llm_context_hints || null
     });
 
     res.status(201).json(rb.success(session, null, 201));
@@ -404,7 +435,19 @@ router.post('/message', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
-    const { session_id, agent_id, message, image } = req.body;
+    const { 
+	  session_id, 
+	  agent_id, 
+	  message, 
+	  image,
+	  // New channel fields (for first message when no session exists)
+	  channel,
+	  channel_user_id,
+	  channel_user_name,
+	  channel_metadata,
+	  context_data,
+	  llm_context_hints
+	} = req.body;
 
     // Validate
     const errors = validateChatMessage(req.body);
@@ -428,7 +471,15 @@ router.post('/message', authenticate, async (req, res) => {
 	  agentId: agent_id,
 	  message: message,
 	  image: image,
-	  userId: req.user.id
+	  userId: req.user.id,
+	  channelInfo: session_id ? null : {
+		channel: channel || 'public_chat',
+		channelUserId: channel_user_id,
+		channelUserName: channel_user_name,
+		channelMetadata: channel_metadata,
+		contextData: context_data,
+		llmContextHints: llm_context_hints
+	  }
 	});
 
 	console.log('🔍 [CHAT ROUTE] Result received:', {

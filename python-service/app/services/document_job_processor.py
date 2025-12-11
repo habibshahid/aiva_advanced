@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 import redis
 import mysql.connector
+import uuid
 
 from app.config import settings
 
@@ -292,6 +293,21 @@ class DocumentJobProcessor:
                 tenant_id=tenant_id
             )
             
+            table_chunks = extraction_result.get("table_chunks", [])
+            table_processing_stats = extraction_result.get("table_processing_stats", {})
+
+            if table_chunks:
+                logger.info(f"Document {document_id}: Found {len(table_chunks)} table row chunks")
+
+            # Update job status to show table processing progress
+            if table_processing_stats:
+                await self.update_job_status(
+                    document_id,
+                    self.STATUS_PROCESSING,
+                    progress=20,
+                    current_step=f"Processed {table_processing_stats.get('tables_processed', 0)} tables"
+                )
+                
             await self.update_job_status(
                 document_id,
                 self.STATUS_PROCESSING,
@@ -321,6 +337,27 @@ class DocumentJobProcessor:
                 preserve_formatting=True
             )
             
+            table_chunks = extraction_result.get("table_chunks", [])
+            if table_chunks:
+                logger.info(f"Adding {len(table_chunks)} table row chunks")
+                
+                # Get the current chunk count to continue indexing
+                current_chunk_count = len(processed["chunks"])
+                
+                for idx, chunk in enumerate(table_chunks):
+                    chunk_id = str(uuid.uuid4())
+                    processed["chunks"].append({
+                        "chunk_id": chunk_id,
+                        "chunk_index": current_chunk_count + idx,  # ADD THIS LINE
+                        "content": chunk["content"],
+                        "type": "table",
+                        "metadata": {
+                            **chunk.get("metadata", {}),
+                            "document_id": document_id,
+                            "kb_id": kb_id
+                        }
+                    })
+                    
             total_chunks = len(processed["chunks"])
             
             await self.update_job_status(
@@ -380,6 +417,9 @@ class DocumentJobProcessor:
                 "total_pages": extraction_result.get("pages", 0),
                 "total_chunks": total_chunks,
                 "extracted_images": extraction_result.get("images", 0),
+                "detected_tables": extraction_result.get("tables", 0),  # Already exists but now has real count
+                "table_chunks_added": len(extraction_result.get("table_chunks", [])),  # NEW
+                "table_processing_cost": extraction_result.get("table_processing_stats", {}).get("estimated_cost_usd", 0),  # NEW               
                 "total_tokens": embeddings_result.get("total_tokens", 0),
                 "processing_time_ms": processing_time,
                 "chunks_by_type": processed.get("chunks_by_type", {}),
@@ -389,6 +429,25 @@ class DocumentJobProcessor:
             
             # Update document in MySQL
             await self._update_document_completed(document_id, processing_stats)
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    node_api_url = os.getenv('NODE_API_URL', 'http://localhost:62001')
+                    node_api_key = settings.PYTHON_API_KEY
+                    
+                    await session.post(
+                        f"{node_api_url}/api/knowledge/document-complete",
+                        json={
+                            "document_id": document_id,
+                            "kb_id": kb_id,
+                            "tenant_id": tenant_id
+                        },
+                        headers={"X-Internal-Key": node_api_key}
+                    )
+                    logger.info(f"Notified Node.js of document completion: {document_id}")
+            except Exception as notify_error:
+                logger.warning(f"Could not notify Node.js of completion: {notify_error}")
+                
             await self._update_kb_stats(kb_id)
             
             # Update job status

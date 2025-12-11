@@ -821,6 +821,856 @@ class ShopifyService {
 
     return response.data.product;
   }
+  
+  // ============================================
+  // ORDER STATUS METHODS
+  // ============================================
+
+  /**
+   * Lookup order by order number, email, or phone
+   * @param {string} shopDomain - Shop domain
+   * @param {string} accessToken - Access token
+   * @param {Object} params - Search parameters
+   * @param {string} [params.order_number] - Order number (e.g., #1001 or 1001)
+   * @param {string} [params.email] - Customer email
+   * @param {string} [params.phone] - Customer phone
+   * @returns {Promise<Object>} Order lookup result
+   */
+  /**
+   * Lookup order by order number, email, or phone
+   * @param {string} shopDomain - Shop domain
+   * @param {string} accessToken - Access token
+   * @param {Object} params - Search parameters
+   * @param {string} [params.order_number] - Order number (e.g., #1001 or 1001 or CZ-228913_1)
+   * @param {string} [params.email] - Customer email
+   * @param {string} [params.phone] - Customer phone
+   * @returns {Promise<Object>} Order lookup result
+   */
+  async lookupOrder(shopDomain, accessToken, params = {}) {
+    const { order_number, email, phone } = params;
+
+    if (!order_number && !email && !phone) {
+      throw new Error('At least one search parameter is required: order_number, email, or phone');
+    }
+
+    try {
+      let orders = [];
+      let searchedVariants = [];
+
+      // ============================================
+      // SEARCH BY ORDER NUMBER (with smart fallback)
+      // ============================================
+      if (order_number) {
+        let cleanOrderNumber = order_number.toString().trim().replace(/^#/, '');
+        searchedVariants.push(cleanOrderNumber);
+
+        // Strategy 1: Try exact match first
+        console.log(`📦 [ORDER LOOKUP] Trying exact match: "${cleanOrderNumber}"`);
+        let endpoint = `/orders.json?status=any&limit=10&name=${encodeURIComponent(cleanOrderNumber)}`;
+        let response = await this._makeRequest(shopDomain, accessToken, endpoint);
+        orders = response.data.orders || [];
+
+        // Strategy 2: If not found and has underscore suffix (split order), try base order number
+        if (orders.length === 0 && /_\d+$/.test(cleanOrderNumber)) {
+          const baseOrderNumber = cleanOrderNumber.replace(/_\d+$/, '');
+          searchedVariants.push(baseOrderNumber);
+          
+          console.log(`📦 [ORDER LOOKUP] Split order detected. Trying base order: "${baseOrderNumber}"`);
+          endpoint = `/orders.json?status=any&limit=10&name=${encodeURIComponent(baseOrderNumber)}`;
+          response = await this._makeRequest(shopDomain, accessToken, endpoint);
+          orders = response.data.orders || [];
+
+          if (orders.length > 0) {
+            console.log(`✅ [ORDER LOOKUP] Found order using base number: ${baseOrderNumber}`);
+          }
+        }
+
+        // Strategy 3: Try with # prefix if not found
+        if (orders.length === 0) {
+          const withHash = `#${cleanOrderNumber}`;
+          searchedVariants.push(withHash);
+          
+          console.log(`📦 [ORDER LOOKUP] Trying with # prefix: "${withHash}"`);
+          endpoint = `/orders.json?status=any&limit=10&name=${encodeURIComponent(withHash)}`;
+          response = await this._makeRequest(shopDomain, accessToken, endpoint);
+          orders = response.data.orders || [];
+        }
+
+        // Strategy 4: Try base order with # prefix
+        if (orders.length === 0 && /_\d+$/.test(cleanOrderNumber)) {
+          const baseWithHash = `#${cleanOrderNumber.replace(/_\d+$/, '')}`;
+          searchedVariants.push(baseWithHash);
+          
+          console.log(`📦 [ORDER LOOKUP] Trying base with # prefix: "${baseWithHash}"`);
+          endpoint = `/orders.json?status=any&limit=10&name=${encodeURIComponent(baseWithHash)}`;
+          response = await this._makeRequest(shopDomain, accessToken, endpoint);
+          orders = response.data.orders || [];
+        }
+      }
+
+      // ============================================
+      // SEARCH BY EMAIL
+      // ============================================
+      if (orders.length === 0 && email) {
+        console.log(`📦 [ORDER LOOKUP] Searching by email: "${email}"`);
+        const endpoint = `/orders.json?status=any&limit=10&email=${encodeURIComponent(email)}`;
+        const response = await this._makeRequest(shopDomain, accessToken, endpoint);
+        orders = response.data.orders || [];
+      }
+
+      // ============================================
+      // FILTER BY PHONE
+      // ============================================
+      if (phone) {
+        console.log(`📦 [ORDER LOOKUP] Processing phone search: "${phone}"`);
+        
+        // Normalize the search phone number
+        const normalizedSearchPhone = this._normalizePhoneNumber(phone);
+        console.log(`📦 [ORDER LOOKUP] Normalized search phone: "${normalizedSearchPhone}"`);
+        
+        if (orders.length === 0) {
+          // Fetch orders with pagination to find phone matches in older orders
+          console.log(`📦 [ORDER LOOKUP] Fetching orders to filter by phone (with pagination)...`);
+          
+          let matchedOrders = [];
+          let hasNextPage = true;
+          let cursor = null;
+          let pageCount = 0;
+          const maxPages = 50; // Search up to 1250 orders (5 pages × 250)
+          let totalOrdersSearched = 0;
+          
+          while (hasNextPage && pageCount < maxPages && matchedOrders.length === 0) {
+            let endpoint;
+			if (cursor) {
+			  // When using page_info, you cannot include other parameters like status
+			  endpoint = `/orders.json?limit=250&page_info=${cursor}`;
+			} else {
+			  // First request - include status
+			  endpoint = `/orders.json?status=any&limit=250`;
+			}
+            
+            const response = await this._makeRequest(shopDomain, accessToken, endpoint);
+            const pageOrders = response.data.orders || [];
+            pageCount++;
+            totalOrdersSearched += pageOrders.length;
+            
+            console.log(`📦 [ORDER LOOKUP] Page ${pageCount}: Searching ${pageOrders.length} orders...`);
+            
+            // Check each order for phone match
+            for (const order of pageOrders) {
+              const orderPhones = [
+                order.phone,
+                order.customer?.phone,
+                order.customer?.default_address?.phone,
+                order.billing_address?.phone,
+                order.shipping_address?.phone
+              ].filter(Boolean);
+              
+              // Debug: Log first few orders' phone numbers on first page
+              if (pageCount === 1 && pageOrders.indexOf(order) < 3) {
+                console.log(`📦 [ORDER LOOKUP] Sample order ${order.name}: phones = [${orderPhones.join(', ')}]`);
+              }
+              
+              const phoneMatch = orderPhones.some(orderPhone => {
+                const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
+                const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
+                return isMatch;
+              });
+              
+              if (phoneMatch) {
+                console.log(`✅ [ORDER LOOKUP] Phone match found in order ${order.name}!`);
+                matchedOrders.push(order);
+              }
+            }
+            
+            // Check pagination for next page
+            const pageInfo = this._parsePageInfo(response);
+            hasNextPage = pageInfo.hasNextPage && pageOrders.length === 250;
+            cursor = pageInfo.endCursor;
+            
+            // If we found matches, stop searching
+            if (matchedOrders.length > 0) {
+              console.log(`✅ [ORDER LOOKUP] Found ${matchedOrders.length} matching order(s) after searching ${totalOrdersSearched} orders`);
+              break;
+            }
+            
+            // If no more pages, stop
+            if (!hasNextPage || pageOrders.length < 250) {
+              console.log(`📦 [ORDER LOOKUP] Reached end of orders (${totalOrdersSearched} searched)`);
+              break;
+            }
+          }
+          
+          orders = matchedOrders;
+          console.log(`📦 [ORDER LOOKUP] Final result: ${orders.length} orders matching phone (searched ${totalOrdersSearched} total)`);
+        } else {
+          // We already have orders (from order_number or email search), filter by phone
+          console.log(`📦 [ORDER LOOKUP] Filtering ${orders.length} existing orders by phone...`);
+          
+          const matchedOrders = orders.filter(order => {
+            const orderPhones = [
+              order.phone,
+              order.customer?.phone,
+              order.customer?.default_address?.phone,
+              order.billing_address?.phone,
+              order.shipping_address?.phone
+            ].filter(Boolean);
+
+            return orderPhones.some(orderPhone => {
+              const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
+              const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
+              
+              if (isMatch) {
+                console.log(`✅ [ORDER LOOKUP] Phone match found: "${orderPhone}" matches "${phone}"`);
+              }
+              
+              return isMatch;
+            });
+          });
+
+          orders = matchedOrders;
+          console.log(`📦 [ORDER LOOKUP] Found ${orders.length} orders matching phone`);
+        }
+      }
+
+      // ============================================
+      // PROCESS RESULTS
+      // ============================================
+      if (orders.length === 0) {
+        return {
+          found: false,
+          order: null,
+          searched_variants: searchedVariants,
+          message: `No order found. Searched for: ${searchedVariants.join(', ')}`
+        };
+      }
+
+      // Get the most recent order
+      const order = orders[0];
+
+      // Check if split order lookup
+      const originalOrderNumber = order_number?.toString().trim().replace(/^#/, '');
+      const isSplitOrderLookup = originalOrderNumber && /_\d+$/.test(originalOrderNumber);
+      const splitSuffix = isSplitOrderLookup ? originalOrderNumber.match(/_(\d+)$/)[1] : null;
+
+      // ============================================
+      // GET TRACKING INFO
+      // ============================================
+      const fulfillments = order.fulfillments || [];
+      const latestFulfillment = fulfillments[fulfillments.length - 1];
+      
+      let trackingInfo = null;
+      if (latestFulfillment && latestFulfillment.tracking_numbers?.length > 0) {
+        trackingInfo = {
+          company: latestFulfillment.tracking_company || 'Courier',
+          number: latestFulfillment.tracking_numbers[0],
+          url: latestFulfillment.tracking_urls?.[0] || null,
+          status: latestFulfillment.shipment_status || latestFulfillment.status
+        };
+      }
+
+      // ============================================
+      // GET ORDER STATUS (Priority: Cancelled > Fulfillment > Financial)
+      // ============================================
+      let statusInfo = { status: 'unknown', description: 'Please contact support for order status.' };
+      
+      // Priority 1: Check if cancelled
+      if (order.cancelled_at) {
+        statusInfo = {
+          status: 'cancelled',
+          description: `This order was cancelled on ${new Date(order.cancelled_at).toLocaleDateString()}.${order.cancel_reason ? ` Reason: ${order.cancel_reason}` : ''}`
+        };
+      }
+      // Priority 2: Check fulfillment status (most important for customer)
+      else if (order.fulfillment_status === 'fulfilled' || fulfillments.length > 0) {
+        const shipmentStatus = latestFulfillment?.shipment_status;
+
+        if (shipmentStatus === 'delivered') {
+          statusInfo = {
+            status: 'delivered',
+            description: 'Great news! Your order has been delivered.'
+          };
+        } else if (shipmentStatus === 'out_for_delivery') {
+          statusInfo = {
+            status: 'out_for_delivery',
+            description: 'Your order is out for delivery and should arrive today!'
+          };
+        } else if (shipmentStatus === 'in_transit') {
+          statusInfo = {
+            status: 'in_transit',
+            description: 'Your order is on its way and currently in transit.'
+          };
+        } else if (shipmentStatus === 'attempted_delivery') {
+          statusInfo = {
+            status: 'attempted_delivery',
+            description: 'Delivery was attempted but unsuccessful. The courier will try again.'
+          };
+        } else if (shipmentStatus === 'ready_for_pickup') {
+          statusInfo = {
+            status: 'ready_for_pickup',
+            description: 'Your order is ready for pickup at the designated location.'
+          };
+        } else if (shipmentStatus === 'failure') {
+          statusInfo = {
+            status: 'delivery_failed',
+            description: 'There was an issue with delivery. Please contact support.'
+          };
+        } else {
+          statusInfo = {
+            status: 'shipped',
+            description: 'Your order has been shipped and is on its way.'
+          };
+        }
+      }
+      // Priority 3: Check partial fulfillment
+      else if (order.fulfillment_status === 'partial') {
+        statusInfo = {
+          status: 'partially_shipped',
+          description: 'Part of your order has been shipped. Remaining items are being prepared.'
+        };
+      }
+      // Priority 4: Check financial status (only for unfulfilled orders)
+      else if (order.financial_status === 'refunded') {
+        statusInfo = {
+          status: 'refunded',
+          description: 'This order has been refunded.'
+        };
+      }
+      else if (order.financial_status === 'voided') {
+        statusInfo = {
+          status: 'voided',
+          description: 'This order has been voided.'
+        };
+      }
+      // Priority 5: Order is confirmed but not yet shipped
+      else {
+        const isCOD = order.payment_gateway_names?.some(pg => 
+          pg.toLowerCase().includes('cod') || pg.toLowerCase().includes('cash on delivery')
+        );
+
+        if (isCOD) {
+          statusInfo = {
+            status: 'processing',
+            description: 'Your order is confirmed and being prepared for shipment. Payment will be collected on delivery.'
+          };
+        } else if (order.financial_status === 'pending' || order.financial_status === 'authorized') {
+          statusInfo = {
+            status: 'payment_pending',
+            description: 'Your order is awaiting payment confirmation.'
+          };
+        } else {
+          statusInfo = {
+            status: 'processing',
+            description: 'Your order is confirmed and being prepared for shipment.'
+          };
+        }
+      }
+
+      // ============================================
+      // FORMAT LINE ITEMS
+      // ============================================
+      const lineItems = (order.line_items || []).map(item => ({
+        name: item.name || item.title,
+        quantity: item.quantity,
+        price: item.price,
+        sku: item.sku,
+        variant_title: item.variant_title
+      }));
+
+      // ============================================
+      // FORMAT SHIPPING ADDRESS
+      // ============================================
+      const shippingAddress = order.shipping_address ? {
+        name: `${order.shipping_address.first_name || ''} ${order.shipping_address.last_name || ''}`.trim(),
+        address1: order.shipping_address.address1,
+        address2: order.shipping_address.address2,
+        city: order.shipping_address.city,
+        province: order.shipping_address.province,
+        country: order.shipping_address.country,
+        zip: order.shipping_address.zip,
+        phone: order.shipping_address.phone
+      } : null;
+
+      // ============================================
+      // BUILD FORMATTED ORDER RESPONSE
+      // ============================================
+      const formattedOrder = {
+        order_id: order.id,
+        order_number: order.name || `#${order.order_number}`,
+        status: statusInfo.status,
+        status_description: statusInfo.description,
+        financial_status: order.financial_status,
+        fulfillment_status: order.fulfillment_status || 'unfulfilled',
+        created_at: order.created_at,
+        total_price: order.total_price,
+        subtotal_price: order.subtotal_price,
+        total_shipping: order.total_shipping_price_set?.shop_money?.amount || '0.00',
+        currency: order.currency,
+        line_items: lineItems,
+        item_count: lineItems.reduce((sum, item) => sum + item.quantity, 0),
+        shipping_address: shippingAddress,
+        tracking: trackingInfo,
+        has_tracking: !!trackingInfo,
+        customer_email: order.email,
+        customer_phone: order.phone || order.shipping_address?.phone || order.billing_address?.phone,
+        is_cancelled: !!order.cancelled_at,
+        cancel_reason: order.cancel_reason,
+        payment_method: order.payment_gateway_names?.join(', ') || 'N/A',
+        order_status_url: order.order_status_url || null
+      };
+
+      // Add split order info if applicable
+      if (isSplitOrderLookup) {
+        formattedOrder.split_order_info = {
+          customer_order_number: originalOrderNumber,
+          shopify_order_number: order.name,
+          split_number: splitSuffix,
+          note: `This is split shipment #${splitSuffix} of order ${order.name}`
+        };
+      }
+
+      return {
+        found: true,
+        order: formattedOrder,
+        total_orders_found: orders.length,
+        searched_variants: searchedVariants,
+        message: isSplitOrderLookup 
+          ? `Found parent order ${order.name} for split order ${originalOrderNumber}`
+          : 'Order found'
+      };
+
+    } catch (error) {
+      console.error('Order lookup error:', error);
+      throw new Error(`Failed to lookup order: ${error.message}`);
+    }
+  }
+
+  /**
+   * Normalize phone number - just extract digits, don't convert formats
+   * @private
+   * @param {string} phone - Phone number in any format
+   * @returns {string} Digits only
+   */
+  _normalizePhoneNumber(phone) {
+    if (!phone) return '';
+    
+    // Remove all non-digit characters
+    let normalized = phone.toString().trim();
+    normalized = normalized.replace(/[^\d]/g, '');
+    
+    // Remove leading 00 (international dialing prefix)
+    if (normalized.startsWith('00')) {
+      normalized = normalized.substring(2);
+    }
+    
+    return normalized;
+  }
+
+  /**
+   * Extract the "core" phone number without country code
+   * For Pakistani numbers: returns the 10 digits after country code
+   * @private
+   * @param {string} phone - Normalized phone (digits only)
+   * @returns {string} Core phone number
+   */
+  _extractCorePhone(phone) {
+    if (!phone) return '';
+    
+    // Pakistani format: 923XXXXXXXXX (12 digits) -> 3XXXXXXXXX (10 digits)
+    if (phone.startsWith('92') && phone.length === 12) {
+      return phone.substring(2); // Remove 92, get 3XXXXXXXXX
+    }
+    
+    // Pakistani format: 03XXXXXXXXX (11 digits) -> 3XXXXXXXXX (10 digits)
+    if (phone.startsWith('0') && phone.length === 11) {
+      return phone.substring(1); // Remove leading 0, get 3XXXXXXXXX
+    }
+    
+    // For other international numbers, return last 10 digits as core
+    if (phone.length > 10) {
+      return phone.slice(-10);
+    }
+    
+    return phone;
+  }
+
+  /**
+   * Check if two phone numbers match (handling different formats)
+   * @private
+   * @param {string} searchPhone - Normalized search phone number
+   * @param {string} orderPhone - Normalized order phone number
+   * @returns {boolean} True if phones match
+   */
+  _phonesMatch(searchPhone, orderPhone) {
+    if (!searchPhone || !orderPhone) return false;
+    
+    // Strategy 1: Direct match
+    if (searchPhone === orderPhone) {
+      return true;
+    }
+    
+    // Strategy 2: Core phone match (without country codes)
+    const searchCore = this._extractCorePhone(searchPhone);
+    const orderCore = this._extractCorePhone(orderPhone);
+    
+    if (searchCore && orderCore && searchCore === orderCore) {
+      return true;
+    }
+    
+    // Strategy 3: One ends with the other (handles partial country codes)
+    if (searchPhone.length >= 9 && orderPhone.length >= 9) {
+      if (searchPhone.endsWith(orderPhone) || orderPhone.endsWith(searchPhone)) {
+        return true;
+      }
+    }
+    
+    // Strategy 4: Last N digits match (fallback)
+    // Try last 10, 9, and 8 digits
+    for (const len of [10, 9, 8]) {
+      if (searchPhone.length >= len && orderPhone.length >= len) {
+        if (searchPhone.slice(-len) === orderPhone.slice(-len)) {
+          return true;
+        }
+      }
+    }
+    
+    // Strategy 5: Pakistani specific - compare without leading 0 or 92
+    const stripPakistaniPrefix = (p) => {
+      if (p.startsWith('92')) return p.substring(2);
+      if (p.startsWith('0')) return p.substring(1);
+      return p;
+    };
+    
+    const searchStripped = stripPakistaniPrefix(searchPhone);
+    const orderStripped = stripPakistaniPrefix(orderPhone);
+    
+    if (searchStripped === orderStripped) {
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Get order by Shopify order ID
+   * @param {string} shopDomain - Shop domain
+   * @param {string} accessToken - Access token
+   * @param {string|number} orderId - Shopify order ID
+   * @returns {Promise<Object>} Order details
+   */
+  async getOrderById(shopDomain, accessToken, orderId) {
+    try {
+      const response = await this._makeRequest(
+        shopDomain,
+        accessToken,
+        `/orders/${orderId}.json`
+      );
+
+      if (!response.data.order) {
+        return {
+          found: false,
+          order: null,
+          message: 'Order not found'
+        };
+      }
+
+      return {
+        found: true,
+        order: this.formatOrderForResponse(response.data.order),
+        message: 'Order found'
+      };
+
+    } catch (error) {
+      if (error.message.includes('404')) {
+        return {
+          found: false,
+          order: null,
+          message: 'Order not found'
+        };
+      }
+      throw new Error(`Failed to get order: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get multiple orders for a customer by email
+   * @param {string} shopDomain - Shop domain
+   * @param {string} accessToken - Access token
+   * @param {string} email - Customer email
+   * @param {Object} options - Query options
+   * @returns {Promise<Object>} Orders list
+   */
+  async getCustomerOrders(shopDomain, accessToken, email, options = {}) {
+    const { limit = 10, status = 'any' } = options;
+
+    try {
+      const endpoint = `/orders.json?email=${encodeURIComponent(email)}&status=${status}&limit=${limit}`;
+      const response = await this._makeRequest(shopDomain, accessToken, endpoint);
+      const orders = response.data.orders || [];
+
+      return {
+        found: orders.length > 0,
+        orders: orders.map(order => this.formatOrderForResponse(order)),
+        total: orders.length,
+        message: orders.length > 0 
+          ? `Found ${orders.length} order(s)` 
+          : 'No orders found for this email'
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get customer orders: ${error.message}`);
+    }
+  }
+
+  /**
+   * Format order data for voice/chat response
+   * @param {Object} order - Raw Shopify order
+   * @returns {Object} Formatted order
+   */
+  formatOrderForResponse(order) {
+    // Get fulfillment and tracking info
+    const fulfillments = order.fulfillments || [];
+    const latestFulfillment = fulfillments[fulfillments.length - 1];
+    
+    let trackingInfo = null;
+    if (latestFulfillment && latestFulfillment.tracking_numbers?.length > 0) {
+      trackingInfo = {
+        company: latestFulfillment.tracking_company || 'Courier',
+        number: latestFulfillment.tracking_numbers[0],
+        url: latestFulfillment.tracking_urls?.[0] || null,
+        status: latestFulfillment.shipment_status || latestFulfillment.status
+      };
+    }
+
+    // Calculate order status for voice response
+    const orderStatus = this._getOrderStatusDescription(order);
+
+    // Format line items
+    const lineItems = (order.line_items || []).map(item => ({
+      name: item.name || item.title,
+      quantity: item.quantity,
+      price: item.price,
+      sku: item.sku,
+      variant_title: item.variant_title
+    }));
+
+    // Format shipping address
+    const shippingAddress = order.shipping_address ? {
+      name: `${order.shipping_address.first_name || ''} ${order.shipping_address.last_name || ''}`.trim(),
+      address1: order.shipping_address.address1,
+      address2: order.shipping_address.address2,
+      city: order.shipping_address.city,
+      province: order.shipping_address.province,
+      country: order.shipping_address.country,
+      zip: order.shipping_address.zip,
+      phone: order.shipping_address.phone
+    } : null;
+
+    return {
+      // Order identifiers
+      order_id: order.id,
+      order_number: order.name || `#${order.order_number}`,
+      
+      // Status information
+      status: orderStatus.status,
+      status_description: orderStatus.description,
+      financial_status: order.financial_status,
+      fulfillment_status: order.fulfillment_status || 'unfulfilled',
+      
+      // Dates
+      created_at: order.created_at,
+      updated_at: order.updated_at,
+      processed_at: order.processed_at,
+      closed_at: order.closed_at,
+      cancelled_at: order.cancelled_at,
+      
+      // Financials
+      total_price: order.total_price,
+      subtotal_price: order.subtotal_price,
+      total_tax: order.total_tax,
+      total_shipping: order.total_shipping_price_set?.shop_money?.amount || '0.00',
+      currency: order.currency,
+      
+      // Items
+      line_items: lineItems,
+      item_count: lineItems.reduce((sum, item) => sum + item.quantity, 0),
+      
+      // Shipping
+      shipping_address: shippingAddress,
+      
+      // Tracking
+      tracking: trackingInfo,
+      has_tracking: !!trackingInfo,
+      
+      // Customer info (limited for privacy)
+      customer_email: order.email,
+      customer_phone: order.phone,
+      
+      // Cancellation info
+      is_cancelled: !!order.cancelled_at,
+      cancel_reason: order.cancel_reason,
+      
+      // Payment
+      payment_gateway: order.payment_gateway_names?.join(', ') || 'N/A',
+      
+      // Notes (for internal use)
+      note: order.note,
+      tags: order.tags,
+	  order_status_url: order.order_status_url || null
+    };
+  }
+
+  /**
+   * Get human-readable order status description
+   * @private
+   * @param {Object} order - Shopify order
+   * @returns {Object} Status and description
+   */
+  _getOrderStatusDescription(order) {
+    // Check if cancelled
+    if (order.cancelled_at) {
+      return {
+        status: 'cancelled',
+        description: `This order was cancelled on ${new Date(order.cancelled_at).toLocaleDateString()}. ${order.cancel_reason ? `Reason: ${order.cancel_reason}` : ''}`
+      };
+    }
+
+    // Check fulfillment status
+    const fulfillmentStatus = order.fulfillment_status;
+    const financialStatus = order.financial_status;
+
+    // Payment pending
+    if (financialStatus === 'pending' || financialStatus === 'authorized') {
+      return {
+        status: 'payment_pending',
+        description: 'Your order is awaiting payment confirmation.'
+      };
+    }
+
+    // Refunded
+    if (financialStatus === 'refunded') {
+      return {
+        status: 'refunded',
+        description: 'This order has been refunded.'
+      };
+    }
+
+    // Check fulfillment
+    if (!fulfillmentStatus || fulfillmentStatus === 'null') {
+      return {
+        status: 'processing',
+        description: 'Your order is confirmed and being prepared for shipment.'
+      };
+    }
+
+    if (fulfillmentStatus === 'partial') {
+      return {
+        status: 'partially_shipped',
+        description: 'Part of your order has been shipped. The remaining items are being prepared.'
+      };
+    }
+
+    if (fulfillmentStatus === 'fulfilled') {
+      // Check if there's tracking
+      const fulfillments = order.fulfillments || [];
+      const hasTracking = fulfillments.some(f => f.tracking_numbers?.length > 0);
+      
+      if (hasTracking) {
+        const latestFulfillment = fulfillments[fulfillments.length - 1];
+        const shipmentStatus = latestFulfillment.shipment_status;
+        
+        if (shipmentStatus === 'delivered') {
+          return {
+            status: 'delivered',
+            description: 'Your order has been delivered.'
+          };
+        }
+        
+        if (shipmentStatus === 'out_for_delivery') {
+          return {
+            status: 'out_for_delivery',
+            description: 'Your order is out for delivery and will arrive today.'
+          };
+        }
+        
+        if (shipmentStatus === 'in_transit') {
+          return {
+            status: 'in_transit',
+            description: 'Your order is on its way and in transit.'
+          };
+        }
+        
+        return {
+          status: 'shipped',
+          description: 'Your order has been shipped.'
+        };
+      }
+      
+      return {
+        status: 'shipped',
+        description: 'Your order has been fulfilled and shipped.'
+      };
+    }
+
+    // Default
+    return {
+      status: 'unknown',
+      description: 'Please contact support for order status.'
+    };
+  }
+
+  /**
+   * Lookup order by KB ID (convenience method that gets store credentials first)
+   * @param {string} kbId - Knowledge base ID
+   * @param {Object} params - Search parameters
+   * @returns {Promise<Object>} Order lookup result
+   */
+  async lookupOrderByKbId(kbId, params) {
+    // Get store by KB ID
+    const store = await this.getActiveStoreByKbId(kbId);
+    
+    if (!store) {
+      return {
+        found: false,
+        order: null,
+        message: 'No active Shopify store connected to this knowledge base'
+      };
+    }
+
+    return this.lookupOrder(store.shop_domain, store.access_token, params);
+  }
+  
+  /**
+   * Format order for voice response (concise version)
+   * @param {Object} order - Formatted order from formatOrderForResponse
+   * @returns {string} Voice-friendly response
+   */
+  formatOrderForVoice(order) {
+    let response = '';
+    
+    // Mention split order info if present
+    if (order.split_order_info) {
+      response += `Your order ${order.split_order_info.customer_order_number} is part of order ${order.order_number}. `;
+    } else {
+      response += `Your order ${order.order_number} `;
+    }
+    
+    // Add status
+    response += `${order.status_description} `;
+    
+    // Add tracking if available
+    if (order.has_tracking && order.tracking) {
+      response += `Your tracking number is ${order.tracking.number} via ${order.tracking.company}. `;
+    }
+    
+    // Add total
+    response += `The order total is ${order.currency} ${order.total_price}. `;
+    
+    // Add item count
+    response += `It contains ${order.item_count} item${order.item_count > 1 ? 's' : ''}.`;
+    
+    return response;
+  }
 }
 
 module.exports = new ShopifyService();
