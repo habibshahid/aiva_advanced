@@ -396,7 +396,7 @@ class ChatService {
 			channel_user_name: session.channel_user_name,
 			channel_metadata: session.channel_metadata,
 			context_data: session.context_data,
-			llm_context_hints: session.llm_context_hints
+			llm_context_hints: session.llm_context_hints,
 		};
 	
         // Get conversation history
@@ -1210,16 +1210,21 @@ class ChatService {
                 role: 'system',
                 content: systemPrompt
             },
-            ...history.map(msg => ({
-                role: msg.role,
-                content: msg.content
-            })),
+            ...history
+				.filter((msg, index) => !(index === history.length - 1 && msg.role === 'user'))
+				.map(msg => ({
+					role: msg.role,
+					content: msg.content
+				})),
             {
                 role: 'user',
                 content: message
             }
         ];
 
+		console.log(systemPrompt)
+		console.log(messages);
+		
         const model = agent.chat_model || 'gpt-4o-mini';
 
 		const completion = await this.openai.chat.completions.create({
@@ -2238,6 +2243,27 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		let systemPrompt = baseInstructions || '';
 
 		// ============================================
+		// 📅 INJECT CURRENT DATE AT TOP (CRITICAL FOR DATE CALCULATIONS)
+		// ============================================
+		const todayFormatted = new Date().toLocaleDateString('en-US', {
+			weekday: 'long',
+			year: 'numeric',
+			month: 'long',
+			day: 'numeric'
+		});
+		
+		const dateHeader = `
+	============================================================
+	📅 CURRENT DATE: ${todayFormatted}
+	============================================================
+	Use this date for ALL time-based calculations (48-hour windows, delivery estimates, etc.)
+	============================================================
+
+	`;
+		
+		systemPrompt = dateHeader + systemPrompt;
+		
+		// ============================================
 		// 📱 CHANNEL CONTEXT INJECTION
 		// ============================================
 		if (agent?.sessionContext) {
@@ -2251,7 +2277,14 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 		`;
 		
-			// Add channel info
+			const todayFormatted = new Date().toLocaleDateString('en-US', {
+				weekday: 'long',
+				year: 'numeric',
+				month: 'long',
+				day: 'numeric'
+			});
+			channelContextPrompt += `Today's Date: ${todayFormatted}\n`;
+			
 			if (ctx.channel) {
 				channelContextPrompt += `Channel: ${ctx.channel.toUpperCase()}\n`;
 			}
