@@ -206,19 +206,19 @@ class ChatService {
 		return {
 			...session,
 			metadata: session.metadata ?
-				(typeof session.metadata === 'string' ? JSON.parse(session.metadata) : session.metadata) :
+				(typeof session.metadata === 'string' ? session.metadata : session.metadata) :
 				{},
 			channel_metadata: session.channel_metadata ?
-				(typeof session.channel_metadata === 'string' ? JSON.parse(session.channel_metadata) : session.channel_metadata) :
+				(typeof session.channel_metadata === 'string' ? session.channel_metadata : session.channel_metadata) :
 				null,
 			context_data: session.context_data ?
-				(typeof session.context_data === 'string' ? JSON.parse(session.context_data) : session.context_data) :
+				(typeof session.context_data === 'string' ? session.context_data : session.context_data) :
 				null,
 			complaint_state: session.complaint_state ? 
-				(typeof session.complaint_state === 'string' ? JSON.parse(session.complaint_state) : session.complaint_state) :
+				(typeof session.complaint_state === 'string' ? session.complaint_state : session.complaint_state) :
 				null,
 			pending_image: session.pending_image ? 
-				(typeof session.pending_image === 'string' ? JSON.parse(session.pending_image) : session.pending_image) :
+				(typeof session.pending_image === 'string' ? session.pending_image : session.pending_image) :
 				null,
 		};
 	}
