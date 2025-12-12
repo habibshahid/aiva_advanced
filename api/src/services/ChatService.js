@@ -21,9 +21,49 @@ const TranscriptionAnalysisService = require('./TranscriptionAnalysisService');
 
 class ChatService {
     constructor() {
+		// OpenAI client
         this.openai = new OpenAI({
             apiKey: process.env.OPENAI_API_KEY
         });
+		
+		// DeepSeek client (uses OpenAI-compatible API)
+		if (process.env.DEEPSEEK_API_KEY) {
+            this.deepseek = new OpenAI({
+                baseURL: 'https://api.deepseek.com',
+                apiKey: process.env.DEEPSEEK_API_KEY
+            });
+        }
+        
+        // Anthropic client (optional)
+        if (process.env.ANTHROPIC_API_KEY) {
+            const Anthropic = require('@anthropic-ai/sdk');
+            this.anthropic = new Anthropic({
+                apiKey: process.env.ANTHROPIC_API_KEY
+            });
+        }
+    }
+	
+	/**
+     * Get the appropriate client based on model provider
+     */
+    _getClientForModel(modelName) {
+        if (modelName?.startsWith('deepseek')) {
+            if (!this.deepseek) {
+                console.warn('⚠️ DeepSeek requested but API key not configured, falling back to OpenAI');
+                return { client: this.openai, provider: 'openai' };
+            }
+            return { client: this.deepseek, provider: 'deepseek' };
+        }
+        
+        if (modelName?.startsWith('claude')) {
+            if (!this.anthropic) {
+                console.warn('⚠️ Claude requested but API key not configured, falling back to OpenAI');
+                return { client: this.openai, provider: 'openai' };
+            }
+            return { client: this.anthropic, provider: 'anthropic' };
+        }
+        
+        return { client: this.openai, provider: 'openai' };
     }
 
     /**
@@ -108,7 +148,13 @@ class ChatService {
 				null,
 			context_data: session.context_data ?
 				(typeof session.context_data === 'string' ? JSON.parse(session.context_data) : session.context_data) :
-				null
+				null,
+			complaint_state: session.complaint_state ? 
+				(typeof session.complaint_state === 'string' ? JSON.parse(session.complaint_state) : session.complaint_state) :
+				null,
+			pending_image: session.pending_image ? 
+				(typeof session.pending_image === 'string' ? JSON.parse(session.pending_image) : session.pending_image) :
+				null,
 		};
 	}
 
@@ -317,14 +363,14 @@ class ChatService {
         agentId,
         message,
         image = null,
-        userId = null
+        userId = null,
+		channelInfo
     }) {
         // Get or create session
-		console.log('@@@@@@@@@@', 
+		console.log('*********** User Message: ***********', 
 			sessionId,
 			agentId,
 			message,
-			image,
 			userId
 		)
 		
@@ -343,7 +389,7 @@ class ChatService {
 					tenantId: agent.tenant_id,
 					agentId: agentId,
 					userId: userId,
-					sessionName: message.substring(0, 50),
+					sessionName: (message || 'Image upload').substring(0, 50),
 					channel: channelInfo?.channel || 'public_chat',
 					channelUserId: channelInfo?.channelUserId || null,
 					channelUserName: channelInfo?.channelUserName || null,
@@ -363,7 +409,7 @@ class ChatService {
                 tenantId: agent.tenant_id,
                 agentId: agentId,
                 userId: userId,
-                sessionName: message.substring(0, 50),
+                sessionName: (message || 'Image upload').substring(0, 50),
 				channel: channelInfo?.channel || 'public_chat',
 				channelUserId: channelInfo?.channelUserId || null,
 				channelUserName: channelInfo?.channelUserName || null,
@@ -373,6 +419,164 @@ class ChatService {
             });
             sessionId = session.id;
         }
+
+		//console.log(session)
+		// ============================================
+		// 📷 CHECK FOR PENDING IMAGE CLARIFICATION
+		// ============================================
+		if (!image && session.pending_image) {
+			console.log('📷 User responding to image intent clarification');
+			
+			// Load agent if not already loaded
+			if (!agent) {
+				agent = await AgentService.getAgent(session.agent_id);
+				if (!agent) {
+					throw new Error('Agent not found');
+				}
+			}
+			
+			const pendingImage = await this._getPendingImage(sessionId);
+			
+			// Check agent capabilities
+			const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
+			const hasProducts = agent.kb_metadata?.has_products || false;
+			const canSearchProducts = hasShopify || hasProducts;
+			
+			// For agents WITHOUT products, just process the image with LLM
+			if (!canSearchProducts) {
+				console.log('📷 Non-product agent - processing image directly with LLM');
+				
+				// Continue to normal image processing (will use LLM to analyze)
+				// Don't return here - let it fall through to normal processing
+				// But we need to restore the image since we cleared pending_image
+				image = pendingImage.image;
+				message = message || pendingImage.original_message || 'Please analyze this image';
+				
+				// Fall through to normal image processing below...
+			} else {
+				// Agent HAS products - handle the choice
+				const intentChoice = this._detectIntentChoice(message);
+				
+				if (intentChoice === 'product_search') {
+					console.log('📷 User chose: PRODUCT SEARCH');
+					return this.sendMessage({
+						sessionId,
+						agentId,
+						message: pendingImage.original_message || 'Find similar products',
+						image: pendingImage.image,
+						userId,
+						channelInfo
+					});
+				}
+				
+				if (intentChoice === 'complaint_evidence') {
+					console.log('📷 User chose: COMPLAINT');
+					// Initialize complaint state
+					const complaintState = {
+						active: true,
+						type: 'UNKNOWN',
+						order_number: null,
+						awaiting_images: true,
+						images_collected: [{
+							url: pendingImage.image,
+							added_at: pendingImage.stored_at,
+							message: pendingImage.original_message
+						}],
+						initiated_at: new Date().toISOString()
+					};
+					
+					await this._updateSessionComplaintState(sessionId, complaintState);
+					
+					// Ask for order details
+					const followupResponse = agent.sessionContext?.channel === 'whatsapp'
+						? `📷 Shukriya! Main ne aapki image complaint ke liye save kar li hai.\n\nAb please apna order number share karein (jaise CZ-123456) taake main aapki madad kar sakoon.`
+						: `📷 Thank you! I've saved your image for the complaint.\n\nPlease share your order number (e.g., CZ-123456) so I can help you further.`;
+					
+					const formattedResponse = markdown.formatResponse(followupResponse);
+					
+					const assistantMessageId = await this._saveMessage({
+						sessionId,
+						role: 'assistant',
+						content: formattedResponse.text,
+						contentHtml: formattedResponse.html,
+						contentMarkdown: formattedResponse.markdown,
+						sources: [],
+						images: [],
+						products: [],
+						functionCalls: [],
+						cost: 0,
+						costBreakdown: { final_cost: 0 },
+						tokensInput: 0,
+						tokensOutput: 0,
+						metadata: { complaint_flow_started: true }
+					});
+					
+					await this._updateSessionStats(sessionId, 0);
+					
+					return {
+						session_id: sessionId,
+						message_id: assistantMessageId,
+						agent_transfer: false,
+						interaction_closed: false,
+						response: {
+							text: formattedResponse.text,
+							html: formattedResponse.html,
+							markdown: formattedResponse.markdown
+						},
+						sources: [],
+						images: [],
+						products: [],
+						function_calls: [],
+						llm_decision: { complaint_flow_started: true },
+						cost: 0,
+						cost_breakdown: { final_cost: 0 }
+					};
+				}
+			
+				if (intentChoice === 'other') {
+					console.log('📷 User chose: OTHER - asking what they need');
+					// Clear the image and ask what they need
+					const followupResponse = `No problem! What would you like help with today?`;
+					const formattedResponse = markdown.formatResponse(followupResponse);
+					
+					const assistantMessageId = await this._saveMessage({
+						sessionId,
+						role: 'assistant',
+						content: formattedResponse.text,
+						cost: 0
+					});
+					
+					return {
+						session_id: sessionId,
+						message_id: assistantMessageId,
+						response: { text: formattedResponse.text },
+						cost: 0
+					};
+				}
+			
+				// Couldn't understand - ask again
+				console.log('📷 Could not understand intent choice - asking again');
+				const retryResponse = `I didn't quite catch that. Would you like me to:\n\n1️⃣ Find similar products\n2️⃣ Help with a problem/complaint\n\nJust reply with 1 or 2!`;
+				const formattedResponse = markdown.formatResponse(retryResponse);
+				
+				// Re-store the pending image
+				await this._storePendingImage(sessionId, pendingImage.image, pendingImage.original_message);
+				
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					cost: 0
+				});
+				
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					response: { text: formattedResponse.text },
+					cost: 0
+				};
+			}
+		}
 
         // Save user message
         const userMessageResult = await this._saveMessage({
@@ -416,6 +620,352 @@ class ChatService {
         if (image) {
             console.log('🖼️ IMAGE DETECTED - Using automatic search path (no LLM decision needed)');
 
+			// Classify image intent: complaint evidence vs product search
+			const imageIntent = await this._classifyImageIntent(session, history, message);
+			
+			console.log(`📷 Image Intent: ${imageIntent.intent} (confidence: ${imageIntent.confidence}, source: ${imageIntent.source})`);
+			
+			// ============================================
+			// 🤖 LLM ANALYSIS PATH (Non-product agents)
+			// ============================================
+			if (imageIntent.intent === 'llm_analysis') {
+				console.log('🤖 Routing to LLM for image analysis (no product search)');
+				
+				// Build simple prompt for image analysis
+				const systemPrompt = this._buildSystemPromptWithStrategy(
+					agent.instructions,
+					agent.conversation_strategy,
+					agent.greeting,
+					isFirstMessage,
+					agent.kb_metadata,
+					agent
+				);
+				
+				const messages = [
+					{ role: 'system', content: systemPrompt },
+					...history.map(msg => ({ role: msg.role, content: msg.content })),
+					{
+						role: 'user',
+						content: [
+							{ type: 'text', text: message || 'Please analyze this image and help me with it.' },
+							{ type: 'image_url', image_url: { url: image, detail: 'high' } }
+						]
+					}
+				];
+				
+				const model = agent.chat_model || 'gpt-4o-mini';
+				
+				const completion = await this.openai.chat.completions.create({
+					model: model,
+					messages: messages,
+					response_format: { type: "json_object" },
+					temperature: parseFloat(agent.temperature) || 0.7,
+					max_tokens: agent.max_tokens || 2048
+				});
+				
+				const aiMessage = completion.choices[0].message;
+				let llmDecision;
+				
+				try {
+					llmDecision = JSON.parse(aiMessage.content);
+				} catch (error) {
+					llmDecision = {
+						response: aiMessage.content || "I've analyzed your image. How can I help you with it?",
+						knowledge_search_needed: false,
+						function_call_needed: false
+					};
+				}
+				
+				// Calculate cost
+				const llmCost = CostCalculator.calculateChatCost({
+					prompt_tokens: completion.usage.prompt_tokens,
+					completion_tokens: completion.usage.completion_tokens,
+					cached_tokens: 0
+				}, model);
+				
+				const formattedResponse = markdown.formatResponse(llmDecision.response);
+				
+				// Save and return response
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					contentHtml: formattedResponse.html,
+					contentMarkdown: formattedResponse.markdown,
+					sources: [],
+					images: [],
+					products: [],
+					functionCalls: [],
+					cost: llmCost.final_cost,
+					costBreakdown: llmCost,
+					tokensInput: completion.usage.prompt_tokens,
+					tokensOutput: completion.usage.completion_tokens,
+					metadata: { image_provided: true, image_intent: 'llm_analysis' }
+				});
+				
+				await this._updateSessionStats(sessionId, llmCost.final_cost);
+				
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					agent_transfer: llmDecision.agent_transfer || false,
+					interaction_closed: false,
+					response: {
+						text: formattedResponse.text,
+						html: formattedResponse.html,
+						markdown: formattedResponse.markdown
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: [],
+					llm_decision: llmDecision,
+					cost: llmCost.final_cost,
+					cost_breakdown: llmCost
+				};
+			}
+			
+			// ============================================
+			// ❓ UNKNOWN INTENT - ASK USER
+			// ============================================
+			if (imageIntent.intent === 'unknown') {
+				console.log('❓ Unknown image intent - asking user for clarification');
+				
+				// Check agent capabilities
+				const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
+				const hasProducts = agent.kb_metadata?.has_products || false;
+				const canSearchProducts = hasShopify || hasProducts;
+				
+				// Store image in session for later processing
+				await this._storePendingImage(sessionId, image, message);
+				
+				// Build clarification response based on agent capabilities
+				let clarificationResponse;
+				
+				if (canSearchProducts) {
+					// Agent has products - offer product search option
+					clarificationResponse = agent.sessionContext?.channel === 'whatsapp'
+						? `📷 Mujhe aapki image mil gayi!\n\nAap kya karna chahte hain?\n\n1️⃣ Similar products dhundna\n2️⃣ Order mein problem report karna\n3️⃣ Kuch aur`
+						: `📷 I received your image! What would you like me to do?\n\n1️⃣ Find similar products\n2️⃣ Report a problem with my order\n3️⃣ Something else`;
+				} else {
+					// Agent has NO products - don't offer product search
+					clarificationResponse = agent.sessionContext?.channel === 'whatsapp'
+						? `📷 Mujhe aapki image mil gayi!\n\nIs image ke baare mein aap kya jaanna chahte hain? Kripya thodi detail share karein.`
+						: `📷 I received your image! Could you please tell me what you'd like to know about it or how I can help?`;
+				}
+				
+				const formattedResponse = markdown.formatResponse(clarificationResponse);
+				
+				// Save assistant message (minimal cost - no LLM call)
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					contentHtml: formattedResponse.html,
+					contentMarkdown: formattedResponse.markdown,
+					sources: [],
+					images: [],
+					products: [],
+					functionCalls: [],
+					cost: 0,
+					costBreakdown: { final_cost: 0, operations: [] },
+					tokensInput: 0,
+					tokensOutput: 0,
+					processingTimeMs: 0,
+					agentTransferRequested: false,
+					metadata: {
+						image_provided: true,
+						image_intent: 'unknown',
+						awaiting_clarification: true
+					}
+				});
+				
+				// Update session stats
+				await this._updateSessionStats(sessionId, 0);
+				
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					agent_transfer: false,
+					interaction_closed: false,
+					show_feedback_prompt: false,
+					response: {
+						text: formattedResponse.text,
+						html: formattedResponse.html,
+						markdown: formattedResponse.markdown
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: [],
+					llm_decision: {
+						image_intent: 'unknown',
+						awaiting_clarification: true
+					},
+					context_used: {
+						knowledge_base_chunks: 0,
+						conversation_history_messages: history.length
+					},
+					agent_metadata: {
+						agent_id: agent.id,
+						agent_name: agent.name,
+						provider: 'none',
+						model: 'none'
+					},
+					cost: 0,
+					cost_breakdown: { final_cost: 0 }
+				};
+			}
+
+			// ============================================
+			// 📷 COMPLAINT EVIDENCE PATH
+			// ============================================
+			if (imageIntent.intent === 'complaint_evidence') {
+				console.log('📷 Routing to COMPLAINT EVIDENCE handler');
+				// Handle complaint image
+				const complaintResult = await this._handleComplaintImage(
+					session, 
+					image, 
+					message, 
+					history, 
+					agent, 
+					imageIntent
+				);
+				
+				const { llmDecision, llmCost, complaintState } = complaintResult;
+				
+				// Execute function if requested (create_ticket)
+				let executedFunctionCalls = [];
+				if (llmDecision.function_call_needed && llmDecision.function_name) {
+					console.log(`🔧 Executing function: ${llmDecision.function_name}`);
+					
+					const requestedFunction = agent.functions?.find(
+						fn => fn.name === llmDecision.function_name && fn.is_active !== false
+					);
+					
+					if (requestedFunction) {
+						try {
+							const functionResult = await this._executeFunction(
+								agent,
+								llmDecision.function_name,
+								llmDecision.function_arguments || {}
+							);
+							
+							console.log('✅ Function executed:', functionResult);
+							
+							executedFunctionCalls.push({
+								function_id: uuidv4(),
+								function_name: llmDecision.function_name,
+								arguments: llmDecision.function_arguments,
+								result: functionResult,
+								status: 'success'
+							});
+							
+							// If ticket was created successfully, update response
+							if (functionResult.success && functionResult.data?.ticket_number) {
+								llmDecision.response = llmDecision.response.replace(
+									'{TICKET_NUMBER}', 
+									functionResult.data.ticket_number
+								);
+							}
+							
+							// Clear complaint state after successful ticket creation
+							await this._clearComplaintState(sessionId);
+							
+						} catch (funcError) {
+							console.error('❌ Function execution failed:', funcError.message);
+							executedFunctionCalls.push({
+								function_id: uuidv4(),
+								function_name: llmDecision.function_name,
+								arguments: llmDecision.function_arguments,
+								error: funcError.message,
+								status: 'error'
+							});
+						}
+					}
+				}
+				
+				// Format response
+				const formattedResponse = markdown.formatResponse(llmDecision.response);
+				
+				// Calculate total cost
+				const totalCost = CostCalculator.combineCosts([llmCost]);
+				if (userAnalysisCost > 0) {
+					totalCost.final_cost += userAnalysisCost;
+				}
+				
+				// Save assistant message
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					contentHtml: formattedResponse.html,
+					contentMarkdown: formattedResponse.markdown,
+					sources: [],
+					images: [],
+					products: [],
+					functionCalls: executedFunctionCalls,
+					cost: totalCost.final_cost,
+					costBreakdown: totalCost,
+					tokensInput: 0,
+					tokensOutput: 0,
+					processingTimeMs: 0,
+					agentTransferRequested: llmDecision.agent_transfer || false,
+					metadata: {
+						image_provided: true,
+						image_intent: 'complaint_evidence',
+						complaint_type: complaintState?.type,
+						images_collected: complaintState?.images_collected?.length || 1
+					}
+				});
+				
+				// Update session stats
+				await this._updateSessionStats(sessionId, totalCost.final_cost);
+				
+				// Return complaint evidence response
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					agent_transfer: llmDecision.agent_transfer || false,
+					interaction_closed: llmDecision.conversation_complete && llmDecision.user_wants_to_end,
+					show_feedback_prompt: llmDecision.conversation_complete && llmDecision.user_wants_to_end,
+					response: {
+						text: formattedResponse.text,
+						html: formattedResponse.html,
+						markdown: formattedResponse.markdown
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: executedFunctionCalls,
+					llm_decision: {
+						...llmDecision,
+						image_intent: 'complaint_evidence',
+						complaint_state: complaintState
+					},
+					context_used: {
+						knowledge_base_chunks: 0,
+						conversation_history_messages: history.length,
+						complaint_images_collected: complaintState?.images_collected?.length || 1
+					},
+					agent_metadata: {
+						agent_id: agent.id,
+						agent_name: agent.name,
+						provider: 'openai',
+						model: agent.chat_model || 'gpt-4o-mini',
+						temperature: agent.temperature || 0.7
+					},
+					cost: totalCost.final_cost,
+					cost_breakdown: totalCost,
+					user_analysis_cost: userAnalysisCost
+				};
+			}
+			
+			// ============================================
+			// 🛍️ PRODUCT SEARCH PATH (Original flow)
+			// ============================================
+			console.log('🛍️ Routing to PRODUCT SEARCH handler');
+			
             // ============================================
             // 1. AUTOMATIC IMAGE SEARCH (Vector DB)
             // ============================================
@@ -869,6 +1419,46 @@ class ChatService {
             ];
 
             const model = agent.chat_model || 'gpt-4o-mini';
+			
+			/* Disabled for now
+			const { client, provider } = this._getClientForModel(model);
+			console.log(`🤖 Using ${provider} with model: ${model}`);
+			
+			let completion;
+			let aiMessage;
+
+			if (provider === 'anthropic') {
+				// Claude uses different API format
+				const response = await client.messages.create({
+					model: model,
+					max_tokens: agent.max_tokens || 4096,
+					system: systemPrompt,
+					messages: messages.filter(m => m.role !== 'system').map(m => ({
+						role: m.role,
+						content: m.content
+					}))
+				});
+				
+				aiMessage = { content: response.content[0].text };
+				completion = {
+					usage: {
+						prompt_tokens: response.usage.input_tokens,
+						completion_tokens: response.usage.output_tokens
+					},
+					choices: [{ message: aiMessage }]
+				};
+			} else {
+				// OpenAI and DeepSeek use same format
+				completion = await client.chat.completions.create({
+					model: model,
+					messages: messages,
+					response_format: { type: "json_object" },
+					temperature: parseFloat(agent.temperature) || 0.7,
+					max_tokens: agent.max_tokens || 4096
+				});
+				
+				aiMessage = completion.choices[0].message;
+			}*/
 
             const completion = await this.openai.chat.completions.create({
                 model: model,
@@ -1222,8 +1812,8 @@ class ChatService {
             }
         ];
 
-		console.log(systemPrompt)
-		console.log(messages);
+		//console.log(systemPrompt)
+		//console.log(messages);
 		
         const model = agent.chat_model || 'gpt-4o-mini';
 
@@ -1260,35 +1850,121 @@ class ChatService {
 			console.log('🤖 LLM Decision:', JSON.stringify(llmDecision, null, 2));
 			
 			// ============================================
-			// 🚨 EMPTY RESPONSE FALLBACK
+			// 📅 VALIDATE DATE-BASED REASONING
+			// ============================================
+			const dateValidation = this._validateDateReasoning(llmDecision);
+			
+			if (dateValidation.checked && !dateValidation.valid) {
+				console.log('🔄 Correcting LLM date reasoning error...');
+				
+				// Check if LLM wrongly approved something that should be rejected
+				if (dateValidation.llm_values.validation_passed && !dateValidation.corrected.validation_passed) {
+					console.log('🚨 LLM incorrectly approved - generating rejection');
+					
+					// Generate rejection using the policy info from LLM's own response
+					llmDecision.response = this._generatePolicyRejectionMessage(
+						dateValidation,
+						llmDecision.complaint_context
+					);
+					
+					// Prevent further processing
+					llmDecision.function_call_needed = false;
+					llmDecision.knowledge_search_needed = false;
+					llmDecision.product_search_needed = false;
+					llmDecision.conversation_complete = true;
+					
+					console.log('✅ Response corrected to rejection');
+				}
+				
+				// Update the validation object with corrected values
+				llmDecision.date_validation = {
+					...llmDecision.date_validation,
+					...dateValidation.corrected,
+					was_corrected: true,
+					original_values: dateValidation.llm_values
+				};
+			}
+
+			// ============================================
+			// 🚨 EMPTY RESPONSE FALLBACK (SMART)
 			// ============================================
 			if (!llmDecision.response || llmDecision.response.trim() === '') {
-				console.log('⚠️ LLM returned empty response - generating fallback');
+				console.log('⚠️ LLM returned empty response - checking for actionable data...');
 				
-				const isTrivial = this._isTrivialMessage(message);
+				// Check if agent has Shopify integration
+				const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
 				
-				if (isTrivial) {
-					// It's a greeting/thanks/bye - provide appropriate response
-					if (/^(hi|hello|hey|hii+|helo+|assalam|aoa|salam)/i.test(message.toLowerCase().trim())) {
-						// Greeting - use agent's greeting if available, otherwise default
+				// ============================================
+				// CASE 1: LLM provided order_number - ONLY for Shopify agents
+				// ============================================
+				if (hasShopify && llmDecision.order_number && !llmDecision.function_call_needed) {
+					console.log('🔧 LLM provided order_number without response - auto-triggering check_order_status');
+					
+					llmDecision.function_call_needed = true;
+					llmDecision.function_name = 'check_order_status';
+					llmDecision.function_arguments = {
+						order_number: llmDecision.order_number,
+						email: llmDecision.email || null,
+						phone: llmDecision.phone || null
+					};
+					llmDecision.response = "Let me check your order status...";
+				}
+				// ============================================
+				// CASE 2: LLM provided complaint context - ONLY for Shopify agents
+				// ============================================
+				else if (hasShopify && llmDecision.complaint_context && llmDecision.complaint_context.order_number) {
+					console.log('📋 LLM provided complaint context - generating acknowledgment');
+					
+					const orderNum = llmDecision.complaint_context.order_number;
+					llmDecision.function_call_needed = true;
+					llmDecision.function_name = 'check_order_status';
+					llmDecision.function_arguments = { order_number: orderNum };
+					llmDecision.response = "Let me look up your order details...";
+				}
+				// ============================================
+				// CASE 3: LLM wants to call a function but no response
+				// ============================================
+				else if (llmDecision.function_call_needed && llmDecision.function_name) {
+					console.log('🔧 LLM wants function call but no response - generating placeholder');
+					llmDecision.response = "Let me help you with that...";
+				}
+				// ============================================
+				// CASE 4: Trivial messages (greetings, thanks, bye)
+				// ============================================
+				else if (this._isTrivialMessage(message)) {
+					const lowerMsg = message.toLowerCase().trim();
+					
+					if (/^(hi|hello|hey|hii+|helo+|assalam|aoa|salam)/i.test(lowerMsg)) {
 						llmDecision.response = agent.greeting || "Hello! How can I help you today?";
-						console.log('👋 Using greeting response for trivial message');
-					} else if (/^(thanks|thank|shukriya|thx|ty)/i.test(message.toLowerCase().trim())) {
-						// Thanks
+						console.log('👋 Using greeting response');
+					} else if (/^(thanks|thank|shukriya|thx|ty)/i.test(lowerMsg)) {
 						llmDecision.response = "You're welcome! Is there anything else I can help you with?";
-					} else if (/^(bye|goodbye|allah\s*hafiz|khuda\s*hafiz)/i.test(message.toLowerCase().trim())) {
-						// Goodbye
+					} else if (/^(bye|goodbye|allah\s*hafiz|khuda\s*hafiz)/i.test(lowerMsg)) {
 						llmDecision.response = "Goodbye! Feel free to reach out if you need any help. Allah Hafiz!";
 						llmDecision.conversation_complete = true;
 						llmDecision.user_wants_to_end = true;
 					} else {
-						// Other trivial (yes/no/ok)
 						llmDecision.response = "I understand. How can I assist you further?";
 					}
-				} else {
-					// Non-trivial message but empty response - this shouldn't happen
-					llmDecision.response = "I apologize, but I encountered an issue. Could you please repeat your question?";
-					console.log('❌ Empty response for non-trivial message - using error fallback');
+				}
+				// ============================================
+				// CASE 5: Looks like order identifier - ONLY for Shopify agents
+				// ============================================
+				else if (hasShopify && this._looksLikeOrderIdentifier(message)) {
+					console.log('🔍 Message looks like order identifier - auto-triggering lookup');
+					
+					const identifier = this._parseOrderIdentifier(message);
+					llmDecision.function_call_needed = true;
+					llmDecision.function_name = 'check_order_status';
+					llmDecision.function_arguments = identifier;
+					llmDecision.response = "Let me look that up for you...";
+				}
+				// ============================================
+				// CASE 6: Truly empty - ask for clarification
+				// ============================================
+				else {
+					llmDecision.response = "I apologize, but I couldn't process that properly. Could you please provide more details or rephrase your request?";
+					console.log('❌ Empty response with no actionable data - using fallback');
 				}
 			}
 			
@@ -1342,6 +2018,20 @@ class ChatService {
 		}
 
 		// ============================================
+		// 📝 TRACK COMPLAINT STATE FROM LLM RESPONSE
+		// ============================================
+		// Check if LLM is asking for complaint images or if complaint context changed
+		const updatedComplaintState = await this._checkAndUpdateComplaintState(
+			sessionId,
+			llmDecision,
+			session.complaint_state
+		);
+
+		if (updatedComplaintState && updatedComplaintState.awaiting_images) {
+			console.log('📷 Bot is now awaiting complaint images');
+		}
+
+		// ============================================
 		// 🔧 HANDLE FUNCTION CALLS (from JSON decision)
 		// ============================================
 		let executedFunctionCalls = [];
@@ -1350,112 +2040,145 @@ class ChatService {
 			console.log(`🔧 Function call requested: ${llmDecision.function_name}`);
 			console.log(`📋 Arguments:`, llmDecision.function_arguments);
 			
-			const builtInFunctions = ['check_order_status'];
-			const isBuiltInFunction = builtInFunctions.includes(llmDecision.function_name);
-	
-			// Verify function exists
-			const requestedFunction = isBuiltInFunction 
-				? { name: llmDecision.function_name, is_active: true, _builtin: true }
-				: agent.functions?.find(
-					fn => fn.name === llmDecision.function_name && fn.is_active !== false
-				);
+			// ============================================
+			// 🛡️ GUARD: Don't call function if required arguments are missing
+			// ============================================
+			const shouldSkipFunction = this._shouldSkipFunctionCall(
+				llmDecision.function_name, 
+				llmDecision.function_arguments,
+				agent
+			);
 			
-			if (requestedFunction) {
-				try {
-					// Execute the function
-					const functionResult = await this._executeFunction(
-						agent,
-						llmDecision.function_name,
-						llmDecision.function_arguments || {}
-					);
-					
-					console.log(`✅ Function executed:`, functionResult.status);
-					
-					executedFunctionCalls.push({
-						function_id: uuidv4(),
-						function_name: llmDecision.function_name,
-						arguments: llmDecision.function_arguments,
-						result: functionResult,
-						status: 'success'
-					});
-					
-					// Make second LLM call with function result
-					console.log('🔄 Calling LLM again with function result...');
-					
-					const messagesWithFunctionResult = [
-						...messages,
-						{
-							role: 'assistant',
-							content: JSON.stringify(llmDecision)
-						},
-						{
-							role: 'user',
-							content: `[FUNCTION RESULT for ${llmDecision.function_name}]:\n${JSON.stringify(functionResult, null, 2)}\n\nBased on this function result, provide your final response to the user. Remember to respond in valid JSON format.`
-						}
-					];
-					
-					const functionFollowupCompletion = await this.openai.chat.completions.create({
-						model: model,
-						messages: messagesWithFunctionResult,
-						response_format: { type: "json_object" },
-						temperature: parseFloat(agent.temperature) || 0.7,
-						max_tokens: agent.max_tokens || 4096
-					});
-					
-					// Calculate second call cost
-					const secondCallCost = CostCalculator.calculateChatCost({
-						prompt_tokens: functionFollowupCompletion.usage.prompt_tokens,
-						completion_tokens: functionFollowupCompletion.usage.completion_tokens,
-						cached_tokens: functionFollowupCompletion.usage.prompt_tokens_details?.cached_tokens || 0
-					}, model);
-					
-					console.log('💰 Function followup LLM cost:', secondCallCost.final_cost);
-					llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
-					
-					// Parse final response
-					try {
-						const finalDecision = JSON.parse(functionFollowupCompletion.choices[0].message.content);
-						console.log('✅ Final response after function call:', finalDecision.response?.substring(0, 100));
-						
-						// Update llmDecision with final response
-						llmDecision.response = finalDecision.response;
-						llmDecision.function_call_needed = false; // Don't call again
-						
-						// Preserve any other decisions from final response
-						if (finalDecision.agent_transfer !== undefined) {
-							llmDecision.agent_transfer = finalDecision.agent_transfer;
-						}
-						if (finalDecision.conversation_complete !== undefined) {
-							llmDecision.conversation_complete = finalDecision.conversation_complete;
-						}
-						if (finalDecision.user_wants_to_end !== undefined) {
-							llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
-						}
-						
-					} catch (parseError) {
-						console.error('❌ Failed to parse function followup response:', parseError.message);
-						// Use the raw content as response
-						llmDecision.response = functionFollowupCompletion.choices[0].message.content || 
-							"I've processed your request.";
-					}
-					
-				} catch (functionError) {
-					console.error(`❌ Function execution failed:`, functionError);
-					
-					executedFunctionCalls.push({
-						function_id: uuidv4(),
-						function_name: llmDecision.function_name,
-						arguments: llmDecision.function_arguments,
-						result: { error: functionError.message },
-						status: 'error'
-					});
-					
-					// Update response to indicate failure
-					llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again or let me know how else I can help.";
-				}
+			if (shouldSkipFunction.skip) {
+				console.log(`⏭️ Skipping function call: ${shouldSkipFunction.reason}`);
+				llmDecision.function_call_needed = false;
+				// Keep the response as-is (LLM already asked for the missing info)
 			} else {
-				console.warn(`⚠️ Function not found or inactive: ${llmDecision.function_name}`);
-				llmDecision.response = "I apologize, but I'm unable to perform that action at the moment. How else can I help you?";
+				
+				const builtInFunctions = ['check_order_status'];
+				const isBuiltInFunction = builtInFunctions.includes(llmDecision.function_name);
+		
+				// Verify function exists
+				const requestedFunction = isBuiltInFunction 
+					? { name: llmDecision.function_name, is_active: true, _builtin: true }
+					: agent.functions?.find(
+						fn => fn.name === llmDecision.function_name && fn.is_active !== false
+					);
+				
+				if (requestedFunction) {
+					try {
+						// Execute the function
+						const functionResult = await this._executeFunction(
+							agent,
+							llmDecision.function_name,
+							llmDecision.function_arguments || {}
+						);
+						
+						console.log(`✅ Function executed:`, llmDecision.function_name);
+						
+						executedFunctionCalls.push({
+							function_id: uuidv4(),
+							function_name: llmDecision.function_name,
+							arguments: llmDecision.function_arguments,
+							result: functionResult,
+							status: 'success'
+						});
+						
+						// Make second LLM call with function result
+						console.log('🔄 Calling LLM again with function result...');
+						
+						const messagesWithFunctionResult = [
+							...messages,
+							{
+								role: 'assistant',
+								content: JSON.stringify(llmDecision)
+							},
+							{
+								role: 'user',
+								content: `[FUNCTION RESULT for ${llmDecision.function_name}]:
+							${JSON.stringify(functionResult, null, 2)}
+
+							${session.complaint_state?.active ? `
+							⚠️ ACTIVE COMPLAINT DETECTED: ${session.complaint_state.type || 'Unknown'}
+
+							MANDATORY: You MUST check if this complaint is within the allowed time window.
+							1. Look at the delivery/order date in the function result
+							2. Calculate days elapsed from delivery to TODAY (${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })})
+							3. Check your instructions for the time limit policy (e.g., 48 hours, 7 days)
+							4. Fill the date_validation object with your calculation
+							5. If days_elapsed > threshold → REJECT the complaint, do NOT ask for images
+
+							Remember: If the time window has passed, you CANNOT process the complaint regardless of the issue.
+							` : ''}
+
+							Based on this function result, provide your final response to the user.
+							Remember to respond in valid JSON format with all required fields including date_validation if applicable.`
+							}
+						];
+						
+						const functionFollowupCompletion = await this.openai.chat.completions.create({
+							model: model,
+							messages: messagesWithFunctionResult,
+							response_format: { type: "json_object" },
+							temperature: parseFloat(agent.temperature) || 0.7,
+							max_tokens: agent.max_tokens || 4096
+						});
+						
+						// Calculate second call cost
+						const secondCallCost = CostCalculator.calculateChatCost({
+							prompt_tokens: functionFollowupCompletion.usage.prompt_tokens,
+							completion_tokens: functionFollowupCompletion.usage.completion_tokens,
+							cached_tokens: functionFollowupCompletion.usage.prompt_tokens_details?.cached_tokens || 0
+						}, model);
+						
+						console.log('💰 Function followup LLM cost:', secondCallCost.final_cost);
+						llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
+						
+						// Parse final response
+						try {
+							const finalDecision = JSON.parse(functionFollowupCompletion.choices[0].message.content);
+							console.log('✅ Final response after function call:', finalDecision.response?.substring(0, 100));
+							
+							// Update llmDecision with final response
+							llmDecision.response = finalDecision.response;
+							llmDecision.function_call_needed = false; // Don't call again
+							
+							// Preserve any other decisions from final response
+							if (finalDecision.agent_transfer !== undefined) {
+								llmDecision.agent_transfer = finalDecision.agent_transfer;
+							}
+							if (finalDecision.conversation_complete !== undefined) {
+								llmDecision.conversation_complete = finalDecision.conversation_complete;
+							}
+							if (finalDecision.user_wants_to_end !== undefined) {
+								llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
+							}
+							
+						} catch (parseError) {
+							console.error('❌ Failed to parse function followup response:', parseError.message);
+							// Use the raw content as response
+							llmDecision.response = functionFollowupCompletion.choices[0].message.content || 
+								"I've processed your request.";
+						}
+						
+					} catch (functionError) {
+						console.error(`❌ Function execution failed:`, functionError);
+						
+						executedFunctionCalls.push({
+							function_id: uuidv4(),
+							function_name: llmDecision.function_name,
+							arguments: llmDecision.function_arguments,
+							result: { error: functionError.message },
+							status: 'error'
+						});
+						
+						// Update response to indicate failure
+						llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again or let me know how else I can help.";
+					}
+				} else {
+					console.warn(`⚠️ Function not found or inactive: ${llmDecision.function_name}`);
+					llmDecision.response = "I apologize, but I'm unable to perform that action at the moment. How else can I help you?";
+				}
 			}
 		}
 
@@ -2322,10 +3045,10 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 			channelContextPrompt += `
 		--------------------------------------------------------------------
 		`;
-			
-			systemPrompt += channelContextPrompt;
 		}
-			
+		
+		systemPrompt += this._getDateValidationInstructions();
+		
 		const searchMode = agent?.knowledge_search_mode || 'auto';
     
 		// ============================================
@@ -2374,7 +3097,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		// ============================================
 		const coverage = this._detectInstructionCoverage(baseInstructions);
 		
-		console.log('📋 Instruction coverage:', JSON.stringify(coverage));
+		//console.log('📋 Instruction coverage:', JSON.stringify(coverage));
 
 		// ============================================
 		// 🌐 LANGUAGE MATCHING RULE (if not defined by user)
@@ -2491,6 +3214,30 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	  "order_intent_detected": true/false,
 	  "conversation_complete": true/false,
 	  "user_wants_to_end": true/false
+	  
+	  // ============================================
+      // 🆕 DATE VALIDATION (Required for time-based policies)
+      // ============================================
+      "date_validation": {
+        "required": false,
+        "policy_type": null,
+        "current_date": null,
+        "comparison_date": null,
+        "days_elapsed": null,
+        "threshold_days": null,
+        "threshold_description": null,
+        "validation_passed": null,
+        "calculation_shown": null
+      },
+     
+      // 🆕 COMPLAINT CONTEXT (Required for complaints)
+      "complaint_context": {
+        "complaint_type": null,
+        "requires_date_check": false,
+        "order_number": null,
+        "delivery_date": null,
+        "delivery_status": null
+      }
 	}
 
 	--------------------------------------------------------------------
@@ -4486,6 +5233,961 @@ GENERAL RULES:
 		};
 		
 		return channelInstructions[channel] || null;
+	}
+	
+	// Add this helper method to ChatService class
+	_getDateValidationInstructions() {
+		return `
+	   --------------------------------------------------------------------
+	   📅 MANDATORY DATE REASONING (For ANY time-based policy)
+	   --------------------------------------------------------------------
+	   
+	   When ANY policy involves a TIME LIMIT (e.g., "within 48 hours", "7 days", "30 days"):
+	   
+	   YOU MUST fill the date_validation object with your calculations!
+	   
+	   STEP 1: Identify if date validation is needed
+	   - Does this situation involve a time-based policy?
+	   - Examples: return windows, complaint deadlines, warranty periods
+	   
+	   STEP 2: Show your calculation (MANDATORY)
+	   {
+		 "date_validation": {
+		   "required": true,
+		   "policy_type": "48-hour complaint window",
+		   "current_date": "December 11, 2025",
+		   "comparison_date": "November 19, 2025",
+		   "days_elapsed": 22,
+		   "threshold_days": 2,
+		   "threshold_description": "48 hours = 2 days",
+		   "validation_passed": false,
+		   "calculation_shown": "December 11 - November 19 = 22 days. 22 > 2, so FAILED"
+		 }
+	   }
+	   
+	   STEP 3: Make decision BASED ON YOUR CALCULATION
+	   - If validation_passed = true → Proceed with the request
+	   - If validation_passed = false → Reject/decline with explanation
+	   
+	   ⚠️ CRITICAL RULES:
+	   1. ALWAYS show calculation_shown with your math
+	   2. NEVER proceed with time-sensitive requests if validation_passed = false
+	   3. Your response MUST match your validation result
+	   4. If days_elapsed > threshold_days → validation_passed MUST be false
+	   
+	   EXAMPLE - 48-hour policy FAILED:
+	   Current: December 11, 2025
+	   Delivery: November 19, 2025
+	   Calculation: 22 days elapsed > 2 days threshold
+	   validation_passed: false
+	   Response: "I'm sorry, but this request can only be processed within 48 hours..."
+	   
+	   EXAMPLE - 48-hour policy PASSED:
+	   Current: December 11, 2025
+	   Delivery: December 10, 2025
+	   Calculation: 1 day elapsed <= 2 days threshold
+	   validation_passed: true
+	   Response: "I can help you with this. Please share pictures..."
+	   
+	   --------------------------------------------------------------------
+	`;
+	}
+	
+	/**
+	 * Validates LLM's date-based reasoning - GENERIC, works with any time policy
+	 * @param {Object} llmDecision - The parsed LLM response
+	 * @returns {Object} Validation result with corrections if needed
+	 */
+	_validateDateReasoning(llmDecision) {
+		const dateValidation = llmDecision.date_validation;
+		
+		// If no date validation required or not provided, skip
+		if (!dateValidation || !dateValidation.required) {
+			return { valid: true, checked: false };
+		}
+		
+		console.log('📅 Validating LLM date reasoning...');
+		console.log('   LLM provided:', JSON.stringify(dateValidation, null, 2));
+		
+		// Parse the dates the LLM provided
+		const currentDate = this._parseFlexibleDate(dateValidation.current_date);
+		const comparisonDate = this._parseFlexibleDate(dateValidation.comparison_date);
+		
+		if (!currentDate || !comparisonDate) {
+			console.log('⚠️ Could not parse dates for validation');
+			return { valid: true, checked: false, reason: 'Could not parse dates' };
+		}
+		
+		// Calculate actual days elapsed
+		const actualDaysElapsed = Math.floor(
+			(currentDate - comparisonDate) / (1000 * 60 * 60 * 24)
+		);
+		
+		const llmDaysElapsed = parseInt(dateValidation.days_elapsed);
+		const threshold = parseInt(dateValidation.threshold_days);
+		
+		// Check if LLM calculated correctly (allow 1 day variance for timezone issues)
+		const calculationCorrect = Math.abs(actualDaysElapsed - llmDaysElapsed) <= 1;
+		
+		// Check if LLM's decision matches the calculation
+		const shouldPass = actualDaysElapsed <= threshold;
+		const llmSaysPass = dateValidation.validation_passed === true;
+		
+		console.log(`📊 Date Validation Check:`);
+		console.log(`   Policy: ${dateValidation.policy_type || 'Unknown'}`);
+		console.log(`   Current Date: ${dateValidation.current_date}`);
+		console.log(`   Comparison Date: ${dateValidation.comparison_date}`);
+		console.log(`   LLM calculated: ${llmDaysElapsed} days`);
+		console.log(`   Actual calculation: ${actualDaysElapsed} days`);
+		console.log(`   Threshold: ${threshold} days (${dateValidation.threshold_description || ''})`);
+		console.log(`   LLM says passed: ${llmSaysPass}`);
+		console.log(`   Should pass: ${shouldPass}`);
+		console.log(`   Calculation correct: ${calculationCorrect}`);
+		
+		// Check for errors
+		if (!calculationCorrect) {
+			console.log(`🚨 LLM CALCULATION ERROR: ${llmDaysElapsed} vs actual ${actualDaysElapsed}`);
+		}
+		
+		if (llmSaysPass !== shouldPass) {
+			console.log(`🚨 LLM DECISION ERROR: Said ${llmSaysPass ? 'PASS' : 'FAIL'} but should ${shouldPass ? 'PASS' : 'FAIL'}`);
+		}
+		
+		if (!calculationCorrect || llmSaysPass !== shouldPass) {
+			return {
+				valid: false,
+				checked: true,
+				error_type: !calculationCorrect ? 'calculation_error' : 'decision_error',
+				llm_values: {
+					days_elapsed: llmDaysElapsed,
+					validation_passed: llmSaysPass
+				},
+				corrected: {
+					days_elapsed: actualDaysElapsed,
+					validation_passed: shouldPass,
+					calculation_shown: `${dateValidation.current_date} - ${dateValidation.comparison_date} = ${actualDaysElapsed} days. ${actualDaysElapsed} ${shouldPass ? '<=' : '>'} ${threshold} threshold.`
+				},
+				policy_type: dateValidation.policy_type,
+				threshold_days: threshold,
+				threshold_description: dateValidation.threshold_description
+			};
+		}
+		
+		console.log('✅ LLM date reasoning validated successfully');
+		return { valid: true, checked: true };
+	}
+
+	/**
+	 * Parse various date formats flexibly
+	 */
+	_parseFlexibleDate(dateStr) {
+		if (!dateStr) return null;
+		
+		// Try direct parsing
+		let date = new Date(dateStr);
+		if (!isNaN(date.getTime())) return date;
+		
+		// Try common formats
+		// "December 11, 2025" or "November 19, 2025"
+		const monthDayYear = dateStr.match(/(\w+)\s+(\d+),?\s+(\d{4})/);
+		if (monthDayYear) {
+			date = new Date(`${monthDayYear[1]} ${monthDayYear[2]}, ${monthDayYear[3]}`);
+			if (!isNaN(date.getTime())) return date;
+		}
+		
+		// "11 December 2025"
+		const dayMonthYear = dateStr.match(/(\d+)\s+(\w+)\s+(\d{4})/);
+		if (dayMonthYear) {
+			date = new Date(`${dayMonthYear[2]} ${dayMonthYear[1]}, ${dayMonthYear[3]}`);
+			if (!isNaN(date.getTime())) return date;
+		}
+		
+		// "2025-12-11"
+		const isoFormat = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+		if (isoFormat) {
+			date = new Date(dateStr);
+			if (!isNaN(date.getTime())) return date;
+		}
+		
+		return null;
+	}
+
+	/**
+	 * Generate rejection message based on policy context
+	 * Uses the LLM's own policy information - NOT hardcoded
+	 */
+	_generatePolicyRejectionMessage(validationResult, complaintContext) {
+		const policyType = validationResult.policy_type || 'time-sensitive request';
+		const threshold = validationResult.threshold_description || `${validationResult.threshold_days} days`;
+		const daysElapsed = validationResult.corrected.days_elapsed;
+		
+		// Get order/date info from complaint context
+		const orderNumber = complaintContext?.order_number || '';
+		const deliveryDate = complaintContext?.delivery_date || validationResult.llm_values?.comparison_date || 'the delivery date';
+		
+		// Format delivery date nicely
+		let formattedDeliveryDate = deliveryDate;
+		const parsedDate = this._parseFlexibleDate(deliveryDate);
+		if (parsedDate) {
+			formattedDeliveryDate = parsedDate.toLocaleDateString('en-US', {
+				month: 'long',
+				day: 'numeric',
+				year: 'numeric'
+			});
+		}
+		
+		// Build rejection message
+		const orderRef = orderNumber ? ` Your order ${orderNumber.includes('CZ-') ? orderNumber : 'CZ-' + orderNumber}` : ' Your order';
+		
+		return `I'm sorry, but ${policyType} can only be processed within ${threshold} of delivery.${orderRef} was delivered on ${formattedDeliveryDate}, which is ${daysElapsed} days ago. Unfortunately, we cannot process this request as it exceeds the ${threshold} window.`;
+	}
+	
+	/**
+	 * Classify if incoming image is for complaint evidence or product search
+	 * Uses 3-tier approach: Session State → Keywords → LLM (cost-optimized)
+	 * 
+	 * @param {Object} session - Current chat session
+	 * @param {Array} history - Conversation history
+	 * @param {string} message - Current user message
+	 * @returns {Promise<Object>} Classification result
+	 */
+	async _classifyImageIntent(session, history, message) {
+		console.log('📷 Classifying image intent...');
+		
+		// Get agent to check capabilities
+		const agent = await AgentService.getAgent(session.agent_id);
+		const hasShopify = agent?.shopify_store_url && agent?.shopify_access_token;
+		const hasProducts = agent?.kb_metadata?.has_products || false;
+		const canSearchProducts = hasShopify || hasProducts;
+		
+		// ============================================
+		// TIER 0: Agent Capability Check
+		// ============================================
+		if (!canSearchProducts) {
+			console.log('📷 Agent has no product search capability - routing to LLM analysis');
+			return { 
+				intent: 'llm_analysis', 
+				confidence: 'high', 
+				source: 'no_product_capability',
+				reason: 'Agent does not have products or Shopify integration'
+			};
+		}
+		
+		// ============================================
+		// TIER 1: Session State Check (FREE - DB lookup)
+		// ============================================
+		const complaintState = session.complaint_state;
+		
+		if (complaintState && complaintState.active && complaintState.awaiting_images) {
+			console.log('📷 Intent: COMPLAINT_EVIDENCE (from session state)');
+			return { 
+				intent: 'complaint_evidence', 
+				confidence: 'high',
+				source: 'session_state',
+				complaint_type: complaintState.type,
+				order_number: complaintState.order_number,
+				delivery_date: complaintState.delivery_date,
+				customer_email: complaintState.customer_email,
+				customer_phone: complaintState.customer_phone
+			};
+		}
+		
+		// ============================================
+		// TIER 2: Keyword Analysis (FREE - string matching)
+		// ============================================
+		const recentMessages = history.slice(-5);
+		const recentText = recentMessages
+			.map(m => m.content || '')
+			.join(' ')
+			.toLowerCase();
+		
+		// Include current message
+		const fullContext = (recentText + ' ' + (message || '')).toLowerCase();
+		
+		// Complaint-related keywords (English + Urdu)
+		const complaintKeywords = [
+			// Problem descriptions
+			'damaged', 'broken', 'defective', 'torn', 'rough', 'quality issue', 'not new',
+			'missing', 'wrong color', 'wrong size', 'manufacturing', 'stitching', 'defect',
+			// Action phrases
+			'share picture', 'send photo', 'upload image', 'show you', 'here is',
+			'complaint', 'problem with order', 'issue with', 'not working', 'received damaged',
+			// Urdu keywords
+			'tasveer', 'picture bhejo', 'photo bhejo', 'image bhejo',
+			'kharab', 'tuta', 'toota', 'phat', 'phata', 'masla', 'problem',
+			'ghalat color', 'ghalat size', 'nuqs'
+		];
+		
+		// Product search keywords (English + Urdu)
+		const productKeywords = [
+			// Search intent
+			'show me', 'find similar', 'find like this', 'search for', 'looking for',
+			'like this', 'similar to', 'match this', 'same as this', 'is jaisa',
+			// Purchase intent
+			'price of', 'cost of', 'how much', 'kitne ka', 'kimat',
+			'available in', 'stock mein', 'buy this', 'purchase', 'order this',
+			// Urdu product keywords
+			'dikhao', 'dikha do', 'yeh chahiye', 'aisa', 'is jaisa', 'milta julta'
+		];
+		
+		// Bot asking for images (high priority)
+		const botAskingForImages = [
+			'share picture', 'share photo', 'send picture', 'send photo',
+			'upload image', 'tasveer bhejo', 'photo share', 'picture share',
+			'please share', 'kindly share', 'share images', 'send images'
+		];
+		
+		// Check if bot recently asked for complaint images
+		const botAskedForImages = recentMessages
+			.filter(m => m.role === 'assistant')
+			.slice(-2)
+			.some(m => botAskingForImages.some(phrase => 
+				(m.content || '').toLowerCase().includes(phrase)
+			));
+		
+		if (botAskedForImages) {
+			console.log('📷 Intent: COMPLAINT_EVIDENCE (bot asked for images)');
+			return { 
+				intent: 'complaint_evidence', 
+				confidence: 'high', 
+				source: 'bot_request' 
+			};
+		}
+		
+		// Score keywords
+		const complaintScore = complaintKeywords.filter(k => fullContext.includes(k)).length;
+		const productScore = productKeywords.filter(k => fullContext.includes(k)).length;
+		
+		console.log(`📊 Keyword scores - Complaint: ${complaintScore}, Product: ${productScore}`);
+		
+		// Clear complaint winner
+		if (complaintScore >= 2 && productScore === 0) {
+			console.log('📷 Intent: COMPLAINT_EVIDENCE (from keywords)');
+			return { intent: 'complaint_evidence', confidence: 'medium', source: 'keywords' };
+		}
+		
+		// Clear product winner
+		if (productScore >= 1 && complaintScore === 0) {
+			console.log('📷 Intent: PRODUCT_SEARCH (from keywords)');
+			return { intent: 'product_search', confidence: 'medium', source: 'keywords' };
+		}
+		
+		// No clear context - check if we should ask
+		const hasMessage = message && message.trim().length > 5;  // More than just "hi" or "yes"
+		const isAmbiguous = this._isAmbiguousImageMessage(message);
+
+		if (complaintScore === 0 && productScore === 0 && (!hasMessage || isAmbiguous)) {
+			// No text, no keywords, or ambiguous question - ASK THE USER
+			console.log('📷 Intent: UNKNOWN (no clear context or ambiguous - will ask user)');
+			return { intent: 'unknown', confidence: 'low', source: 'no_context' };
+		}
+
+		// Has some text but no complaint keywords - probably product search
+		if (complaintScore === 0) {
+			console.log('📷 Intent: PRODUCT_SEARCH (no complaint context found)');
+			return { intent: 'product_search', confidence: 'medium', source: 'default' };
+		}
+		
+		// ============================================
+		// TIER 3: Minimal LLM Check (CHEAP - only when ambiguous)
+		// ============================================
+		console.log('🤔 Ambiguous context - using minimal LLM classification');
+		
+		// Build minimal context (only last 3 messages)
+		const minimalHistory = recentMessages.slice(-3).map(m => 
+			`${m.role.toUpperCase()}: ${(m.content || '').substring(0, 200)}`
+		).join('\n');
+		
+		const intentPrompt = `Classify user intent for an e-commerce shoe store chat.
+
+	Recent conversation:
+	${minimalHistory}
+
+	User just sent an IMAGE with message: "${message || '[no text, just image]'}"
+
+	Is this image for:
+	A) complaint_evidence - User reporting a problem (damaged shoe, defective, quality issue, wrong item)
+	B) product_search - User wants to find/buy similar products
+
+	Reply ONLY with JSON: {"intent": "complaint_evidence" or "product_search", "reason": "one line"}`;
+
+		try {
+			const completion = await this.openai.chat.completions.create({
+				model: 'gpt-4o-mini',
+				messages: [{ role: 'user', content: intentPrompt }],
+				response_format: { type: "json_object" },
+				max_tokens: 80,
+				temperature: 0.1
+			});
+			
+			const result = JSON.parse(completion.choices[0].message.content);
+			const tokenCost = (completion.usage.total_tokens * 0.00000015).toFixed(6);
+			
+			console.log(`📷 Intent: ${result.intent.toUpperCase()} (from LLM: ${result.reason})`);
+			console.log(`💰 Intent classification cost: $${tokenCost}`);
+			
+			return {
+				intent: result.intent,
+				confidence: 'high',
+				source: 'llm',
+				reason: result.reason,
+				llm_cost: parseFloat(tokenCost)
+			};
+			
+		} catch (error) {
+			console.error('❌ Intent classification LLM failed:', error.message);
+			// Default to product search if LLM fails
+			return { intent: 'product_search', confidence: 'low', source: 'fallback_error' };
+		}
+	}
+
+	/**
+	 * Handle image submitted as complaint evidence
+	 * Collects image, updates state, and continues complaint flow
+	 * 
+	 * @param {Object} session - Current chat session
+	 * @param {string} image - Base64 or URL of the image
+	 * @param {string} message - User's message with the image
+	 * @param {Array} history - Conversation history
+	 * @param {Object} agent - Agent configuration
+	 * @param {Object} imageIntent - Classification result from _classifyImageIntent
+	 * @returns {Promise<Object>} Response object
+	 */
+	async _handleComplaintImage(session, image, message, history, agent, imageIntent) {
+		console.log('📷 Processing image as COMPLAINT EVIDENCE');
+		
+		const sessionId = session.id;
+		let complaintState = session.complaint_state || {};
+		
+		// Initialize complaint state if not exists
+		if (!complaintState.active) {
+			complaintState = {
+				active: true,
+				type: imageIntent.complaint_type || 'UNKNOWN',
+				order_number: imageIntent.order_number || null,
+				delivery_date: imageIntent.delivery_date || null,
+				awaiting_images: true,
+				images_collected: [],
+				initiated_at: new Date().toISOString(),
+				customer_email: imageIntent.customer_email || null,
+				customer_phone: imageIntent.customer_phone || null
+			};
+		}
+		
+		// Add current image to collected images
+		complaintState.images_collected = complaintState.images_collected || [];
+		complaintState.images_collected.push({
+			url: image,
+			added_at: new Date().toISOString(),
+			message: message || null
+		});
+		
+		console.log(`📷 Images collected: ${complaintState.images_collected.length}`);
+		
+		// Update session with new complaint state
+		await this._updateSessionComplaintState(sessionId, complaintState);
+		
+		// Build system prompt for complaint image handling
+		const systemPrompt = this._buildComplaintImagePrompt(agent, complaintState, history);
+		
+		// Build messages - include the image for LLM to see
+		const messages = [
+			{ role: 'system', content: systemPrompt },
+			...history.map(msg => ({ role: msg.role, content: msg.content })),
+			{
+				role: 'user',
+				content: [
+					{ type: 'text', text: message || 'Here is the image for my complaint' },
+					{ type: 'image_url', image_url: { url: image, detail: 'high' } }
+				]
+			}
+		];
+		
+		const model = agent.chat_model || 'gpt-4o-mini';
+		
+		// Call LLM with complaint context
+		const completion = await this.openai.chat.completions.create({
+			model: model,
+			messages: messages,
+			response_format: { type: "json_object" },
+			temperature: parseFloat(agent.temperature) || 0.7,
+			max_tokens: agent.max_tokens || 2048
+		});
+		
+		const aiMessage = completion.choices[0].message;
+		let llmDecision;
+		
+		try {
+			llmDecision = JSON.parse(aiMessage.content);
+			console.log('🤖 LLM Response (complaint image):', JSON.stringify(llmDecision, null, 2));
+		} catch (error) {
+			console.error('❌ Failed to parse complaint image LLM response:', error.message);
+			llmDecision = {
+				response: "Thank you for sharing the image. I've noted this for your complaint. Is there anything else you'd like to add?",
+				function_call_needed: false,
+				conversation_complete: false
+			};
+		}
+		
+		// Check if LLM wants to create ticket now
+		if (llmDecision.function_call_needed && llmDecision.function_name === 'create_ticket') {
+			console.log('🎫 LLM requested ticket creation with images');
+			
+			// Add collected images to function arguments
+			if (!llmDecision.function_arguments) {
+				llmDecision.function_arguments = {};
+			}
+			llmDecision.function_arguments.image_urls = complaintState.images_collected.map(img => img.url);
+			llmDecision.function_arguments.order_no = complaintState.order_number;
+			
+			// Reset complaint state after ticket creation
+			complaintState.awaiting_images = false;
+			complaintState.ticket_requested = true;
+			await this._updateSessionComplaintState(sessionId, complaintState);
+		}
+		
+		// Calculate cost
+		const llmCost = CostCalculator.calculateChatCost({
+			prompt_tokens: completion.usage.prompt_tokens,
+			completion_tokens: completion.usage.completion_tokens,
+			cached_tokens: 0
+		}, model);
+		
+		// Add intent classification cost if any
+		if (imageIntent.llm_cost) {
+			llmCost.final_cost += imageIntent.llm_cost;
+		}
+		
+		console.log('💰 Complaint image handling cost:', llmCost.final_cost);
+		
+		return {
+			llmDecision,
+			llmCost,
+			complaintState,
+			imageProcessedAs: 'complaint_evidence'
+		};
+	}
+
+	/**
+	 * Build system prompt for complaint image handling
+	 * @private
+	 */
+	_buildComplaintImagePrompt(agent, complaintState, history) {
+		const todayFormatted = new Date().toLocaleDateString('en-US', {
+			weekday: 'long',
+			year: 'numeric',
+			month: 'long',
+			day: 'numeric'
+		});
+		
+		return `
+	============================================================
+	📅 CURRENT DATE: ${todayFormatted}
+	============================================================
+
+	${agent.instructions || ''}
+
+	============================================================
+	📷 COMPLAINT IMAGE CONTEXT
+	============================================================
+
+	This user is submitting an image as EVIDENCE for a complaint.
+	DO NOT treat this as a product search request.
+
+	COMPLAINT DETAILS:
+	- Type: ${complaintState.type || 'Not yet identified'}
+	- Order Number: ${complaintState.order_number || 'Not yet provided'}
+	- Delivery Date: ${complaintState.delivery_date || 'Unknown'}
+	- Images Already Collected: ${complaintState.images_collected?.length || 0}
+
+	YOUR TASK:
+	1. Acknowledge receiving the image
+	2. Examine the image - describe what you see (damaged part, defect, etc.)
+	3. If you have enough information (order number + images), proceed to create ticket
+	4. If missing order number, ask for it
+	5. If user wants to add more images, allow them
+
+	DO NOT:
+	- Search for products
+	- Suggest similar items
+	- Treat this as a shopping query
+
+	YOU MUST RESPOND IN VALID JSON FORMAT:
+	{
+	  "response": "Your response acknowledging the complaint image",
+	  "product_search_needed": false,
+	  "product_search_type": "none",
+	  "knowledge_search_needed": false,
+	  "function_call_needed": true/false,
+	  "function_name": "create_ticket" (if ready to create),
+	  "function_arguments": {
+		"event": "create_ticket",
+		"ticket_type": "Product",
+		"ticket_sub_type": "${complaintState.type || 'Damaged Article'}",
+		"order_no": "${complaintState.order_number || ''}",
+		"image_urls": []
+	  },
+	  "complaint_context": {
+		"complaint_type": "${complaintState.type || 'UNKNOWN'}",
+		"order_number": "${complaintState.order_number || ''}",
+		"awaiting_more_images": true/false,
+		"ready_for_ticket": true/false
+	  },
+	  "conversation_complete": false,
+	  "user_wants_to_end": false
+	}
+	`;
+	}
+
+	/**
+	 * Update session complaint state in database
+	 * @private
+	 */
+	async _updateSessionComplaintState(sessionId, complaintState) {
+		try {
+			await db.query(
+				`UPDATE yovo_tbl_aiva_chat_sessions 
+				 SET complaint_state = ?
+				 WHERE id = ?`,
+				[JSON.stringify(complaintState), sessionId]
+			);
+			console.log('✅ Session complaint state updated');
+		} catch (error) {
+			console.error('❌ Failed to update complaint state:', error.message);
+		}
+	}
+
+	/**
+	 * Check LLM response for complaint image request and update session state
+	 * Call this after parsing LLM decision to track when bot asks for images
+	 * 
+	 * @param {string} sessionId - Session ID
+	 * @param {Object} llmDecision - Parsed LLM response
+	 * @param {Object} currentState - Current complaint state (can be null)
+	 */
+	async _checkAndUpdateComplaintState(sessionId, llmDecision, currentState) {
+		// Phrases that indicate bot is asking for complaint images
+		const imageRequestPhrases = [
+			'share picture', 'share photo', 'send picture', 'send photo',
+			'upload image', 'share images', 'send images',
+			'tasveer bhejo', 'photo share', 'picture share',
+			'please share', 'kindly share'
+		];
+		
+		const response = (llmDecision.response || '').toLowerCase();
+		const isAskingForImages = imageRequestPhrases.some(phrase => response.includes(phrase));
+		
+		// Check for complaint context in LLM decision
+		const complaintContext = llmDecision.complaint_context;
+		const hasComplaintContext = complaintContext && 
+			(complaintContext.complaint_type || complaintContext.order_number || complaintContext.awaiting_images);
+		
+		// If bot is asking for images OR LLM indicates complaint context
+		if (isAskingForImages || hasComplaintContext) {
+			const newState = {
+				active: true,
+				type: complaintContext?.complaint_type || currentState?.type || 'UNKNOWN',
+				order_number: complaintContext?.order_number || currentState?.order_number || null,
+				delivery_date: complaintContext?.delivery_date || currentState?.delivery_date || null,
+				awaiting_images: isAskingForImages || complaintContext?.awaiting_images || false,
+				images_collected: currentState?.images_collected || [],
+				initiated_at: currentState?.initiated_at || new Date().toISOString(),
+				customer_email: complaintContext?.customer_email || currentState?.customer_email || null,
+				customer_phone: complaintContext?.customer_phone || currentState?.customer_phone || null
+			};
+			
+			// If date validation was done, capture the result
+			if (llmDecision.date_validation) {
+				newState.validation_checked = true;
+				newState.validation_passed = llmDecision.date_validation.validation_passed;
+			}
+			
+			console.log('📝 Updating complaint state:', JSON.stringify(newState, null, 2));
+			await this._updateSessionComplaintState(sessionId, newState);
+			
+			return newState;
+		}
+		
+		// Check if complaint flow is complete (ticket created or rejected)
+		if (currentState?.active) {
+			const completionPhrases = [
+				'ticket number', 'ticket has been created', 'noted your query',
+				'cannot process this complaint', 'outside 48 hour', '48 hours ago'
+			];
+			
+			const isComplaintComplete = completionPhrases.some(phrase => response.includes(phrase));
+			
+			if (isComplaintComplete) {
+				console.log('🏁 Complaint flow complete - resetting state');
+				const finalState = {
+					...currentState,
+					active: false,
+					awaiting_images: false,
+					completed_at: new Date().toISOString()
+				};
+				await this._updateSessionComplaintState(sessionId, finalState);
+				return finalState;
+			}
+		}
+		
+		return currentState;
+	}
+
+	/**
+	 * Clear complaint state (call when starting fresh or after ticket creation)
+	 */
+	async _clearComplaintState(sessionId) {
+		await this._updateSessionComplaintState(sessionId, null);
+		console.log('🧹 Complaint state cleared');
+	}
+	
+	/**
+	 * Store pending image in session for later processing
+	 * @private
+	 */
+	async _storePendingImage(sessionId, image, originalMessage) {
+		const pendingImage = {
+			image: image,
+			original_message: originalMessage,
+			stored_at: new Date().toISOString()
+		};
+		
+		await db.query(
+			`UPDATE yovo_tbl_aiva_chat_sessions 
+			 SET pending_image = ?
+			 WHERE id = ?`,
+			[JSON.stringify(pendingImage), sessionId]
+		);
+		
+		console.log('📷 Pending image stored for session:', sessionId);
+	}
+
+	/**
+	 * Get and clear pending image from session
+	 * @private
+	 */
+	async _getPendingImage(sessionId) {
+		const [rows] = await db.query(
+			`SELECT pending_image FROM yovo_tbl_aiva_chat_sessions WHERE id = ?`,
+			[sessionId]
+		);
+		
+		if (!rows[0]?.pending_image) return null;
+		
+		const pendingImage = typeof rows[0].pending_image === 'string' 
+			? JSON.parse(rows[0].pending_image) 
+			: rows[0].pending_image;
+		
+		// Clear pending image
+		await db.query(
+			`UPDATE yovo_tbl_aiva_chat_sessions SET pending_image = NULL WHERE id = ?`,
+			[sessionId]
+		);
+		
+		console.log('📷 Retrieved and cleared pending image');
+		return pendingImage;
+	}
+
+	/**
+	 * Detect user's intent choice from their response
+	 * @private
+	 */
+	_detectIntentChoice(message) {
+		const lower = (message || '').toLowerCase().trim();
+		
+		// Product search indicators
+		const productPatterns = [
+			/^1/, /one/i, /first/i, /pehla/i,
+			/similar/i, /product/i, /find/i, /search/i, /dhund/i, /dikhao/i,
+			/buy/i, /purchase/i, /kharid/i
+		];
+		
+		// Complaint indicators
+		const complaintPatterns = [
+			/^2/, /two/i, /second/i, /doosra/i, /dusra/i,
+			/problem/i, /issue/i, /complaint/i, /report/i, /damaged/i,
+			/masla/i, /kharab/i, /broken/i, /defect/i
+		];
+		
+		// Something else
+		const otherPatterns = [
+			/^3/, /three/i, /third/i, /teesra/i,
+			/other/i, /else/i, /aur/i, /different/i
+		];
+		
+		if (productPatterns.some(p => p.test(lower))) {
+			return 'product_search';
+		}
+		
+		if (complaintPatterns.some(p => p.test(lower))) {
+			return 'complaint_evidence';
+		}
+		
+		if (otherPatterns.some(p => p.test(lower))) {
+			return 'other';
+		}
+		
+		return null; // Couldn't determine
+	}
+	
+	/**
+	 * Check if message with image is ambiguous (could be product search OR complaint)
+	 * @private
+	 */
+	_isAmbiguousImageMessage(message) {
+		if (!message) return true;
+		
+		const lower = message.toLowerCase().trim();
+		
+		// Generic questions that don't indicate clear intent
+		const ambiguousPatterns = [
+			// English ambiguous
+			/^what('?s| is) this\??!?$/i,
+			/^what is this\??!?$/i,
+			/^is this\??!?$/i,
+			/^can you (help|tell|check|see|look)\??!?$/i,
+			/^help( me)?\??!?$/i,
+			/^check (this|it|please)\??!?$/i,
+			/^look at this\??!?$/i,
+			/^see this\??!?$/i,
+			/^here\??!?$/i,
+			/^this\??!?$/i,
+			
+			// Urdu/Roman Urdu ambiguous
+			/^ye+h? kya hai\??!?$/i,
+			/^kya hai ye+h?\??!?$/i,
+			/^dekh(o|ein|na)?\??!?$/i,
+			/^ye+h? dekh(o|ein|na)?\??!?$/i,
+			/^check kar(o|ein|na)?\??!?$/i,
+			/^madad\??!?$/i,
+			
+			// Very short messages (less context)
+			/^.{1,10}$/  // 10 chars or less
+		];
+		
+		return ambiguousPatterns.some(pattern => pattern.test(lower));
+	}
+	
+	/**
+	 * Check if message looks like an order identifier (order number, phone, email)
+	 * @private
+	 */
+	_looksLikeOrderIdentifier(message) {
+		if (!message) return false;
+		
+		const trimmed = message.trim();
+		
+		// Order number patterns (CZ-123456, #1234, 233280, etc.)
+		if (/^(CZ-?)?\d{4,10}(_\d+)?$/i.test(trimmed)) return true;
+		if (/^#?\d{4,8}$/i.test(trimmed)) return true;
+		if (/^ORD-?\d+$/i.test(trimmed)) return true;
+		
+		// Phone number patterns
+		if (/^(\+?92|0)?3\d{9}$/.test(trimmed.replace(/[\s-]/g, ''))) return true;  // Pakistani
+		if (/^\+?\d{10,15}$/.test(trimmed.replace(/[\s-]/g, ''))) return true;  // International
+		
+		// Email pattern
+		if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return true;
+		
+		return false;
+	}
+
+	/**
+	 * Parse message to extract order identifier type
+	 * @private
+	 */
+	_parseOrderIdentifier(message) {
+		const trimmed = message.trim();
+		
+		// Email
+		if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+			return { email: trimmed, order_number: null, phone: null };
+		}
+		
+		// Phone number (Pakistani or international)
+		const phoneClean = trimmed.replace(/[\s-]/g, '');
+		if (/^(\+?92|0)?3\d{9}$/.test(phoneClean) || /^\+?\d{10,15}$/.test(phoneClean)) {
+			return { phone: trimmed, order_number: null, email: null };
+		}
+		
+		// Order number (default)
+		// Clean up common prefixes
+		let orderNum = trimmed;
+		if (/^\d+$/.test(orderNum) && !orderNum.startsWith('CZ-')) {
+			orderNum = `CZ-${orderNum}`;  // Auto-add CZ- prefix for bare numbers
+		}
+		
+		return { order_number: orderNum, email: null, phone: null };
+	}
+	
+	/**
+	 * Check if function call should be skipped due to missing required arguments
+	 * Uses function schema to determine required parameters
+	 * @private
+	 */
+	_shouldSkipFunctionCall(functionName, args, agent) {
+		// Find function definition
+		const func = agent.functions?.find(f => f.name === functionName);
+		
+		// Built-in functions schema
+		const builtInSchemas = {
+			'check_order_status': {
+				// At least ONE of these must be provided (OR logic)
+				oneOf: ['order_number', 'email', 'phone']
+			}
+		};
+		
+		// Get schema - either from function definition or built-in
+		let schema = null;
+		
+		if (func?.parameters) {
+			schema = typeof func.parameters === 'string' 
+				? JSON.parse(func.parameters) 
+				: func.parameters;
+		} else if (builtInSchemas[functionName]) {
+			schema = builtInSchemas[functionName];
+		}
+		
+		if (!schema) {
+			// No schema found - allow execution
+			return { skip: false };
+		}
+		
+		// ============================================
+		// CHECK: "oneOf" - at least one must be provided
+		// ============================================
+		if (schema.oneOf && Array.isArray(schema.oneOf)) {
+			const hasAtLeastOne = schema.oneOf.some(param => {
+				const value = args?.[param];
+				return value !== null && value !== undefined && value.toString().trim() !== '';
+			});
+			
+			if (!hasAtLeastOne) {
+				return {
+					skip: true,
+					reason: `${functionName} requires at least one of: ${schema.oneOf.join(', ')} - all are empty`
+				};
+			}
+		}
+		
+		// ============================================
+		// CHECK: "required" - all must be provided (standard JSON schema)
+		// ============================================
+		if (schema.required && Array.isArray(schema.required)) {
+			const missingParams = schema.required.filter(param => {
+				const value = args?.[param];
+				return value === null || value === undefined || value.toString().trim() === '';
+			});
+			
+			if (missingParams.length > 0) {
+				return {
+					skip: true,
+					reason: `${functionName} missing required parameters: ${missingParams.join(', ')}`
+				};
+			}
+		}
+		
+		return { skip: false };
 	}
 }
 

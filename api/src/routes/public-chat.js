@@ -182,7 +182,15 @@ router.post('/message', async (req, res) => {
       agentId: session.agent_id,
       message: message,
       image: image,
-      userId: null
+      userId: null,
+      channelInfo: session_id ? null : {
+		channel: 'public_chat',
+		channelUserId: null,
+		channelUserName: null,
+		channelMetadata: null,
+		contextData: {},
+		llmContextHints: null
+	  }
     });
 
     console.log('🔍 [PUBLIC CHAT] Result received:', {

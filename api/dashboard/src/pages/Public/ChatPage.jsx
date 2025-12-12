@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon } from 'lucide-react';
+import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon, X, Camera } from 'lucide-react';
 import axios from 'axios';
 
 /**
@@ -143,6 +143,11 @@ const ChatPage = () => {
   const [sending, setSending] = useState(false);
   const [showFeedbackPrompt, setShowFeedbackPrompt] = useState(false);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const fileInputRef = useRef(null);
+
   const messagesEndRef = useRef(null);
 
   const API_URL = window.location.origin + '/aiva/api/public/chat';
@@ -230,34 +235,97 @@ const ChatPage = () => {
     }
   };
 
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+  
+    // Validate file type
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      alert('Please select a valid image file (JPEG, PNG, GIF, or WebP)');
+      return;
+    }
+  
+    // Validate file size (max 10MB)
+    const maxSize = 10 * 1024 * 1024;
+    if (file.size > maxSize) {
+      alert('Image size must be less than 10MB');
+      return;
+    }
+  
+    setSelectedImage(file);
+  
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const imageToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
-    
-    if (!input.trim() || sending) return;
+  
+    // Allow sending if there's text OR an image
+    if (!input.trim() && !selectedImage) return;
+    if (sending) return;
 
     const userMessage = input.trim();
     setInput('');
     setSending(true);
 
-    // Add user message to UI
-    const newMessage = {
+    // Convert image to base64 if selected
+    let imageBase64 = null;
+    if (selectedImage) {
+      try {
+        imageBase64 = await imageToBase64(selectedImage);
+      } catch (err) {
+        console.error('Failed to convert image:', err);
+      }
+    }
+
+    // Add user message to chat (with image preview if applicable)
+    const userMsgContent = userMessage || (selectedImage ? '📷 [Image]' : '');
+    setMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'user',
-      content: userMessage,
+      content: userMsgContent,
+      image: imagePreview, // Store preview for display
       created_at: new Date().toISOString()
-    };
-    setMessages(prev => [...prev, newMessage]);
+    }]);
+
+    // Clear image after adding to chat
+    const sentImagePreview = imagePreview;
+    removeImage();
 
     try {
       const response = await axios.post(`${API_URL}/message`, {
         session_id: sessionId,
         agent_id: agentId,
-        message: userMessage
+        message: userMessage || '.', // Default message for image-only
+        image: imageBase64
       });
 
       if (response.data.success) {
         const data = response.data.data;
-        
+      
         // Update sessionId if new session was created
         if (data.new_session_created) {
           const newSessionId = data.session_id;
@@ -265,23 +333,20 @@ const ChatPage = () => {
           localStorage.setItem(`aiva_chat_${agentId}`, newSessionId);
         }
 
-        // ✅ FIX: Build message with response object for proper display priority
+        // Build message with response object for proper display priority
         const assistantMessage = {
           id: data.message_id?.messageId || data.message_id,
           role: 'assistant',
-          // Store the full response object
           response: data.response,
-          // Also store individual fields for backward compatibility
           content: data.response?.text || data.response || '',
           html: data.response?.html || '',
-          // Sources and images for collapsible section
           sources: data.sources || [],
           images: data.images || [],
           products: data.products || [],
           agent_transfer: data.agent_transfer,
           created_at: data.created_at
         };
-        
+      
         setMessages(prev => [...prev, assistantMessage]);
 
         // Handle agent transfer
@@ -295,7 +360,7 @@ const ChatPage = () => {
             }]);
           }, 1000);
         }
-        
+      
         // Handle conversation end - show feedback prompt
         if (data.show_feedback_prompt && !feedbackSubmitted) {
           setShowFeedbackPrompt(true);
@@ -367,12 +432,22 @@ const ChatPage = () => {
    * - Sources and images are in CollapsibleSources component
    */
   const renderMessageContent = (message) => {
-    // ✅ FIX: Priority order for main content:
-    // 1. response.html (synthesized LLM answer)
-    // 2. response.text (synthesized LLM answer, plain text)
-    // 3. html (fallback)
-    // 4. content (raw text fallback)
-    // ❌ NOT formatted_html (that's raw chunks, not the answer!)
+    if (message.role === 'user' && message.image) {
+      return (
+        <div>
+          {message.content && message.content !== '📷 [Image]' && (
+            <p className="text-sm mb-2">{message.content}</p>
+          )}
+          <img 
+            src={message.image} 
+            alt="Uploaded" 
+            className="max-w-xs rounded-lg"
+          />
+        </div>
+      );
+    }	  
+	  
+	  
     const mainContent = message.response?.html 
       || message.response?.text 
       || message.html 
@@ -381,13 +456,11 @@ const ChatPage = () => {
     
     return (
       <>
-        {/* Main Answer - Synthesized LLM Response */}
         <div 
           className="text-sm whitespace-pre-wrap prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{ __html: mainContent }}
         />
 
-        {/* ✅ Collapsible Sources & Images */}
         <CollapsibleSources 
           sources={message.sources} 
           images={message.images} 
@@ -571,38 +644,95 @@ const ChatPage = () => {
       )}
       
       {/* Input */}
-      <div className="bg-white border-t border-gray-200 px-4 py-4">
-        <div className="max-w-4xl mx-auto">
-          <form onSubmit={sendMessage} className="flex items-end space-x-3">
-            <div className="flex-1">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage(e);
-                  }
-                }}
-                placeholder="Type your message..."
-                rows="1"
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
-                style={{ minHeight: '52px', maxHeight: '200px' }}
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={!input.trim() || sending}
-              className="flex-shrink-0 bg-primary-600 text-white rounded-xl px-4 py-3 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <Send className="w-5 h-5" />
-            </button>
-          </form>
-          <p className="text-xs text-gray-500 text-center mt-2">
-            Press Enter to send, Shift+Enter for new line
-          </p>
-        </div>
-      </div>
+		<div className="bg-white border-t border-gray-200 px-4 py-4">
+		  <div className="max-w-4xl mx-auto">
+			{/* Image Preview */}
+			{imagePreview && (
+			  <div className="mb-3 flex items-start gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
+				<img 
+				  src={imagePreview} 
+				  alt="Selected" 
+				  className="w-16 h-16 object-cover rounded-lg"
+				/>
+				<div className="flex-1 min-w-0">
+				  <p className="text-sm font-medium text-gray-900 truncate">
+					{selectedImage?.name}
+				  </p>
+				  <p className="text-xs text-gray-500">
+					{selectedImage && (selectedImage.size / 1024).toFixed(1)} KB
+				  </p>
+				</div>
+				<button
+				  type="button"
+				  onClick={removeImage}
+				  className="text-gray-400 hover:text-gray-600 p-1"
+				>
+				  <X className="w-5 h-5" />
+				</button>
+			  </div>
+			)}
+			
+			<form onSubmit={sendMessage} className="flex items-end space-x-3">
+			  {/* Hidden file input */}
+			  <input
+				ref={fileInputRef}
+				type="file"
+				accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+				onChange={handleImageSelect}
+				className="hidden"
+			  />
+			  
+			  {/* Image upload button */}
+			  <button
+				type="button"
+				onClick={() => fileInputRef.current?.click()}
+				disabled={sending}
+				className="flex-shrink-0 p-3 border border-gray-300 rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+				title="Upload image"
+			  >
+				<Camera className="w-5 h-5 text-gray-600" />
+			  </button>
+			  
+			  {/* Text input */}
+			  <div className="flex-1">
+				<textarea
+				  value={input}
+				  onChange={(e) => setInput(e.target.value)}
+				  onKeyDown={(e) => {
+					if (e.key === 'Enter' && !e.shiftKey) {
+					  e.preventDefault();
+					  sendMessage(e);
+					}
+				  }}
+				  placeholder={selectedImage ? "Add a message or just send the image..." : "Type your message..."}
+				  rows="1"
+				  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+				  style={{ minHeight: '52px', maxHeight: '200px' }}
+				/>
+			  </div>
+			  
+			  {/* Send button */}
+			  <button
+				type="submit"
+				disabled={(!input.trim() && !selectedImage) || sending}
+				className="flex-shrink-0 bg-primary-600 text-white rounded-xl px-4 py-3 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+			  >
+				{sending ? (
+				  <Loader className="w-5 h-5 animate-spin" />
+				) : (
+				  <Send className="w-5 h-5" />
+				)}
+			  </button>
+			</form>
+			
+			<p className="text-xs text-gray-500 text-center mt-2">
+			  {selectedImage 
+				? "Press Enter to send with image" 
+				: "Press Enter to send, Shift+Enter for new line"
+			  }
+			</p>
+		  </div>
+		</div>
     </div>
   );
 };
