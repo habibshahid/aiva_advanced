@@ -57,7 +57,6 @@ module.exports = {
           ALTER TABLE yovo_tbl_aiva_chat_sessions 
           ADD COLUMN pending_image json DEFAULT NULL
           COMMENT 'Stores image awaiting user intent clarification (product search vs complaint)'
-          AFTER complaint_state
         `);
         
         console.log('✓ Successfully added pending_image column');
