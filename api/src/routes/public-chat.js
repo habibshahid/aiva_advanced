@@ -206,11 +206,11 @@ router.post('/message', async (req, res) => {
 
     // 1. Check for KB search cost (if any)
     if (result.cost_breakdown && result.cost_breakdown.operations) {
-      const kbOperation = result.cost_breakdown.operations.find(
-        op => op.operation === 'knowledge_search' || 
-              op.operation === 'knowledge_retrieval' ||
-              op.operation === 'embedding'
-      );
+      const kbOperation = result.cost_breakdown?.operations?.find(
+		  op => op?.operation === 'knowledge_search' || 
+				op?.operation === 'knowledge_retrieval' ||
+				op?.operation === 'embedding'
+		);
       
       if (kbOperation && kbOperation.total_cost > 0) {
         console.log('💰 [PUBLIC CHAT] Deducting KB search cost:', kbOperation.total_cost);
@@ -234,12 +234,12 @@ router.post('/message', async (req, res) => {
 
     // 2. Calculate total cost (LLM + Analysis)
     const llmOperation = result.cost_breakdown?.operations?.find(
-      op => op.operation === 'llm_completion' || op.operation === 'llm_generation' || op.operation === 'chat_completion'
-    );
+	  op => op?.operation === 'llm_completion' || op?.operation === 'llm_generation' || op?.operation === 'chat_completion'
+	);
 
     const analysisOperation = result.cost_breakdown?.operations?.find(
-      op => op.operation === 'message_analysis'
-    );
+	  op => op?.operation === 'message_analysis'
+	);
 
     const llmCost = llmOperation?.total_cost || result.cost;
     const analysisCost = analysisOperation?.total_cost || result.user_analysis_cost || 0.0;

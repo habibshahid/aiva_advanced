@@ -21,15 +21,58 @@ import {
   applyStrategyPreset
 } from '../services/conversationStrategyApi';
 
-const chatModels = [
-  { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast & Cheap)', cost: '$0.15 / $0.60 per 1M tokens' },
-  { value: 'gpt-4o', label: 'GPT-4o (Most Capable)', cost: '$2.50 / $10.00 per 1M tokens' },
-  { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', cost: '$10.00 / $30.00 per 1M tokens' },
-  { value: 'gpt-4', label: 'GPT-4', cost: '$30.00 / $60.00 per 1M tokens' },
-  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Legacy)', cost: '$0.50 / $1.50 per 1M tokens' },
-  { value: 'o1-mini', label: 'o1 Mini (Reasoning)', cost: '$3.00 / $12.00 per 1M tokens' },
-  { value: 'o1', label: 'o1 (Advanced Reasoning)', cost: '$15.00 / $60.00 per 1M tokens' }
+const chatModelGroups = [
+  {
+    label: '⚡ Groq (Fastest & Cheapest)',
+    models: [
+      { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', cost: '$0.59 / $0.79', badge: '🔥 Reliable' },
+      { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', cost: '$0.05 / $0.08', badge: '💰 Cheapest' },
+      // Preview models
+      { value: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout (Preview)', cost: '$0.11 / $0.34', badge: '🆕 Preview' },
+      { value: 'meta-llama/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick (Preview)', cost: '$0.20 / $0.60', badge: '🆕 Preview' },
+      { value: 'qwen/qwen3-32b', label: 'Qwen3 32B', cost: '$0.29 / $0.59', badge: '🧠 Reasoning' },
+      // OpenAI GPT-OSS on Groq
+      { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', cost: '$0.15 / $0.60', badge: '🆕 OpenAI OSS' },
+      { value: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', cost: '$0.075 / $0.30', badge: '⚡ Fast' },
+    ]
+  },
+  {
+    label: '🤖 OpenAI',
+    models: [
+      { value: 'gpt-4o-mini', label: 'GPT-4o Mini', cost: '$0.15 / $0.60', badge: '⭐ Default' },
+      { value: 'gpt-4o', label: 'GPT-4o', cost: '$2.50 / $10.00', badge: '🏆 Best Quality' },
+      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', cost: '$10.00 / $30.00' },
+      { value: 'o1-mini', label: 'o1 Mini (Reasoning)', cost: '$3.00 / $12.00' },
+      { value: 'o1', label: 'o1 (Advanced Reasoning)', cost: '$15.00 / $60.00' },
+    ]
+  },
+  {
+    label: '🧠 Anthropic (Claude)',
+    models: [
+      { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', cost: '$0.80 / $4.00', badge: '⚡ Fast' },
+      { value: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet', cost: '$3.00 / $15.00', badge: '✨ Great Quality' },
+      { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus', cost: '$15.00 / $75.00' },
+    ]
+  },
+  {
+    label: '🇨🇳 DeepSeek (Very Cheap)',
+    models: [
+      { value: 'deepseek-chat', label: 'DeepSeek Chat', cost: '$0.14 / $0.28', badge: '💰 Budget' },
+      { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner (R1)', cost: '$0.55 / $2.19', badge: '🧠 Reasoning' },
+    ]
+  },
+  {
+    label: '🌙 Moonshot/Kimi (Chinese AI)',
+    models: [
+      { value: 'moonshot-v1-8k', label: 'Moonshot v1 8K', cost: '$0.17 / $0.17' },
+      { value: 'moonshot-v1-32k', label: 'Moonshot v1 32K', cost: '$0.34 / $0.34' },
+      { value: 'moonshot-v1-128k', label: 'Moonshot v1 128K', cost: '$0.85 / $0.85', badge: '📚 Long Context' },
+    ]
+  },
 ];
+
+// Flat array for backward compatibility
+const chatModels = chatModelGroups.flatMap(group => group.models);
 
 const AgentEditor = () => {
   const { id } = useParams();
@@ -1427,25 +1470,64 @@ const AgentEditor = () => {
             </p>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Chat Model
-              </label>
-              <select
-                value={agent.chat_model || 'gpt-4o-mini'}
-                onChange={(e) => setAgent({ ...agent, chat_model: e.target.value })}
-                className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              >
-                {chatModels.map(model => (
-                  <option key={model.value} value={model.value}>
-                    {model.label} - {model.cost}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-2 text-sm text-gray-500">
-                💡 <strong>Recommendation:</strong> Use GPT-4o Mini for most cases - it's 99% cheaper than realtime models 
-                and perfect for text chat. Upgrade to GPT-4o for complex reasoning tasks.
-              </p>
-            </div>
+			  <label className="block text-sm font-medium text-gray-700 mb-2">
+				Chat Model
+			  </label>
+			  <select
+				value={agent.chat_model || 'gpt-4o-mini'}
+				onChange={(e) => setAgent({ ...agent, chat_model: e.target.value })}
+				className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+			  >
+				{chatModelGroups.map(group => (
+				  <optgroup key={group.label} label={group.label}>
+					{group.models.map(model => (
+					  <option key={model.value} value={model.value}>
+						{model.label} ({model.cost}/1M) {model.badge || ''}
+					  </option>
+					))}
+				  </optgroup>
+				))}
+			  </select>
+			  
+			  {/* Model Info Card */}
+			  <div className="mt-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+				<div className="flex items-start gap-2">
+				  <span className="text-xl">💡</span>
+				  <div className="flex-1 text-sm">
+					<p className="font-medium text-blue-900 mb-1">Model Recommendations:</p>
+					<ul className="text-blue-800 space-y-1 text-xs">
+					  <li><strong>Best Value:</strong> Llama 3.3 70B (Groq) - Fast, cheap, great quality</li>
+					  <li><strong>Cheapest:</strong> Llama 3.1 8B or DeepSeek Chat - For simple queries</li>
+					  <li><strong>Best Quality:</strong> GPT-4o or Claude Sonnet - Complex reasoning</li>
+					  <li><strong>Best for Urdu:</strong> GPT-4o-mini or GPT-4o - Better multilingual</li>
+					</ul>
+				  </div>
+				</div>
+			  </div>
+			  
+			  {/* Cost Comparison */}
+			  <div className="mt-2 grid grid-cols-4 gap-1 text-xs">
+				<div className="text-center p-1.5 bg-green-50 rounded border border-green-200">
+				  <div className="font-bold text-green-700">$0.05</div>
+				  <div className="text-green-600">Llama 8B</div>
+				</div>
+				<div className="text-center p-1.5 bg-blue-50 rounded border border-blue-200">
+				  <div className="font-bold text-blue-700">$0.15</div>
+				  <div className="text-blue-600">GPT-4o-mini</div>
+				</div>
+				<div className="text-center p-1.5 bg-purple-50 rounded border border-purple-200">
+				  <div className="font-bold text-purple-700">$0.59</div>
+				  <div className="text-purple-600">Llama 70B</div>
+				</div>
+				<div className="text-center p-1.5 bg-amber-50 rounded border border-amber-200">
+				  <div className="font-bold text-amber-700">$2.50</div>
+				  <div className="text-amber-600">GPT-4o</div>
+				</div>
+			  </div>
+			  <p className="mt-1 text-xs text-gray-500 text-center">
+				Cost per 1M input tokens (output costs vary)
+			  </p>
+			</div>
 			
 			<div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1469,6 +1551,33 @@ const AgentEditor = () => {
               </select>
             </div>
           </div>
+		  
+		  {/* Provider Status */}
+			<div className="mt-4 p-3 bg-gray-50 rounded-lg border">
+			  <label className="block text-sm font-medium text-gray-700 mb-2">
+				Configured Providers
+			  </label>
+			  <div className="flex flex-wrap gap-2">
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+				  ✅ OpenAI
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+				  ✅ Groq
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ Anthropic
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ DeepSeek
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ Moonshot
+				</span>
+			  </div>
+			  <p className="mt-2 text-xs text-gray-500">
+				Gray providers need API keys in .env file. Models will fall back to OpenAI if provider unavailable.
+			  </p>
+			</div>
 		  
 		  
           <div>

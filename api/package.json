@@ -11,12 +11,12 @@
     "test:markdown": "node src/utils/__tests__/markdown.test.js",
     "test:validators": "node src/utils/__tests__/validators.test.js",
     "test:python": "node src/services/__tests__/python-service-client.test.js",
-	"test:mysql": "node test-connection.js",
+    "test:mysql": "node test-connection.js",
     "migrate": "node run-migration.js",
     "migrate:prod": "NODE_ENV=production CONFIRM_MIGRATION=true node run-migration.js"
-  
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@shopify/shopify-api": "^9.0.0",
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",

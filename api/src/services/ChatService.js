@@ -18,6 +18,7 @@ const markdown = require('../utils/markdown');
 const knowledgeFormatter = require('../utils/knowledge-formatter');
 const TranscriptionService = require('./TranscriptionService');
 const TranscriptionAnalysisService = require('./TranscriptionAnalysisService');
+const llmService = require('./LLMService');
 
 class ChatService {
     constructor() {
@@ -43,6 +44,70 @@ class ChatService {
         }
     }
 	
+	/**
+	 * Call LLM with automatic provider routing
+	 * Supports text and vision (image) inputs
+	 * @private
+	 */
+	async _callLLM(messages, options = {}) {
+		const {
+			model = 'gpt-4o-mini',
+			temperature = 0.7,
+			max_tokens = 4096,
+			json_mode = true,
+			hasVision = false  // Flag to indicate vision content
+		} = options;
+		
+		// For vision requests, ensure we use a vision-capable model
+		let effectiveModel = model;
+		if (hasVision) {
+			const visionModels = ['gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
+			const modelLower = model.toLowerCase();
+			
+			// Check if current model supports vision
+			const supportsVision = visionModels.some(vm => modelLower.includes(vm.toLowerCase()));
+			
+			if (!supportsVision) {
+				// Fall back to gpt-4o-mini for vision
+				console.log(`⚠️ Model ${model} doesn't support vision, falling back to gpt-4o-mini`);
+				effectiveModel = 'gpt-4o-mini';
+			}
+		}
+		
+		try {
+			const result = await llmService.chat(messages, {
+				model: effectiveModel,
+				temperature,
+				max_tokens,
+				json_mode
+			});
+			
+			// Return in format compatible with existing code
+			return {
+				content: result.content,
+				usage: {
+					prompt_tokens: result.usage.prompt_tokens,
+					completion_tokens: result.usage.completion_tokens,
+					cached_tokens: result.usage.cached_tokens || 0,
+					total_tokens: result.usage.prompt_tokens + result.usage.completion_tokens
+				},
+				cost: result.cost,
+				provider: result.provider,
+				model: result.model
+			};
+		} catch (error) {
+			console.error(`❌ LLM call failed (${effectiveModel}):`, error.message);
+			
+			// Fallback to OpenAI if other provider fails
+			if (effectiveModel !== 'gpt-4o-mini' && this.openai) {
+				console.log('🔄 Falling back to OpenAI gpt-4o-mini...');
+				return this._callLLM(messages, { ...options, model: 'gpt-4o-mini' });
+			}
+			
+			throw error;
+		}
+	}
+
 	/**
      * Get the appropriate client based on model provider
      */
@@ -655,15 +720,14 @@ class ChatService {
 				
 				const model = agent.chat_model || 'gpt-4o-mini';
 				
-				const completion = await this.openai.chat.completions.create({
-					model: model,
-					messages: messages,
-					response_format: { type: "json_object" },
+				const completion = await this._callLLM(messages, {
+					model: agent.chat_model || 'gpt-4o-mini',
 					temperature: parseFloat(agent.temperature) || 0.7,
-					max_tokens: agent.max_tokens || 2048
+					max_tokens: agent.max_tokens || 4096,
+					json_mode: true
 				});
-				
-				const aiMessage = completion.choices[0].message;
+
+				const aiMessage = { content: completion.content };
 				let llmDecision;
 				
 				try {
@@ -1192,37 +1256,40 @@ class ChatService {
                         console.log('🤖 No results yet - Using LLM to analyze image');
 
                         try {
-                            const analysisCompletion = await this.openai.chat.completions.create({
-                                model: agent.chat_model,
-                                messages: [{
-                                        role: 'system',
-                                        content: 'Extract product attributes from image. Return JSON: {"category":"","color":"","style":"","keywords":[]}'
-                                    },
-                                    {
-                                        role: 'user',
-                                        content: [{
-                                                type: 'text',
-                                                text: 'Identify product attributes'
-                                            },
-                                            {
-                                                type: 'image_url',
-                                                image_url: {
-                                                    url: image,
-                                                    detail: 'low'
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ],
-                                max_tokens: 150,
-                                temperature: 0.3
-                            });
+							const analysisMessages = [{
+									role: 'system',
+									content: 'Extract product attributes from image. Return JSON: {"category":"","color":"","style":"","keywords":[]}'
+								},
+								{
+									role: 'user',
+									content: [{
+											type: 'text',
+											text: 'Identify product attributes'
+										},
+										{
+											type: 'image_url',
+											image_url: {
+												url: image,
+												detail: 'low'
+											}
+										}
+									]
+								}
+							];
+							
+							const analysisCompletion = await this._callLLM(analysisMessages, {
+								model: agent.chat_model || 'gpt-4o-mini',
+								max_tokens: 150,
+								temperature: 0.3,
+								json_mode: true,
+								hasVision: true
+							});
 
-                            const analysisText = analysisCompletion.choices[0].message.content
-                                .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                            const imageAnalysis = JSON.parse(analysisText);
+							const analysisText = analysisCompletion.content
+								.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+							const imageAnalysis = JSON.parse(analysisText);
 
-                            console.log('🎯 Image analysis:', imageAnalysis);
+							console.log('🎯 Image analysis:', imageAnalysis);
 
                             const searchTerms = [
                                 imageAnalysis.category,
@@ -1273,14 +1340,7 @@ class ChatService {
                             }
 
                             // Track LLM cost
-                            const analysisCost = CostCalculator.calculateChatCost({
-                                    prompt_tokens: analysisCompletion.usage.prompt_tokens,
-                                    completion_tokens: analysisCompletion.usage.completion_tokens,
-                                    cached_tokens: 0
-                                },
-                                agent.chat_model
-                            );
-
+                            const analysisCost = analysisCompletion.cost;
                             shopifySearchCost += analysisCost.final_cost;
 
                         } catch (parseError) {
@@ -1419,58 +1479,16 @@ class ChatService {
             ];
 
             const model = agent.chat_model || 'gpt-4o-mini';
-			
-			/* Disabled for now
-			const { client, provider } = this._getClientForModel(model);
-			console.log(`🤖 Using ${provider} with model: ${model}`);
-			
-			let completion;
-			let aiMessage;
 
-			if (provider === 'anthropic') {
-				// Claude uses different API format
-				const response = await client.messages.create({
-					model: model,
-					max_tokens: agent.max_tokens || 4096,
-					system: systemPrompt,
-					messages: messages.filter(m => m.role !== 'system').map(m => ({
-						role: m.role,
-						content: m.content
-					}))
-				});
-				
-				aiMessage = { content: response.content[0].text };
-				completion = {
-					usage: {
-						prompt_tokens: response.usage.input_tokens,
-						completion_tokens: response.usage.output_tokens
-					},
-					choices: [{ message: aiMessage }]
-				};
-			} else {
-				// OpenAI and DeepSeek use same format
-				completion = await client.chat.completions.create({
-					model: model,
-					messages: messages,
-					response_format: { type: "json_object" },
-					temperature: parseFloat(agent.temperature) || 0.7,
-					max_tokens: agent.max_tokens || 4096
-				});
-				
-				aiMessage = completion.choices[0].message;
-			}*/
+            const completion = await this._callLLM(messages, {
+				model: agent.chat_model || 'gpt-4o-mini',
+				temperature: parseFloat(agent.temperature) || 0.7,
+				max_tokens: agent.max_tokens || 4096,
+				json_mode: true,
+				hasVision: true  // Image is included
+			});
 
-            const completion = await this.openai.chat.completions.create({
-                model: model,
-                messages: messages,
-                response_format: {
-                    type: "json_object"
-                },
-                temperature: parseFloat(agent.temperature) || 0.7,
-                max_tokens: agent.max_tokens || 4096
-            });
-
-            const aiMessage = completion.choices[0].message;
+			const aiMessage = { content: completion.content };
             let llmDecision;
 
             try {
@@ -1539,13 +1557,7 @@ class ChatService {
             }
 
             // Calculate LLM cost
-            const llmCost = CostCalculator.calculateChatCost({
-                    prompt_tokens: completion.usage.prompt_tokens,
-                    completion_tokens: completion.usage.completion_tokens,
-                    cached_tokens: 0
-                },
-                model
-            );
+			const llmCost = completion.cost;
 
             console.log('💰 LLM call cost:', llmCost.final_cost);
 
@@ -1817,24 +1829,17 @@ class ChatService {
 		
         const model = agent.chat_model || 'gpt-4o-mini';
 
-		const completion = await this.openai.chat.completions.create({
+		const completion = await this._callLLM(messages, {
 			model: model,
-			messages: messages,
-			response_format: { type: "json_object" },  // ✅ ALWAYS use JSON mode
 			temperature: parseFloat(agent.temperature) || 0.7,
-			max_tokens: agent.max_tokens || 4096
+			max_tokens: agent.max_tokens || 4096,
+			json_mode: true
 		});
 
-		const aiMessage = completion.choices[0].message;
+		const aiMessage = { content: completion.content };
 
-		// Calculate first call cost
-		let llmCost = CostCalculator.calculateChatCost({
-			prompt_tokens: completion.usage.prompt_tokens,
-			completion_tokens: completion.usage.completion_tokens,
-			cached_tokens: completion.usage.prompt_tokens_details?.cached_tokens || 0
-		}, model);
-
-		console.log('💰 First LLM call cost:', llmCost.final_cost);
+		// Cost already calculated by LLMService
+		let llmCost = completion.cost;
 
 		let llmDecision;
 
@@ -2116,27 +2121,22 @@ class ChatService {
 							}
 						];
 						
-						const functionFollowupCompletion = await this.openai.chat.completions.create({
+						const functionFollowupCompletion = await this._callLLM(messagesWithFunctionResult, {
 							model: model,
-							messages: messagesWithFunctionResult,
-							response_format: { type: "json_object" },
 							temperature: parseFloat(agent.temperature) || 0.7,
-							max_tokens: agent.max_tokens || 4096
+							max_tokens: agent.max_tokens || 4096,
+							json_mode: true
 						});
-						
-						// Calculate second call cost
-						const secondCallCost = CostCalculator.calculateChatCost({
-							prompt_tokens: functionFollowupCompletion.usage.prompt_tokens,
-							completion_tokens: functionFollowupCompletion.usage.completion_tokens,
-							cached_tokens: functionFollowupCompletion.usage.prompt_tokens_details?.cached_tokens || 0
-						}, model);
+
+						// Cost already calculated by LLMService
+						const secondCallCost = functionFollowupCompletion.cost;
 						
 						console.log('💰 Function followup LLM cost:', secondCallCost.final_cost);
 						llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
 						
 						// Parse final response
 						try {
-							const finalDecision = JSON.parse(functionFollowupCompletion.choices[0].message.content);
+							const finalDecision = JSON.parse(functionFollowupCompletion.content);
 							console.log('✅ Final response after function call:', finalDecision.response?.substring(0, 100));
 							
 							// Update llmDecision with final response
@@ -2545,18 +2545,15 @@ class ChatService {
 				// Call LLM again
 				// Call LLM again with product context
 				try {
-					const finalCompletion = await this.openai.chat.completions.create({
+					const finalCompletion = await this._callLLM(messagesWithContext, {
 						model: model,
-						messages: messagesWithContext,
-						response_format: {
-							type: "json_object"
-						},
 						temperature: parseFloat(agent.temperature) || 0.7,
-						max_tokens: 2048  // ✅ Sufficient for JSON response, prevents timeout
+						max_tokens: 2048,
+						json_mode: true
 					});
 
-					const finalMessage = finalCompletion.choices[0].message;
-					const finishReason = finalCompletion.choices[0].finish_reason;
+					const finalMessage = { content: finalCompletion.content };
+					const finishReason = 'stop'; // LLMService handles this internally
 					
 					console.log('📝 Second LLM call (knowledge) finish_reason:', finishReason);
 					
@@ -2573,11 +2570,7 @@ class ChatService {
 						llmDecision.knowledge_search_needed = false;
 
 						// Add second call cost
-						const secondCallCost = CostCalculator.calculateChatCost({
-							prompt_tokens: finalCompletion.usage.prompt_tokens,
-							completion_tokens: finalCompletion.usage.completion_tokens,
-							cached_tokens: 0
-						}, model);
+						const secondCallCost = finalCompletion.cost;
 
 						console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
 						llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
@@ -2695,18 +2688,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
                     // Second LLM call
                     // Call LLM again with product context
 					try {
-						const finalCompletion = await this.openai.chat.completions.create({
+						const finalCompletion = await this._callLLM(messagesWithContext, {
 							model: model,
-							messages: messagesWithContext,
-							response_format: {
-								type: "json_object"
-							},
 							temperature: parseFloat(agent.temperature) || 0.7,
-							max_tokens: 4096  // ✅ Sufficient for JSON response, prevents timeout
+							max_tokens: 4096,
+							json_mode: true
 						});
 
-						const finalMessage = finalCompletion.choices[0].message;
-						const finishReason = finalCompletion.choices[0].finish_reason;
+						const finalMessage = { content: finalCompletion.content };
+						const finishReason = 'stop';
 						
 						console.log('📝 Second LLM call finish_reason:', finishReason);
 						
@@ -2724,11 +2714,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 							llmDecision.ready_to_search = false;
 
 							// Add second call cost
-							const secondCallCost = CostCalculator.calculateChatCost({
-								prompt_tokens: finalCompletion.usage.prompt_tokens,
-								completion_tokens: finalCompletion.usage.completion_tokens,
-								cached_tokens: 0
-							}, model);
+							const secondCallCost = finalCompletion.cost;
 
 							console.log('💰 Second LLM call cost:', secondCallCost.final_cost);
 							llmCost = CostCalculator.combineCosts([llmCost, secondCallCost]);
@@ -5612,26 +5598,27 @@ GENERAL RULES:
 	Reply ONLY with JSON: {"intent": "complaint_evidence" or "product_search", "reason": "one line"}`;
 
 		try {
-			const completion = await this.openai.chat.completions.create({
-				model: 'gpt-4o-mini',
-				messages: [{ role: 'user', content: intentPrompt }],
-				response_format: { type: "json_object" },
-				max_tokens: 80,
-				temperature: 0.1
-			});
+			const completion = await this._callLLM(
+				[{ role: 'user', content: intentPrompt }],
+				{
+					model: 'gpt-4o-mini',  // Always use cheap model for classification
+					max_tokens: 80,
+					temperature: 0.1,
+					json_mode: true
+				}
+			);
 			
-			const result = JSON.parse(completion.choices[0].message.content);
-			const tokenCost = (completion.usage.total_tokens * 0.00000015).toFixed(6);
+			const result = JSON.parse(completion.content);
 			
 			console.log(`📷 Intent: ${result.intent.toUpperCase()} (from LLM: ${result.reason})`);
-			console.log(`💰 Intent classification cost: $${tokenCost}`);
+			console.log(`💰 Intent classification cost: $${completion.cost.final_cost.toFixed(6)}`);
 			
 			return {
 				intent: result.intent,
 				confidence: 'high',
 				source: 'llm',
 				reason: result.reason,
-				llm_cost: parseFloat(tokenCost)
+				llm_cost: completion.cost.final_cost
 			};
 			
 		} catch (error) {
@@ -5706,15 +5693,15 @@ GENERAL RULES:
 		const model = agent.chat_model || 'gpt-4o-mini';
 		
 		// Call LLM with complaint context
-		const completion = await this.openai.chat.completions.create({
+		const completion = await this._callLLM(messages, {
 			model: model,
-			messages: messages,
-			response_format: { type: "json_object" },
 			temperature: parseFloat(agent.temperature) || 0.7,
-			max_tokens: agent.max_tokens || 2048
+			max_tokens: agent.max_tokens || 2048,
+			json_mode: true,
+			hasVision: true
 		});
-		
-		const aiMessage = completion.choices[0].message;
+
+		const aiMessage = { content: completion.content };
 		let llmDecision;
 		
 		try {
@@ -5747,11 +5734,7 @@ GENERAL RULES:
 		}
 		
 		// Calculate cost
-		const llmCost = CostCalculator.calculateChatCost({
-			prompt_tokens: completion.usage.prompt_tokens,
-			completion_tokens: completion.usage.completion_tokens,
-			cached_tokens: 0
-		}, model);
+		const llmCost = completion.cost;
 		
 		// Add intent classification cost if any
 		if (imageIntent.llm_cost) {
