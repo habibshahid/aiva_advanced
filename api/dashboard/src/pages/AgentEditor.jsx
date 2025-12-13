@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle } from 'lucide-react';
+import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
   getAgent, 
@@ -10,7 +10,8 @@ import {
   createFunction, 
   updateFunction, 
   deleteFunction,
-  generateInstructions
+  generateInstructions,
+  testFunction
 } from '../services/api';
 import { getKnowledgeBases } from '../services/knowledgeApi';
 
@@ -84,7 +85,12 @@ const AgentEditor = () => {
   const [strategyPresets, setStrategyPresets] = useState([]);
   const [loadingPresets, setLoadingPresets] = useState(false);
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
-  
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [testingFunction, setTestingFunction] = useState(null);
+  const [testParameters, setTestParameters] = useState({});
+  const [testResult, setTestResult] = useState(null);
+  const [isTestRunning, setIsTestRunning] = useState(false);
+
   const [agent, setAgent] = useState({
 	  name: '',
 	  type: 'sales',
@@ -644,6 +650,50 @@ const AgentEditor = () => {
     } catch (error) {
       toast.error('Failed to delete function');
     }
+  };
+
+  const openTestModal = (func) => {
+    setTestingFunction(func);
+    setTestResult(null);
+    setIsTestRunning(false);
+  
+    const initialParams = {};
+    if (func.parameters?.properties) {
+      Object.keys(func.parameters.properties).forEach(key => {
+        initialParams[key] = '';
+      });
+    }
+    setTestParameters(initialParams);
+    setShowTestModal(true);
+  };
+
+  const handleTestFunction = async () => {
+    if (!testingFunction) return;
+  
+    setIsTestRunning(true);
+    setTestResult(null);
+  
+    try {
+      const response = await testFunction(testingFunction.id, testParameters);
+      setTestResult(response.data);
+    } catch (error) {
+      setTestResult({
+        success: false,
+        test_result: {
+          error: error.response?.data?.error || error.message,
+          message: error.response?.data?.message || 'Failed to execute test'
+        }
+      });
+    } finally {
+      setIsTestRunning(false);
+    }
+  };
+
+  const closeTestModal = () => {
+    setShowTestModal(false);
+    setTestingFunction(null);
+    setTestParameters({});
+    setTestResult(null);
   };
 
   // Header management
@@ -2371,6 +2421,15 @@ const AgentEditor = () => {
                         )}
                       </div>
                       <div className="flex space-x-2 ml-4">
+  					    {func.handler_type === 'api' && (
+						  <button
+						    onClick={() => openTestModal(func)}
+						    className="text-green-500 hover:text-green-700"
+						    title="Test function"
+					  	  >
+						    <Play className="w-4 h-4" />
+						  </button>
+					    )}
                         <button
                           onClick={() => openFunctionModal(func)}
                           className="text-gray-400 hover:text-gray-600"
@@ -3077,6 +3136,198 @@ const AgentEditor = () => {
 					</button>
 				  </div>
 				)}
+			  </div>
+			</div>
+		  </div>
+		)}
+		{/* Function Test Modal */}
+		{showTestModal && testingFunction && (
+		  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+			<div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+			  {/* Header */}
+			  <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+				<div>
+				  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+					<Play className="w-5 h-5 mr-2 text-green-600" />
+					Test Function: {testingFunction.name}
+				  </h3>
+				  <p className="text-sm text-gray-500 mt-1">
+					{testingFunction.api_method} {testingFunction.api_endpoint}
+				  </p>
+				</div>
+				<button
+				  onClick={closeTestModal}
+				  className="text-gray-400 hover:text-gray-600"
+				>
+				  <X className="w-6 h-6" />
+				</button>
+			  </div>
+
+			  {/* Content */}
+			  <div className="flex-1 overflow-y-auto p-6 space-y-6">
+				{/* Parameters Input */}
+				{testingFunction.parameters?.properties && 
+				 Object.keys(testingFunction.parameters.properties).length > 0 && (
+				  <div>
+					<h4 className="text-sm font-medium text-gray-900 mb-3">
+					  Test Parameters
+					</h4>
+					<div className="space-y-3">
+					  {Object.entries(testingFunction.parameters.properties).map(([key, param]) => (
+						<div key={key}>
+						  <label className="block text-sm font-medium text-gray-700 mb-1">
+							{key}
+							{testingFunction.parameters.required?.includes(key) && (
+							  <span className="text-red-500 ml-1">*</span>
+							)}
+						  </label>
+						  <input
+							type="text"
+							value={testParameters[key] || ''}
+							onChange={(e) => setTestParameters({
+							  ...testParameters,
+							  [key]: e.target.value
+							})}
+							placeholder={param.description || `Enter ${key}`}
+							className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+						  />
+						  {param.description && (
+							<p className="mt-1 text-xs text-gray-500">{param.description}</p>
+						  )}
+						  {param.enum && (
+							<p className="mt-1 text-xs text-gray-500">
+							  Allowed values: {param.enum.join(', ')}
+							</p>
+						  )}
+						</div>
+					  ))}
+					</div>
+				  </div>
+				)}
+
+				{/* No parameters message */}
+				{(!testingFunction.parameters?.properties || 
+				  Object.keys(testingFunction.parameters.properties).length === 0) && (
+				  <div className="text-sm text-gray-500 bg-gray-50 p-4 rounded-lg">
+					This function has no parameters. Click "Run Test" to execute it.
+				  </div>
+				)}
+
+				{/* Test Result */}
+				{testResult && (
+				  <div>
+					<h4 className="text-sm font-medium text-gray-900 mb-3">
+					  Test Result
+					</h4>
+					
+					{/* Status Badge */}
+					<div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium mb-4 ${
+					  testResult.success 
+						? 'bg-green-100 text-green-800' 
+						: 'bg-red-100 text-red-800'
+					}`}>
+					  {testResult.success ? '✓ Success' : '✗ Failed'}
+					  {testResult.test_result?.status_code && (
+						<span className="ml-2">
+						  (HTTP {testResult.test_result.status_code})
+						</span>
+					  )}
+					  {testResult.test_result?.duration_ms && (
+						<span className="ml-2 text-gray-600">
+						  • {testResult.test_result.duration_ms}ms
+						</span>
+					  )}
+					</div>
+
+					{/* Request Info */}
+					{testResult.request_info && (
+					  <div className="mb-4">
+						<h5 className="text-xs font-medium text-gray-700 mb-2">Request</h5>
+						<div className="bg-gray-800 text-gray-100 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+						  <div className="text-blue-400">
+							{testResult.request_info.method} {testResult.request_info.url}
+						  </div>
+						  {testResult.request_info.body && (
+							<div className="mt-2 text-gray-400">
+							  <div className="text-yellow-400">Body:</div>
+							  <pre className="whitespace-pre-wrap">
+								{JSON.stringify(testResult.request_info.body, null, 2)}
+							  </pre>
+							</div>
+						  )}
+						</div>
+					  </div>
+					)}
+
+					{/* Response Data */}
+					<div>
+					  <h5 className="text-xs font-medium text-gray-700 mb-2">Response</h5>
+					  <div className={`rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-64 ${
+						testResult.success ? 'bg-gray-800 text-green-400' : 'bg-red-900 text-red-100'
+					  }`}>
+						{testResult.test_result?.error ? (
+						  <div>
+							<div className="text-red-400 font-bold">Error: {testResult.test_result.error}</div>
+							{testResult.test_result.code && (
+							  <div className="text-red-300 mt-1">Code: {testResult.test_result.code}</div>
+							)}
+							{testResult.test_result.message && (
+							  <div className="text-red-300 mt-1">{testResult.test_result.message}</div>
+							)}
+							{testResult.test_result.response_data && (
+							  <pre className="mt-2 whitespace-pre-wrap text-gray-300">
+								{JSON.stringify(testResult.test_result.response_data, null, 2)}
+							  </pre>
+							)}
+						  </div>
+						) : (
+						  <pre className="whitespace-pre-wrap">
+							{JSON.stringify(testResult.test_result?.data, null, 2)}
+						  </pre>
+						)}
+					  </div>
+					</div>
+				  </div>
+				)}
+			  </div>
+
+			  {/* Footer */}
+			  <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
+				<div className="text-xs text-gray-500">
+				  {testingFunction.skip_ssl_verify && (
+					<span className="text-yellow-600">
+					  ⚠️ SSL verification disabled
+					</span>
+				  )}
+				</div>
+				<div className="flex space-x-3">
+				  <button
+					onClick={closeTestModal}
+					className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+				  >
+					Close
+				  </button>
+				  <button
+					onClick={handleTestFunction}
+					disabled={isTestRunning}
+					className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+				  >
+					{isTestRunning ? (
+					  <>
+						<svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+						  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+						  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+						</svg>
+						Running...
+					  </>
+					) : (
+					  <>
+						<Play className="w-4 h-4 mr-2" />
+						Run Test
+					  </>
+					)}
+				  </button>
+				</div>
 			  </div>
 			</div>
 		  </div>

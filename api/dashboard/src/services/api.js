@@ -130,4 +130,8 @@ export const getChatIntegrationCode = (agentId) =>
 export const testChatIntegration = (agentId) => 
   api.post(`/agents/${agentId}/chat-integration/test`);
   
+// Test function
+export const testFunction = (functionId, testArguments) => 
+  api.post(`/functions/${functionId}/test`, { arguments: testArguments });
+
 export default api;
