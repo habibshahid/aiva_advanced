@@ -11,8 +11,8 @@ class FunctionService {
             `INSERT INTO yovo_tbl_aiva_functions (
                 id, agent_id, name, description, execution_mode,
                 parameters, handler_type, api_endpoint, api_method,
-                api_headers, timeout_ms, retries
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                api_headers, timeout_ms, retries, skip_ssl_verify
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 functionId,
                 agentId,
@@ -25,7 +25,8 @@ class FunctionService {
                 functionData.api_method || 'POST',
                 functionData.api_headers ? JSON.stringify(functionData.api_headers) : null,
                 functionData.timeout_ms || 30000,
-                functionData.retries || 2
+                functionData.retries || 2,
+				functionData.skip_ssl_verify ? 1 : 0,
             ]
         );
         
@@ -55,7 +56,8 @@ class FunctionService {
 			...func,
 			parameters: typeof func.parameters === 'string' ? JSON.parse(func.parameters) : func.parameters,
 			api_headers: func.api_headers ? (typeof func.api_headers === 'string' ? JSON.parse(func.api_headers) : func.api_headers) : null,
-			api_body: func.api_body ? (typeof func.api_body === 'string' ? JSON.parse(func.api_body) : func.api_body) : null
+			api_body: func.api_body ? (typeof func.api_body === 'string' ? JSON.parse(func.api_body) : func.api_body) : null,
+			skip_ssl_verify: func.skip_ssl_verify === 1 || func.skip_ssl_verify === true
 		};
     }
     
@@ -70,7 +72,8 @@ class FunctionService {
 			...f,
 			parameters: typeof f.parameters === 'string' ? JSON.parse(f.parameters) : f.parameters,
 			api_headers: f.api_headers ? (typeof f.api_headers === 'string' ? JSON.parse(f.api_headers) : f.api_headers) : null,
-			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null
+			api_body: f.api_body ? (typeof f.api_body === 'string' ? JSON.parse(f.api_body) : f.api_body) : null,
+			skip_ssl_verify: f.skip_ssl_verify === 1 || f.skip_ssl_verify === true
 		}));
     }
     
@@ -82,7 +85,7 @@ class FunctionService {
         const allowedFields = [
             'name', 'description', 'execution_mode', 'parameters',
             'handler_type', 'api_endpoint', 'api_method', 'api_headers',
-            'timeout_ms', 'retries', 'is_active'
+            'timeout_ms', 'retries', 'is_active', 'skip_ssl_verify'
         ];
         
         for (const field of allowedFields) {
@@ -90,7 +93,10 @@ class FunctionService {
                 if (field === 'parameters' || field === 'api_headers') {
                     fields.push(`${field} = ?`);
                     values.push(JSON.stringify(updates[field]));
-                } else {
+                } else if (field === 'skip_ssl_verify') {
+					fields.push(`${field} = ?`);
+					values.push(updates[field] ? 1 : 0); 
+				} else {
                     fields.push(`${field} = ?`);
                     values.push(updates[field]);
                 }

@@ -3,6 +3,7 @@ require('dotenv').config();
 const logger = require('../utils/logger');
 const axios = require('axios');
 const DEBUG_FUNCTIONS = process.env.DEBUG_FUNCTION_CALLS === 'true';
+const https = require('https');
 
 class FunctionExecutor {
     constructor() {
@@ -122,7 +123,14 @@ class FunctionExecutor {
 							console.log(`\n[RETRY ${attempt}/${maxRetries}] Attempting function call: ${name}`);
 						}
 						
-						console.log('*************', config)
+						if (functionDef.skip_ssl_verify && endpoint.startsWith('https://')) {
+							config.httpsAgent = new https.Agent({
+								rejectUnauthorized: false
+							});
+							if (DEBUG_FUNCTIONS) {
+								console.log('⚠️ SSL verification disabled for:', name);
+							}
+						}
 						const response = await axios(config);
 						const attemptDuration = Date.now() - attemptStartTime;
 						const totalDuration = Date.now() - startTime;

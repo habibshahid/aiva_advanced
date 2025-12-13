@@ -585,11 +585,149 @@ IMPORTANT: Before calling the search_knowledge function:
 						};
 					});
 				}
+			} // Handle built-in order status function
+			else if (func.name === 'check_order_status') {
+				const kbId = func.kb_id; // Stored from dynamic-loader
+				this.functionExecutor.registerFunction(func.name, async (args, context) => {
+					return await this._handleOrderStatusCheck(args, context, kbId);
+				});
+				logger.info(`Registered order status function for KB: ${kbId}`);
 			}
 		}
 		
 		// Return tools from agent config (already formatted by dynamic loader)
 		return tools;
+	}
+	
+	/**
+	 * Handle order status check - calls main API
+	 * @private
+	 */
+	async _handleOrderStatusCheck(args, context, kbId) {
+		const { order_number, email, phone } = args;
+		
+		logger.info(`[ORDER STATUS] Checking order:`, { order_number, email, phone, kbId });
+		
+		// Validate - need at least one parameter
+		if (!order_number && !email && !phone) {
+			return {
+				success: false,
+				error: 'Missing search parameters',
+				voice_response: "I need either your order number, email address, or phone number to look up your order. Which one would you like to provide?"
+			};
+		}
+		
+		try {
+			// Call the main API endpoint
+			const response = await axios.post(
+				`${API_BASE_URL}/api/shopify/orders/lookup-public`,
+				{
+					kb_id: kbId,
+					order_number: order_number || undefined,
+					email: email || undefined,
+					phone: phone || undefined
+				},
+				{
+					timeout: 15000,
+					headers: {
+						'Content-Type': 'application/json',
+						'X-Internal-Call': 'voice-bridge'
+					}
+				}
+			);
+			
+			const result = response.data?.data || response.data;
+			
+			if (!result.found) {
+				// Format not-found response
+				let searchedBy = [];
+				if (order_number) searchedBy.push(`order number ${order_number}`);
+				if (email) searchedBy.push(`email`);
+				if (phone) searchedBy.push(`phone number`);
+				
+				return {
+					success: false,
+					found: false,
+					message: result.message,
+					voice_response: `I couldn't find an order with the ${searchedBy.join(' or ')}. Please double-check the information and try again.`
+				};
+			}
+			
+			// Format order for voice
+			const order = result.order;
+			const voiceResponse = this._formatOrderForVoice(order);
+			
+			logger.info(`[ORDER STATUS] Found order: ${order.order_number}`);
+			
+			return {
+				success: true,
+				found: true,
+				order: order,
+				voice_response: voiceResponse
+			};
+			
+		} catch (error) {
+			logger.error(`[ORDER STATUS] Lookup failed:`, error.message);
+			
+			if (error.response?.status === 404) {
+				return {
+					success: false,
+					error: 'No Shopify store connected',
+					voice_response: "I'm sorry, I don't have access to order information at this time. Please contact customer support directly."
+				};
+			}
+			
+			return {
+				success: false,
+				error: error.message,
+				voice_response: "I encountered an error while looking up your order. Please try again or contact customer support."
+			};
+		}
+	}
+	
+	/**
+	 * Format order data for voice response
+	 * @private
+	 */
+	_formatOrderForVoice(order) {
+		let response = `I found your order number ${order.order_number}. `;
+		
+		// Status
+		const statusMessages = {
+			'pending': 'Your order is pending and has not been processed yet.',
+			'confirmed': 'Your order has been confirmed and is being prepared.',
+			'processing': 'Your order is currently being processed.',
+			'shipped': 'Great news! Your order has been shipped.',
+			'in_transit': 'Your order is on its way and currently in transit.',
+			'out_for_delivery': 'Your order is out for delivery and should arrive today.',
+			'delivered': 'Your order has been delivered.',
+			'cancelled': 'This order has been cancelled.',
+			'refunded': 'This order has been refunded.'
+		};
+		
+		const status = order.status?.toLowerCase() || 'unknown';
+		response += statusMessages[status] || order.status_description || `The current status is ${status}. `;
+		
+		// Tracking
+		if (order.has_tracking && order.tracking) {
+			response += ` Your tracking number is ${order.tracking.number}`;
+			if (order.tracking.company) {
+				response += ` via ${order.tracking.company}`;
+			}
+			response += '. ';
+		}
+		
+		// Total
+		if (order.total_price) {
+			response += `The order total is ${order.currency || ''} ${order.total_price}. `;
+		}
+		
+		// Items
+		if (order.item_count) {
+			response += `It contains ${order.item_count} item${order.item_count > 1 ? 's' : ''}.`;
+		}
+		
+		return response.trim();
 	}
 	
 	/**

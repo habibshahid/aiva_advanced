@@ -465,14 +465,16 @@ router.post('/message', authenticate, async (req, res) => {
       );
     }
 
+	const sessId = (session_id == 'null') ? null : session_id;
+
     // Send message
     const result = await ChatService.sendMessage({
-	  sessionId: session_id,
+	  sessionId: sessId,
 	  agentId: agent_id,
 	  message: message,
 	  image: image,
 	  userId: req.user.id,
-	  channelInfo: session_id ? null : {
+	  channelInfo: sessId ? null : {
 		channel: channel || 'public_chat',
 		channelUserId: channel_user_id,
 		channelUserName: channel_user_name,

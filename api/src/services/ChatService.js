@@ -19,6 +19,7 @@ const knowledgeFormatter = require('../utils/knowledge-formatter');
 const TranscriptionService = require('./TranscriptionService');
 const TranscriptionAnalysisService = require('./TranscriptionAnalysisService');
 const llmService = require('./LLMService');
+const https = require('https');
 
 class ChatService {
     constructor() {
@@ -4770,14 +4771,23 @@ Adapt based on context and user behavior.
 				}
 
                 // Make request
-                const response = await axios({
-                    method: func.api_method || 'POST',
-                    url: url,
-                    headers: headers,
-                    data: func.api_method !== 'GET' ? args : undefined,
-                    timeout: func.timeout_ms || 30000
-                });
+                const axiosConfig = {
+					method: func.api_method || 'POST',
+					url: url,
+					headers: headers,
+					data: func.api_method !== 'GET' ? args : undefined,
+					timeout: func.timeout_ms || 30000
+				};
 
+				// Skip SSL verification if configured (for self-signed certificates)
+				if (func.skip_ssl_verify && url.startsWith('https://')) {
+					axiosConfig.httpsAgent = new https.Agent({
+						rejectUnauthorized: false
+					});
+					console.log('⚠️ SSL verification disabled for function:', functionName);
+				}
+
+				const response = await axios(axiosConfig);
                 return response.data;
             } catch (error) {
                 return {

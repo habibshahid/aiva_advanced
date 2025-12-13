@@ -128,6 +128,7 @@ const AgentEditor = () => {
     api_body: null,
     timeout_ms: 30000,
     retries: 2,
+	skip_ssl_verify: false,
     parameters: {
       type: 'object',
       properties: {},
@@ -540,6 +541,7 @@ const AgentEditor = () => {
         api_body: func.api_body,
         timeout_ms: func.timeout_ms,
         retries: func.retries,
+		skip_ssl_verify: func.skip_ssl_verify || false,
         parameters: func.parameters
       });
       
@@ -560,6 +562,7 @@ const AgentEditor = () => {
         api_body: null,
         timeout_ms: 30000,
         retries: 2,
+		skip_ssl_verify: false,
         parameters: {
           type: 'object',
           properties: {},
@@ -2751,6 +2754,40 @@ const AgentEditor = () => {
                           />
                         </div>
                       </div>
+					  {/* SSL Verification Toggle */}
+						<div className="flex items-center justify-between p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+						  <div className="flex-1">
+							<label className="block text-sm font-medium text-gray-700">
+							  Skip SSL Verification
+							</label>
+							<p className="text-xs text-gray-500 mt-1">
+							  Enable for endpoints with self-signed or invalid SSL certificates. Use with caution.
+							</p>
+						  </div>
+						  <div className="ml-4">
+							<button
+							  type="button"
+							  onClick={() => setFunctionForm({ ...functionForm, skip_ssl_verify: !functionForm.skip_ssl_verify })}
+							  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
+								functionForm.skip_ssl_verify ? 'bg-yellow-500' : 'bg-gray-200'
+							  }`}
+							>
+							  <span
+								className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+								  functionForm.skip_ssl_verify ? 'translate-x-5' : 'translate-x-0'
+								}`}
+							  />
+							</button>
+						  </div>
+						</div>
+						{functionForm.skip_ssl_verify && (
+						  <div className="flex items-center p-2 bg-yellow-100 border border-yellow-300 rounded text-yellow-800 text-xs">
+							<svg className="w-4 h-4 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+							  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+							</svg>
+							SSL verification is disabled. Only use for internal/development APIs with self-signed certificates.
+						  </div>
+						)}
                     </div>
                   </div>
                 )}

@@ -121,6 +121,30 @@ class DynamicAgentLoader {
 			}
 		} : null;
 		
+		const builtInOrderStatusTool = agent.kb_id ? {
+			type: "function",
+			name: "check_order_status",
+			description: "Check the status of a customer's order using their order number, email, or phone number. Use this when a customer asks about their order status, tracking, delivery information, or wants to know where their order is. IMPORTANT: Before calling this function, tell the user 'Let me check your order status' or 'One moment while I look that up'.",
+			parameters: {
+				type: "object",
+				properties: {
+					order_number: {
+						type: "string",
+						description: "The order number or order ID (e.g., '#1234', '1234', 'ORD-1234')"
+					},
+					email: {
+						type: "string",
+						description: "Customer's email address used for the order"
+					},
+					phone: {
+						type: "string",
+						description: "Customer's phone number used for the order"
+					}
+				},
+				required: []
+			}
+		} : null;
+		
 		const openAITools = [
 			builtInTransferTool, // Always include transfer tool first
 			...(agent.functions || [])
@@ -136,6 +160,11 @@ class DynamicAgentLoader {
 		if (builtInKBSearchTool) {
 			openAITools.push(builtInKBSearchTool);
 			logger.debug(`Added KB search tool for agent ${agent.id} (KB: ${agent.kb_id})`);
+		}
+		
+		if (builtInOrderStatusTool) {
+			openAITools.push(builtInOrderStatusTool);
+			logger.debug(`Added order status tool for agent ${agent.id} (KB: ${agent.kb_id})`);
 		}
 		
 		const builtInTransferFunction = {
@@ -157,7 +186,21 @@ class DynamicAgentLoader {
 			},
 			is_active: true
 		};
+		
+		const builtInOrderStatusFunction = agent.kb_id ? {
+			id: 'builtin_check_order_status',
+			agent_id: agent.id,
+			name: 'check_order_status',
+			description: 'Check order status via Shopify',
+			handler_type: 'inline',
+			execution_mode: 'sync',
+			is_active: true,
+			// Store kb_id for the handler
+			kb_id: agent.kb_id
+		} : null;
+		
 		let languageHints = agent.language_hints;
+		
 		if (typeof languageHints === 'string') {
 			try {
 				languageHints = JSON.parse(languageHints);
@@ -180,7 +223,11 @@ class DynamicAgentLoader {
 			greeting: agent.greeting || `Hello! This is ${agent.name}. How can I help you?`,
 			instructions: agent.instructions,
 			tools: openAITools,
-			functions: [builtInTransferFunction, ...(agent.functions || [])],
+			functions: [
+				builtInTransferFunction,
+				...(builtInOrderStatusFunction ? [builtInOrderStatusFunction] : []),
+				...(agent.functions || [])
+			],
 			kb_id: agent.kb_id,
 			config: {
 				voice: agent.voice || 'shimmer',
