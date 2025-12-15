@@ -900,52 +900,159 @@ class ChatService {
 				const { llmDecision, llmCost, complaintState } = complaintResult;
 				
 				// Execute function if requested (create_ticket)
+				// ============================================
+				// 🔧 EXECUTE FUNCTION AND CALL LLM WITH RESULT
+				// ============================================
 				let executedFunctionCalls = [];
+
 				if (llmDecision.function_call_needed && llmDecision.function_name) {
 					console.log(`🔧 Executing function: ${llmDecision.function_name}`);
 					
-					const requestedFunction = agent.functions?.find(
-						fn => fn.name === llmDecision.function_name && fn.is_active !== false
+					// Check if we should skip (missing required args)
+					const shouldSkipFunction = this._shouldSkipFunctionCall(
+						llmDecision.function_name,
+						llmDecision.function_arguments,
+						agent
 					);
 					
-					if (requestedFunction) {
-						try {
-							const functionResult = await this._executeFunction(
-								agent,
-								llmDecision.function_name,
-								llmDecision.function_arguments || {}
+					if (shouldSkipFunction.skip) {
+						console.log(`⏭️ Skipping function call: ${shouldSkipFunction.reason}`);
+						llmDecision.function_call_needed = false;
+					} else {
+						// Find function definition
+						const builtInFunctions = ['check_order_status'];
+						const isBuiltInFunction = builtInFunctions.includes(llmDecision.function_name);
+						
+						const requestedFunction = isBuiltInFunction
+							? { name: llmDecision.function_name, is_active: true, _builtin: true }
+							: agent.functions?.find(
+								fn => fn.name === llmDecision.function_name && fn.is_active !== false
 							);
-							
-							console.log('✅ Function executed:', functionResult);
-							
-							executedFunctionCalls.push({
-								function_id: uuidv4(),
-								function_name: llmDecision.function_name,
-								arguments: llmDecision.function_arguments,
-								result: functionResult,
-								status: 'success'
-							});
-							
-							// If ticket was created successfully, update response
-							if (functionResult.success && functionResult.data?.ticket_number) {
-								llmDecision.response = llmDecision.response.replace(
-									'{TICKET_NUMBER}', 
-									functionResult.data.ticket_number
+						
+						if (requestedFunction) {
+							try {
+								// Execute the function
+								const functionResult = await this._executeFunction(
+									agent,
+									llmDecision.function_name,
+									llmDecision.function_arguments || {}
 								);
+								
+								console.log(`✅ Function executed:`, functionResult);
+								
+								executedFunctionCalls.push({
+									function_id: uuidv4(),
+									function_name: llmDecision.function_name,
+									arguments: llmDecision.function_arguments,
+									result: functionResult,
+									status: 'success'
+								});
+								
+								// ============================================
+								// 🔄 CALL LLM AGAIN WITH FUNCTION RESULT
+								// ============================================
+								if (functionResult.success) {
+									console.log('🔄 Calling LLM again with function result...');
+									
+									// Build system prompt for followup
+									const systemPrompt = this._buildSystemPromptWithStrategy(
+										agent.instructions,
+										agent.conversation_strategy,
+										agent.greeting,
+										false,
+										agent.kb_metadata,
+										agent
+									);
+									
+									const followupMessages = [
+										{ role: 'system', content: systemPrompt },
+										...history.map(msg => ({ role: msg.role, content: msg.content })),
+										{
+											role: 'user',
+											content: [
+												{ type: 'text', text: message || 'Here is the image for my complaint' },
+												{ type: 'image_url', image_url: { url: image, detail: 'low' } }
+											]
+										},
+										{ role: 'assistant', content: JSON.stringify(llmDecision) },
+										{
+											role: 'user',
+											content: `[FUNCTION RESULT for ${llmDecision.function_name}]:
+				${JSON.stringify(functionResult, null, 2)}
+
+				Based on this function result, provide your FINAL response to the customer.
+				- Include any relevant IDs/numbers from the result naturally in your response
+				- Match the customer's language (English or Roman Urdu)
+				- DO NOT set function_call_needed=true again
+				- Respond in valid JSON format`
+										}
+									];
+									
+									const followupCompletion = await this._callLLM(followupMessages, {
+										model: agent.chat_model || 'gpt-4o-mini',
+										temperature: parseFloat(agent.temperature) || 0.7,
+										max_tokens: 500,
+										json_mode: true,
+										hasVision: true
+									});
+									
+									// Add followup cost
+									complaintResult.llmCost = CostCalculator.combineCosts([
+										complaintResult.llmCost, 
+										followupCompletion.cost
+									]);
+									console.log('💰 Followup LLM cost:', followupCompletion.cost.final_cost);
+									
+									try {
+										const finalDecision = JSON.parse(followupCompletion.content);
+										llmDecision.response = finalDecision.response;
+										llmDecision.function_call_needed = false;
+										
+										// Preserve other decisions
+										if (finalDecision.conversation_complete !== undefined) {
+											llmDecision.conversation_complete = finalDecision.conversation_complete;
+										}
+										if (finalDecision.user_wants_to_end !== undefined) {
+											llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
+										}
+										
+										console.log('✅ Final response after function call generated');
+									} catch (parseError) {
+										console.error('❌ Failed to parse followup response:', parseError.message);
+										// Try to extract response from partial JSON
+										if (followupCompletion.content) {
+											const responseMatch = followupCompletion.content.match(/"response"\s*:\s*"([^"]+)"/);
+											if (responseMatch) {
+												llmDecision.response = responseMatch[1];
+											}
+										}
+									}
+								}
+								
+								// Update complaint state after successful function
+								const funcNameLower = llmDecision.function_name.toLowerCase();
+								if (funcNameLower.includes('ticket') || funcNameLower.includes('complaint')) {
+									complaintState.awaiting_images = false;
+									complaintState.ticket_created = true;
+									await this._updateSessionComplaintState(sessionId, complaintState);
+									await this._clearComplaintState(sessionId);
+								}
+								
+							} catch (funcError) {
+								console.error(`❌ Function execution failed:`, funcError.message);
+								
+								executedFunctionCalls.push({
+									function_id: uuidv4(),
+									function_name: llmDecision.function_name,
+									arguments: llmDecision.function_arguments,
+									error: funcError.message,
+									status: 'error'
+								});
+								
+								llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again.";
 							}
-							
-							// Clear complaint state after successful ticket creation
-							await this._clearComplaintState(sessionId);
-							
-						} catch (funcError) {
-							console.error('❌ Function execution failed:', funcError.message);
-							executedFunctionCalls.push({
-								function_id: uuidv4(),
-								function_name: llmDecision.function_name,
-								arguments: llmDecision.function_arguments,
-								error: funcError.message,
-								status: 'error'
-							});
+						} else {
+							console.warn(`⚠️ Function not found or inactive: ${llmDecision.function_name}`);
 						}
 					}
 				}
@@ -5727,19 +5834,29 @@ GENERAL RULES:
 		}
 		
 		// Check if LLM wants to create ticket now
-		if (llmDecision.function_call_needed && llmDecision.function_name === 'create_ticket') {
-			console.log('🎫 LLM requested ticket creation with images');
+		if (llmDecision.function_call_needed && llmDecision.function_name) {
+			console.log(`🔧 Function call requested in complaint flow: ${llmDecision.function_name}`);
+			console.log(`📋 Arguments:`, llmDecision.function_arguments);
 			
-			// Add collected images to function arguments
+			// Add complaint context to arguments if relevant
 			if (!llmDecision.function_arguments) {
 				llmDecision.function_arguments = {};
 			}
-			llmDecision.function_arguments.image_urls = complaintState.images_collected.map(img => img.url);
-			llmDecision.function_arguments.order_no = complaintState.order_number;
 			
-			// Reset complaint state after ticket creation
+			// Auto-inject complaint data for ticket/complaint-related functions
+			const funcNameLower = llmDecision.function_name.toLowerCase();
+			if (funcNameLower.includes('ticket') || funcNameLower.includes('complaint')) {
+				if (complaintState.images_collected?.length > 0 && !llmDecision.function_arguments.image_urls) {
+					llmDecision.function_arguments.image_urls = complaintState.images_collected.map(img => img.url);
+				}
+				if (complaintState.order_number && !llmDecision.function_arguments.order_no) {
+					llmDecision.function_arguments.order_no = complaintState.order_number;
+				}
+			}
+			
+			// Update complaint state
 			complaintState.awaiting_images = false;
-			complaintState.ticket_requested = true;
+			complaintState.function_requested = llmDecision.function_name;
 			await this._updateSessionComplaintState(sessionId, complaintState);
 		}
 		
