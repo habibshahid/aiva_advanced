@@ -8,9 +8,95 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon, X, Camera } from 'lucide-react';
+import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon, X, Camera, ThumbsUp, ThumbsDown, Mic, MicOff, Volume2, Square } from 'lucide-react';
 import axios from 'axios';
 
+/**
+ * Audio Player Component
+ * Reusable audio playback for sent/received audio
+ */
+const AudioPlayer = ({ audioUrl, label, isPlaying, onTogglePlay, variant = 'default' }) => {
+  const [duration, setDuration] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef(null);
+  
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.addEventListener('loadedmetadata', () => {
+        setDuration(audioRef.current.duration);
+      });
+      audioRef.current.addEventListener('timeupdate', () => {
+        setCurrentTime(audioRef.current.currentTime);
+      });
+      audioRef.current.addEventListener('ended', () => {
+        setCurrentTime(0);
+        onTogglePlay(false);
+      });
+    }
+  }, []);
+  
+  useEffect(() => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.play().catch(err => console.log('Playback error:', err));
+      } else {
+        audioRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
+  
+  const formatTime = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  const progress = duration ? (currentTime / duration) * 100 : 0;
+  
+  const bgColor = variant === 'user' ? 'bg-primary-500/20' : 'bg-gray-100';
+  const buttonColor = variant === 'user' ? 'bg-white text-primary-600' : 'bg-primary-500 text-white';
+  const textColor = variant === 'user' ? 'text-primary-100' : 'text-gray-600';
+  const progressBg = variant === 'user' ? 'bg-primary-400/30' : 'bg-gray-200';
+  const progressFill = variant === 'user' ? 'bg-white' : 'bg-primary-500';
+  
+  return (
+    <div className={`flex items-center gap-3 p-2 ${bgColor} rounded-lg`}>
+      <audio ref={audioRef} src={audioUrl} preload="metadata" />
+      
+      {/* Play/Pause Button */}
+      <button
+        onClick={() => onTogglePlay(!isPlaying)}
+        className={`p-2 ${buttonColor} rounded-full hover:opacity-80 transition-opacity flex-shrink-0`}
+      >
+        {isPlaying ? (
+          <Square className="w-4 h-4" />
+        ) : (
+          <Volume2 className="w-4 h-4" />
+        )}
+      </button>
+      
+      {/* Progress Bar & Time */}
+      <div className="flex-1 min-w-0">
+        <div className={`h-1 ${progressBg} rounded-full overflow-hidden`}>
+          <div 
+            className={`h-full ${progressFill} transition-all duration-100`}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <div className={`flex justify-between mt-1 text-xs ${textColor}`}>
+          <span>{formatTime(currentTime)}</span>
+          <span>{label || formatTime(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Collapsible Sources Component
+ * Shows sources and images in an expandable panel
+ */
 /**
  * Collapsible Sources Component
  * Shows sources and images in an expandable panel
@@ -147,6 +233,14 @@ const ChatPage = () => {
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const fileInputRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [playingAudioId, setPlayingAudioId] = useState(null); // ID of message with playing audio
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
+  const audioFileInputRef = useRef(null);
 
   const messagesEndRef = useRef(null);
 
@@ -271,6 +365,103 @@ const ChatPage = () => {
     }
   };
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      mediaRecorderRef.current = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      
+      audioChunksRef.current = [];
+      
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setAudioBlob(blob);
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+      
+      mediaRecorderRef.current.start(100); // Collect data every 100ms
+      setIsRecording(true);
+      setRecordingDuration(0);
+      
+      // Start timer
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+      alert('Could not access microphone. Please check permissions.');
+    }
+  };
+  
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    }
+  };
+  
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+    setAudioBlob(null);
+    setRecordingDuration(0);
+    
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+  
+  const removeAudio = () => {
+    setAudioBlob(null);
+    setRecordingDuration(0);
+  };
+  
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  const handleAudioFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const validTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/webm', 'audio/ogg', 'audio/m4a', 'audio/mp4'];
+    const validExtensions = ['.mp3', '.wav', '.webm', '.ogg', '.m4a', '.mp4', '.flac'];
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    
+    if (!validTypes.includes(file.type) && !validExtensions.includes(ext)) {
+      alert('Please select a valid audio file (MP3, WAV, WebM, OGG, M4A, FLAC)');
+      return;
+    }
+    
+    if (file.size > 25 * 1024 * 1024) {
+      alert('Audio file must be less than 25MB');
+      return;
+    }
+    
+    setAudioBlob(file);
+  };
+  
   const imageToBase64 = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -281,106 +472,133 @@ const ChatPage = () => {
   };
 
   const sendMessage = async (e) => {
-    e.preventDefault();
-  
-    // Allow sending if there's text OR an image
-    if (!input.trim() && !selectedImage) return;
-    if (sending) return;
+	  e.preventDefault();
 
-    const userMessage = input.trim();
-    setInput('');
-    setSending(true);
-
-    // Convert image to base64 if selected
-    let imageBase64 = null;
-    if (selectedImage) {
-      try {
-        imageBase64 = await imageToBase64(selectedImage);
-      } catch (err) {
-        console.error('Failed to convert image:', err);
-      }
-    }
-
-    // Add user message to chat (with image preview if applicable)
-    const userMsgContent = userMessage || (selectedImage ? '📷 [Image]' : '');
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      role: 'user',
-      content: userMsgContent,
-      image: imagePreview, // Store preview for display
-      created_at: new Date().toISOString()
-    }]);
-
-    // Clear image after adding to chat
-    const sentImagePreview = imagePreview;
-    removeImage();
-
-    try {
-      const response = await axios.post(`${API_URL}/message`, {
-        session_id: sessionId,
-        agent_id: agentId,
-        message: userMessage || '.', // Default message for image-only
-        image: imageBase64
-      });
-
-      if (response.data.success) {
-        const data = response.data.data;
-      
-        // Update sessionId if new session was created
-        if (data.new_session_created) {
-          const newSessionId = data.session_id;
-          setSessionId(newSessionId);
-          localStorage.setItem(`aiva_chat_${agentId}`, newSessionId);
-        }
-
-        // Build message with response object for proper display priority
-        const assistantMessage = {
-          id: data.message_id?.messageId || data.message_id,
-          role: 'assistant',
-          response: data.response,
-          content: data.response?.text || data.response || '',
-          html: data.response?.html || '',
-          sources: data.sources || [],
-          images: data.images || [],
-          products: data.products || [],
-          agent_transfer: data.agent_transfer,
-          created_at: data.created_at
-        };
-      
-        setMessages(prev => [...prev, assistantMessage]);
-
-        // Handle agent transfer
-        if (data.agent_transfer) {
-          setTimeout(() => {
-            setMessages(prev => [...prev, {
-              id: 'transfer-' + Date.now(),
-              role: 'system',
-              content: '🤝 Connecting you to a human agent...',
-              created_at: new Date().toISOString()
-            }]);
-          }, 1000);
-        }
-      
-        // Handle conversation end - show feedback prompt
-        if (data.show_feedback_prompt && !feedbackSubmitted) {
-          setShowFeedbackPrompt(true);
-        }
-      } else {
-        throw new Error('Failed to send message');
-      }
-    } catch (error) {
-      console.error('Send message error:', error);
-      const errorMessage = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        created_at: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setSending(false);
-    }
-  };
+	  // Allow sending if there's text, image, OR audio
+	  if (!input.trim() && !selectedImage && !audioBlob) return;
+	  if (sending) return;
+	  
+	  const userMessage = input.trim();
+	  setInput('');
+	  setSending(true);
+	  
+	  // Convert image to base64 if selected
+	  let imageBase64 = null;
+	  if (selectedImage) {
+		try {
+		  imageBase64 = await imageToBase64(selectedImage);
+		} catch (err) {
+		  console.error('Failed to convert image:', err);
+		}
+	  }
+	  
+	  // Determine user message content for display
+	  let userMsgContent = userMessage;
+	  if (!userMsgContent && selectedImage) userMsgContent = '📷 [Image]';
+	  if (!userMsgContent && audioBlob) userMsgContent = '🎤 [Voice Message]';
+	  
+	  // ✅ FIX: Store attachments BEFORE clearing them
+	  const sentImagePreview = imagePreview;
+	  const sentAudioBlob = audioBlob;
+	  
+	  // ✅ FIX: Now sentAudioBlob is declared, so we can use it
+	  let userAudioUrl = null;
+	  if (sentAudioBlob) {
+		userAudioUrl = URL.createObjectURL(sentAudioBlob);
+	  }
+	  
+	  // Add user message to chat
+	  setMessages(prev => [...prev, {
+		id: Date.now().toString(),
+		role: 'user',
+		content: userMsgContent,
+		image: sentImagePreview,  // ✅ Use sentImagePreview instead of imagePreview
+		isAudio: !!sentAudioBlob,
+		audioUrl: userAudioUrl,
+		created_at: new Date().toISOString()
+	  }]);
+	  
+	  // Clear attachments
+	  removeImage();
+	  removeAudio();
+	  
+	  try {
+		let response;
+		
+		if (sentAudioBlob) {
+		  // Send as FormData for audio
+		  const formData = new FormData();
+		  formData.append('audio', sentAudioBlob, 'recording.webm');
+		  formData.append('session_id', sessionId || '');
+		  formData.append('agent_id', agentId);
+		  formData.append('generate_audio_response', 'true');
+		  
+		  if (userMessage) {
+			formData.append('message', userMessage);
+		  }
+		  
+		  // ✅ FIX: Added missing parentheses
+		  response = await axios.post(`${API_URL}/message`, formData, {
+			headers: { 'Content-Type': 'multipart/form-data' }
+		  });
+		} else {
+		  // Send as JSON for text/image
+		  // ✅ FIX: Added missing parentheses
+		  response = await axios.post(`${API_URL}/message`, {
+			session_id: sessionId,
+			agent_id: agentId,
+			message: userMessage || '.',
+			image: imageBase64
+		  });
+		}
+		
+		const data = response.data.data;
+		
+		// Save session if new
+		if (!sessionId && data.session_id) {
+		  setSessionId(data.session_id);
+		  // ✅ FIX: Added missing parentheses
+		  localStorage.setItem(`aiva_chat_${agentId}`, data.session_id);
+		}
+		
+		// Add assistant message
+		setMessages(prev => [...prev, {
+		  id: data.message_id || Date.now().toString(),
+		  role: 'assistant',
+		  content: data.response?.text || '',
+		  content_html: data.response?.html,
+		  sources: data.sources || [],
+		  images: data.images || [],
+		  products: data.products || [],
+		  transcription: data.transcription,
+		  audio_response: data.audio_response,
+		  created_at: new Date().toISOString()
+		}]);
+		
+		// Auto-play audio response if available (optional - can be annoying)
+		// if (data.audio_response?.url) {
+		//   const audio = new Audio(data.audio_response.url);
+		//   audio.play().catch(err => console.log('Auto-play blocked:', err));
+		// }
+		
+		// Handle feedback prompt
+		if (data.show_feedback_prompt || data.interaction_closed) {
+		  setShowFeedbackPrompt(true);
+		}
+		
+	  } catch (error) {
+		console.error('Send message error:', error);
+		setMessages(prev => [...prev, {
+		  id: Date.now().toString(),
+		  role: 'assistant',
+		  content: 'Sorry, I encountered an error. Please try again.',
+		  error: true,
+		  created_at: new Date().toISOString()
+		}]);
+	  } finally {
+		setSending(false);
+	  }
+	};
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -431,7 +649,11 @@ const ChatPage = () => {
    * - Shows response.html (synthesized answer) FIRST
    * - Sources and images are in CollapsibleSources component
    */
+  /**
+   * Render message content with audio players
+   */
   const renderMessageContent = (message) => {
+    // User message with image
     if (message.role === 'user' && message.image) {
       return (
         <div>
@@ -445,9 +667,34 @@ const ChatPage = () => {
           />
         </div>
       );
-    }	  
-	  
-	  
+    }
+    
+    // User message with audio
+    if (message.role === 'user' && message.isAudio) {
+      return (
+        <div>
+          {message.content && message.content !== '🎤 [Voice Message]' && (
+            <p className="text-sm mb-2">{message.content}</p>
+          )}
+          {message.audioUrl ? (
+            <AudioPlayer
+              audioUrl={message.audioUrl}
+              label="Voice message"
+              isPlaying={playingAudioId === `user-${message.id}`}
+              onTogglePlay={(playing) => setPlayingAudioId(playing ? `user-${message.id}` : null)}
+              variant="user"
+            />
+          ) : (
+            <div className="flex items-center gap-2 text-sm opacity-80">
+              <Mic className="w-4 h-4" />
+              <span>Voice message sent</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    // Assistant message
     const mainContent = message.response?.html 
       || message.response?.text 
       || message.html 
@@ -456,17 +703,42 @@ const ChatPage = () => {
     
     return (
       <>
+        {/* Transcription indicator */}
+        {message.transcription && (
+          <div className="mb-2 text-xs text-gray-500 italic flex items-center gap-1">
+            <Mic className="w-3 h-3" />
+            <span>Transcribed from voice ({message.transcription.language})</span>
+          </div>
+        )}
+        
+        {/* Main content */}
         <div 
           className="text-sm whitespace-pre-wrap prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{ __html: mainContent }}
         />
+        
+        {/* Audio Response Player */}
+        {message.audio_response?.url && (
+          <div className="mt-3">
+            <AudioPlayer
+              audioUrl={message.audio_response.url}
+              label={message.audio_response.estimated_duration 
+                ? `${Math.round(message.audio_response.estimated_duration)}s` 
+                : 'Audio response'}
+              isPlaying={playingAudioId === `assistant-${message.id}`}
+              onTogglePlay={(playing) => setPlayingAudioId(playing ? `assistant-${message.id}` : null)}
+              variant="default"
+            />
+          </div>
+        )}
 
+        {/* Collapsible Sources */}
         <CollapsibleSources 
           sources={message.sources} 
           images={message.images} 
         />
 
-        {/* Products - Show inline (not collapsible) */}
+        {/* Products */}
         {message.products && message.products.length > 0 && (
           <div className="mt-4 pt-4 border-t border-gray-200">
             <div className="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1">
@@ -506,7 +778,7 @@ const ChatPage = () => {
         )}
 
         {/* Message Feedback */}
-        {message.role === 'assistant' && message.id && (
+        {message.role === 'assistant' && message.id && message.id !== 'greeting' && (
           <div className="mt-3 pt-3 border-t border-gray-200">
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <span>Was this helpful?</span>
@@ -671,6 +943,29 @@ const ChatPage = () => {
 				</button>
 			  </div>
 			)}
+			{/* Audio Preview */}
+			{audioBlob && !isRecording && (
+			  <div className="mb-3 flex items-center gap-3 p-3 bg-blue-50 rounded-xl border border-blue-200">
+				<div className="p-2 bg-blue-500 rounded-full">
+				  <Mic className="w-5 h-5 text-white" />
+				</div>
+				<div className="flex-1 min-w-0">
+				  <p className="text-sm font-medium text-gray-900">
+					Voice Message
+				  </p>
+				  <p className="text-xs text-gray-500">
+					{formatDuration(recordingDuration)} • Ready to send
+				  </p>
+				</div>
+				<button
+				  type="button"
+				  onClick={removeAudio}
+				  className="text-gray-400 hover:text-gray-600 p-1"
+				>
+				  <X className="w-5 h-5" />
+				</button>
+			  </div>
+			)}
 			
 			<form onSubmit={sendMessage} className="flex items-end space-x-3">
 			  {/* Hidden file input */}
@@ -681,17 +976,57 @@ const ChatPage = () => {
 				onChange={handleImageSelect}
 				className="hidden"
 			  />
-			  
+			  <input
+				ref={audioFileInputRef}
+				type="file"
+				accept="audio/*,.mp3,.wav,.webm,.ogg,.m4a,.flac"
+				onChange={handleAudioFileSelect}
+				className="hidden"
+			  />
 			  {/* Image upload button */}
 			  <button
 				type="button"
 				onClick={() => fileInputRef.current?.click()}
-				disabled={sending}
+				disabled={sending || isRecording}
 				className="flex-shrink-0 p-3 border border-gray-300 rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				title="Upload image"
 			  >
 				<Camera className="w-5 h-5 text-gray-600" />
 			  </button>
+			  
+			  {/* Microphone / Recording button */}
+			  {!audioBlob && (
+				<button
+				  type="button"
+				  onClick={isRecording ? stopRecording : startRecording}
+				  disabled={sending}
+				  className={`flex-shrink-0 p-3 border rounded-xl transition-colors ${
+					isRecording 
+					  ? 'bg-red-500 border-red-500 text-white animate-pulse' 
+					  : 'border-gray-300 hover:bg-gray-50 text-gray-600'
+				  } disabled:opacity-50 disabled:cursor-not-allowed`}
+				  title={isRecording ? 'Stop recording' : 'Start voice recording'}
+				>
+				  {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+				</button>
+			  )}
+			  
+			  {/* Recording indicator */}
+			  {isRecording && (
+				<div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
+				  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+				  <span className="text-sm text-red-600 font-medium">
+					{formatDuration(recordingDuration)}
+				  </span>
+				  <button
+					type="button"
+					onClick={cancelRecording}
+					className="text-red-500 hover:text-red-700"
+				  >
+					<X className="w-4 h-4" />
+				  </button>
+				</div>
+			  )}
 			  
 			  {/* Text input */}
 			  <div className="flex-1">
@@ -704,9 +1039,18 @@ const ChatPage = () => {
 					  sendMessage(e);
 					}
 				  }}
-				  placeholder={selectedImage ? "Add a message or just send the image..." : "Type your message..."}
+				  placeholder={
+					audioBlob 
+					  ? "Add a message or just send the audio..."
+					  : isRecording 
+					  ? "Recording..."
+					  : selectedImage 
+					  ? "Add a message or just send the image..." 
+					  : "Type your message..."
+				  }
+				  disabled={isRecording}
 				  rows="1"
-				  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+				  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none disabled:bg-gray-100"
 				  style={{ minHeight: '52px', maxHeight: '200px' }}
 				/>
 			  </div>
@@ -714,7 +1058,7 @@ const ChatPage = () => {
 			  {/* Send button */}
 			  <button
 				type="submit"
-				disabled={(!input.trim() && !selectedImage) || sending}
+				disabled={(!input.trim() && !selectedImage && !audioBlob) || sending || isRecording}
 				className="flex-shrink-0 bg-primary-600 text-white rounded-xl px-4 py-3 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 			  >
 				{sending ? (

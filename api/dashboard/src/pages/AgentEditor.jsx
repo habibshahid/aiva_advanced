@@ -1605,35 +1605,7 @@ const AgentEditor = () => {
             </div>
           </div>
 		  
-		  {/* Provider Status */}
-			<div className="mt-4 p-3 bg-gray-50 rounded-lg border">
-			  <label className="block text-sm font-medium text-gray-700 mb-2">
-				Configured Providers
-			  </label>
-			  <div className="flex flex-wrap gap-2">
-				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-				  ✅ OpenAI
-				</span>
-				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-				  ✅ Groq
-				</span>
-				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-				  ⚙️ Anthropic
-				</span>
-				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-				  ⚙️ DeepSeek
-				</span>
-				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-				  ⚙️ Moonshot
-				</span>
-			  </div>
-			  <p className="mt-2 text-xs text-gray-500">
-				Gray providers need API keys in .env file. Models will fall back to OpenAI if provider unavailable.
-			  </p>
-			</div>
-		  
-		  
-          <div>
+		  <div>
 			  <div className="flex items-center justify-between mb-2">
 				<label className="block text-sm font-medium text-gray-700">Instructions</label>
 				<button
@@ -1687,6 +1659,231 @@ const AgentEditor = () => {
                 <strong>Outbound Call:</strong> Not recommended to set up greeting on an Outbound Call because the AiVA should respond once the Caller answers the call and Starts Speaking
 			</p>
           </div>
+		  
+		  {/* Chat Audio Settings */}
+			<div className="bg-white shadow rounded-lg p-6">
+			  <div className="flex items-center gap-2 mb-4">
+				<span className="text-2xl">🎤</span>
+				<h3 className="text-lg font-medium text-gray-900">Chat Audio Settings</h3>
+			  </div>
+			  <p className="text-sm text-gray-500 mb-4">
+				Configure speech-to-text and text-to-speech for audio messages in web/mobile chat.
+				These settings are separate from voice call configuration.
+			  </p>
+
+			  <div className="space-y-6">
+				{/* STT Section */}
+				<div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+				  <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+					<span>🎙️</span> Speech-to-Text (STT)
+				  </h4>
+				  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+					{/* STT Provider */}
+					<div>
+					  <label className="block text-sm font-medium text-gray-700">Provider</label>
+					  <select
+						value={agent.chat_stt_provider || 'openai'}
+						onChange={(e) => {
+						  const provider = e.target.value;
+						  let defaultModel = 'whisper-1';
+						  if (provider === 'groq') defaultModel = 'whisper-large-v3';
+						  if (provider === 'deepgram') defaultModel = 'nova-2';
+						  if (provider === 'soniox') defaultModel = 'stt-rt-preview';
+						  setAgent({ 
+							...agent, 
+							chat_stt_provider: provider,
+							chat_stt_model: defaultModel
+						  });
+						}}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+					  >
+						<option value="openai">OpenAI Whisper ($0.006/min)</option>
+						<option value="groq">Groq Whisper ($0.0001/min)</option>
+						<option value="deepgram">Deepgram Nova ($0.0043/min)</option>
+						<option value="soniox">Soniox ($0.0035/min)</option>
+					  </select>
+					  <p className="mt-1 text-xs text-gray-500">
+						{agent.chat_stt_provider === 'groq' && 'Fastest and cheapest'}
+						{agent.chat_stt_provider === 'deepgram' && 'Great for English'}
+						{agent.chat_stt_provider === 'soniox' && 'Best for Urdu/English'}
+						{(!agent.chat_stt_provider || agent.chat_stt_provider === 'openai') && 'Most accurate, 50+ languages'}
+					  </p>
+					</div>
+
+					{/* STT Model */}
+					<div>
+					  <label className="block text-sm font-medium text-gray-700">Model</label>
+					  <select
+						value={agent.chat_stt_model || 'whisper-1'}
+						onChange={(e) => setAgent({ ...agent, chat_stt_model: e.target.value })}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+					  >
+						{(agent.chat_stt_provider === 'openai' || !agent.chat_stt_provider) && (
+						  <option value="whisper-1">Whisper-1</option>
+						)}
+						{agent.chat_stt_provider === 'groq' && (
+						  <>
+							<option value="whisper-large-v3">Whisper Large V3</option>
+							<option value="whisper-large-v3-turbo">Whisper Large V3 Turbo</option>
+						  </>
+						)}
+						{agent.chat_stt_provider === 'deepgram' && (
+						  <>
+							<option value="nova-2">Nova 2</option>
+							<option value="nova-3">Nova 3</option>
+						  </>
+						)}
+						{agent.chat_stt_provider === 'soniox' && (
+						  <option value="stt-async-preview">STT Async Preview (for file uploads)</option>
+						)}
+					  </select>
+					</div>
+				  </div>
+				</div>
+
+				{/* TTS Section */}
+				<div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+				  <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+					<span>🔊</span> Text-to-Speech (TTS)
+				  </h4>
+				  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+					{/* TTS Provider */}
+					<div>
+					  <label className="block text-sm font-medium text-gray-700">Provider</label>
+					  <select
+						value={agent.chat_tts_provider || 'openai'}
+						onChange={(e) => {
+						  const provider = e.target.value;
+						  let defaultVoice = 'nova';
+						  if (provider === 'azure') defaultVoice = 'en-US-JennyNeural';
+						  setAgent({ 
+							...agent, 
+							chat_tts_provider: provider,
+							chat_tts_voice: defaultVoice
+						  });
+						}}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+					  >
+						<option value="openai">OpenAI TTS ($15/1M chars)</option>
+						<option value="azure">Azure TTS ($16/1M chars)</option>
+						<option value="uplift">Uplift TTS </option>
+					  </select>
+					  <p className="mt-1 text-xs text-gray-500">
+						{agent.chat_tts_provider === 'azure' 
+						  ? 'More voice options, Urdu support' 
+						  : 'High quality, 6 voices'}
+					  </p>
+					</div>
+
+					{/* TTS Voice */}
+					<div>
+					  <label className="block text-sm font-medium text-gray-700">Voice</label>
+					  <select
+						value={agent.chat_tts_voice || 'nova'}
+						onChange={(e) => setAgent({ ...agent, chat_tts_voice: e.target.value })}
+						className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+					  >
+						{(agent.chat_tts_provider === 'openai' || !agent.chat_tts_provider) && (
+						  <>
+							<option value="alloy">Alloy (Neutral)</option>
+							<option value="echo">Echo (Warm Male)</option>
+							<option value="fable">Fable (British)</option>
+							<option value="onyx">Onyx (Deep Male)</option>
+							<option value="nova">Nova (Friendly Female)</option>
+							<option value="shimmer">Shimmer (Soft Female)</option>
+						  </>
+						)}
+						{agent.chat_tts_provider === 'azure' && (
+						  <>
+							<optgroup label="English">
+							  <option value="en-US-JennyNeural">Jenny (US Female)</option>
+							  <option value="en-US-GuyNeural">Guy (US Male)</option>
+							  <option value="en-US-AriaNeural">Aria (US Female)</option>
+							  <option value="en-GB-SoniaNeural">Sonia (UK Female)</option>
+							</optgroup>
+							<optgroup label="Urdu">
+							  <option value="ur-PK-UzmaNeural">Uzma (Urdu Female)</option>
+							  <option value="ur-PK-AsadNeural">Asad (Urdu Male)</option>
+							</optgroup>
+						  </>
+						)}
+						{agent.chat_tts_provider === 'uplift' && (
+						  <>
+							<optgroup label="Urdu">
+							  <option value="ayesha">Ayesha (Female)</option>
+							  <option value="fatima">Fatima (Female)</option>
+							  <option value="asad">Asad (Male - News)</option>
+							  <option value="dadajee">Dada Jee (Elder Male)</option>
+							  <option value="zara">Zara (Female)</option>
+							</optgroup>
+							<optgroup label="Sindhi">
+							  <option value="samina">Samina (Female)</option>
+							  <option value="waqar">Waqar (Male)</option>
+							</optgroup>
+							<optgroup label="Punjabi">
+							  <option value="imran">Imran (Male)</option>
+							</optgroup>
+							<optgroup label="Balochi">
+							  <option value="nazia">Nazia (Female)</option>
+							  <option value="karim">Karim (Male)</option>
+							</optgroup>
+						  </>
+						)}
+					  </select>
+					</div>
+				  </div>
+				</div>
+
+				{/* Auto Response Toggle */}
+				<div className="flex items-center justify-between p-4 bg-primary-50 rounded-lg border border-primary-200">
+				  <div>
+					<label className="block text-sm font-medium text-gray-900">
+					  Auto-generate Audio Response
+					</label>
+					<p className="text-xs text-gray-600 mt-1">
+					  When user sends voice message, bot replies with both audio and text
+					</p>
+				  </div>
+				  <label className="relative inline-flex items-center cursor-pointer">
+					<input
+					  type="checkbox"
+					  checked={agent.chat_audio_response !== false && agent.chat_audio_response !== 0}
+					  onChange={(e) => setAgent({ ...agent, chat_audio_response: e.target.checked ? 1 : 0 })}
+					  className="sr-only peer"
+					/>
+					<div className="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+				  </label>
+				</div>
+			  </div>
+			</div>
+		  
+		  {/* Provider Status */}
+			<div className="mt-4 p-3 bg-gray-50 rounded-lg border">
+			  <label className="block text-sm font-medium text-gray-700 mb-2">
+				Configured Providers
+			  </label>
+			  <div className="flex flex-wrap gap-2">
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+				  ✅ OpenAI
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+				  ✅ Groq
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ Anthropic
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ DeepSeek
+				</span>
+				<span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+				  ⚙️ Moonshot
+				</span>
+			  </div>
+			  <p className="mt-2 text-xs text-gray-500">
+				Gray providers need API keys in .env file. Models will fall back to OpenAI if provider unavailable.
+			  </p>
+			</div>
+			
         </div>
       </div>
 

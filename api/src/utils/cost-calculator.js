@@ -346,7 +346,7 @@ class CostCalculator {
 
     for (const breakdown of costBreakdowns) {
       totalBaseCost += breakdown.base_cost;
-      allOperations = allOperations.concat(breakdown.operations);
+      allOperations = allOperations.concat(breakdown.operations || []);
     }
 
     const profitAmount = totalBaseCost * this.profitMargin;

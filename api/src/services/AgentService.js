@@ -13,8 +13,8 @@ class AgentService {
             model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
             tts_provider, custom_voice, language_hints, llm_model,
             temperature, max_tokens, vad_threshold, 
-            silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             agentId,
             tenantId,
@@ -42,7 +42,12 @@ class AgentService {
             agentData.greeting || null,
             agentData.kb_id || null,
             JSON.stringify(agentData.conversation_strategy) || null,
-			agentData.knowledge_search_mode || 'auto'
+			agentData.knowledge_search_mode || 'auto',
+			agentData.chat_stt_provider || 'soniox',
+			agentData.chat_tts_model || 'whisper-1',
+			agentData.chat_audio_response || 1,
+			agentData.chat_tts_provider || 'openai',
+			agentData.chat_tts_voice || 'shimmer'
         ]
     );
         
@@ -217,7 +222,8 @@ class AgentService {
 			'provider', 'deepgram_model', 'deepgram_voice', 'deepgram_language',
 			'tts_provider', 'custom_voice', 'language_hints', 'llm_model',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
-			'silence_duration_ms', 'greeting', 'is_active', 'kb_id', 'conversation_strategy', 'knowledge_search_mode'
+			'silence_duration_ms', 'greeting', 'is_active', 'kb_id', 'conversation_strategy', 'knowledge_search_mode',
+			'chat_stt_provider', 'chat_tts_model', 'chat_audio_response', 'chat_tts_provider', 'chat_tts_voice'
 		];
 		
 		for (const field of allowedFields) {

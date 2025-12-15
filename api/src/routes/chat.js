@@ -12,6 +12,21 @@ const ChatService = require('../services/ChatService');
 const CreditService = require('../services/CreditService');
 const ResponseBuilder = require('../utils/response-builder');
 const { validate, validateChatMessage, validatePagination } = require('../utils/validators');
+const multer = require('multer');
+const path = require('path');
+const AudioService = require('../services/AudioService');
+const AgentService = require('../services/AgentService');
+
+// Configure multer for audio uploads
+const audioUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedExtensions = ['.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm', '.ogg', '.flac'];
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, allowedExtensions.includes(ext));
+    }
+});
 
 const authenticate = (req, res, next) => {
     const apiKey = req.headers['x-api-key'];
@@ -431,7 +446,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
  *       402:
  *         description: Insufficient credits
  */
-router.post('/message', authenticate, async (req, res) => {
+router.post('/message', authenticate, audioUpload.single('audio'), async (req, res) => {
   const rb = new ResponseBuilder();
 
   try {
@@ -446,13 +461,75 @@ router.post('/message', authenticate, async (req, res) => {
 	  channel_user_name,
 	  channel_metadata,
 	  context_data,
-	  llm_context_hints
+	  llm_context_hints,
+	  // Audio options
+	  voice,
+	  generate_audio_response,
+	  stt_provider,
+	  language
 	} = req.body;
 
+	let audioTranscription = null;
+    let audioCost = 0;
+    let audioConfig = null;
+	
     // Validate
-    const errors = validateChatMessage(req.body);
-    if (errors.length > 0) {
-      return res.status(422).json(ResponseBuilder.validationError(errors));
+    // Validate - skip message validation if audio was provided
+    if (!req.file) {
+      const errors = validateChatMessage(req.body);
+      if (errors.length > 0) {
+        return res.status(422).json(ResponseBuilder.validationError(errors));
+      }
+    } else if (!agent_id) {
+      return res.status(400).json(
+        ResponseBuilder.badRequest('agent_id is required')
+      );
+    }
+
+    // ============================================
+    // 🎤 AUDIO HANDLING
+    // ============================================
+    if (req.file) {
+      console.log('🎤 [CHAT] Audio file detected, processing...');
+      
+      // Get agent for audio config
+      const agent = await AgentService.getAgent(agent_id);
+      if (!agent) {
+        return res.status(404).json(ResponseBuilder.notFound('Agent'));
+      }
+      
+      // Get effective audio configuration
+      audioConfig = AudioService.getConfigFromAgent(agent, {
+        stt_provider: stt_provider,
+        voice: voice,
+        language: language
+      });
+      
+      // Transcribe audio
+      const transcription = await AudioService.transcribe({
+        audio: req.file.buffer,
+        filename: req.file.originalname,
+        config: audioConfig
+      });
+      
+      if (!transcription.success || !transcription.text) {
+        return res.status(400).json(
+          ResponseBuilder.badRequest('Failed to transcribe audio or audio was empty')
+        );
+      }
+      
+      // Use transcribed text as the message
+      message = transcription.text;
+      audioCost += transcription.cost.final_cost;
+      
+      audioTranscription = {
+        text: transcription.text,
+        language: transcription.language,
+        duration: transcription.duration,
+        provider: transcription.provider
+      };
+      
+      console.log(`📝 [CHAT] Transcribed: "${message.substring(0, 100)}..."`);
     }
 
     // Check credits
@@ -483,6 +560,46 @@ router.post('/message', authenticate, async (req, res) => {
 		llmContextHints: llm_context_hints
 	  }
 	});
+	
+	// ============================================
+    // 🔊 TTS GENERATION
+    // ============================================
+    let audioResponse = null;
+    
+    const shouldGenerateAudio = (generate_audio_response === 'true' || generate_audio_response === true) 
+                                || (req.file && generate_audio_response !== 'false' && generate_audio_response !== false);
+    
+    if (shouldGenerateAudio && result.response?.text) {
+      try {
+        // Get audio config if not already fetched
+        if (!audioConfig) {
+          const agent = await AgentService.getAgent(agent_id);
+          audioConfig = AudioService.getConfigFromAgent(agent, { voice, language });
+        }
+        
+        if (audioConfig.autoGenerateAudio) {
+          const ttsResult = await AudioService.synthesize({
+            text: result.response.text,
+            config: audioConfig,
+            sessionId: result.session_id
+          });
+          
+          audioCost += ttsResult.cost.final_cost;
+          
+          audioResponse = {
+            url: ttsResult.audio_url,
+            audio_id: ttsResult.audio_id,
+            format: ttsResult.format,
+            voice: ttsResult.voice,
+            estimated_duration: ttsResult.estimated_duration
+          };
+          
+          console.log(`🔊 [CHAT] TTS generated: ${ttsResult.audio_url}`);
+        }
+      } catch (ttsError) {
+        console.error('TTS generation failed:', ttsError.message);
+      }
+    }
 
 	console.log('🔍 [CHAT ROUTE] Result received:', {
 	  cost: result.cost,
@@ -494,9 +611,9 @@ router.post('/message', authenticate, async (req, res) => {
 	// 1. Deduct KB search cost (if any)
 	if (result.cost_breakdown && result.cost_breakdown.operations) {
 	  const kbOperation = result.cost_breakdown.operations.find(
-		op => op.operation === 'knowledge_search' || 
-			  op.operation === 'knowledge_retrieval' ||
-			  op.operation === 'embedding'
+			op => op && (op.operation === 'knowledge_search' || 
+				op.operation === 'knowledge_retrieval' ||
+				op.operation === 'embedding')
 	  );
 	  
 	  if (kbOperation && kbOperation.total_cost > 0) {
@@ -520,11 +637,11 @@ router.post('/message', authenticate, async (req, res) => {
 
 	// 2. Deduct LLM + Analysis cost
 	const llmOperation = result.cost_breakdown?.operations?.find(
-	  op => op.operation === 'llm_completion' || op.operation === 'llm_generation' || op.operation === 'chat_completion'
+		op => op && (op.operation === 'llm_completion' || op.operation === 'llm_generation' || op.operation === 'chat_completion')
 	);
 
 	const analysisOperation = result.cost_breakdown?.operations?.find(
-	  op => op.operation === 'message_analysis'
+		op => op && op.operation === 'message_analysis'
 	);
 
 	const llmCost = llmOperation?.total_cost || result.cost;
@@ -562,6 +679,23 @@ router.post('/message', authenticate, async (req, res) => {
 
 	console.log('✅ [CHAT ROUTE] Credit deduction complete');
 
+	// Deduct audio processing costs
+    if (audioCost > 0) {
+      console.log('💰 [CHAT ROUTE] Deducting audio cost:', audioCost);
+      await CreditService.deductCredits(
+        tenantId,
+        audioCost,
+        'audio_processing',
+        {
+          session_id: result.session_id,
+          message_id: result.message_id,
+          has_transcription: !!audioTranscription,
+          has_tts: !!audioResponse
+        },
+        result.session_id
+      );
+    }
+	
     // Get new balance
     const newBalance = await CreditService.getBalance(tenantId);
 
@@ -573,6 +707,12 @@ router.post('/message', authenticate, async (req, res) => {
       result.cost_breakdown
     );
 
+	if (audioTranscription || audioResponse) {
+      result.transcription = audioTranscription;
+      result.audio_response = audioResponse;
+      result.audio_cost = audioCost;
+    }
+	
     res.json(rb.success(result, creditsInfo));
 
   } catch (error) {

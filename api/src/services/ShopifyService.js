@@ -922,116 +922,140 @@ class ShopifyService {
       // FILTER BY PHONE
       // ============================================
       if (phone) {
-        console.log(`📦 [ORDER LOOKUP] Processing phone search: "${phone}"`);
-        
-        // Normalize the search phone number
-        const normalizedSearchPhone = this._normalizePhoneNumber(phone);
-        console.log(`📦 [ORDER LOOKUP] Normalized search phone: "${normalizedSearchPhone}"`);
-        
-        if (orders.length === 0) {
-          // Fetch orders with pagination to find phone matches in older orders
-          console.log(`📦 [ORDER LOOKUP] Fetching orders to filter by phone (with pagination)...`);
-          
-          let matchedOrders = [];
-          let hasNextPage = true;
-          let cursor = null;
-          let pageCount = 0;
-          const maxPages = 50; // Search up to 1250 orders (5 pages × 250)
-          let totalOrdersSearched = 0;
-          
-          while (hasNextPage && pageCount < maxPages && matchedOrders.length === 0) {
-            let endpoint;
-			if (cursor) {
-			  // When using page_info, you cannot include other parameters like status
-			  endpoint = `/orders.json?limit=250&page_info=${cursor}`;
-			} else {
-			  // First request - include status
-			  endpoint = `/orders.json?status=any&limit=250`;
+		  console.log(`📦 [ORDER LOOKUP] Processing phone search: "${phone}"`);
+		  
+		  // Normalize the search phone number
+		  const normalizedSearchPhone = this._normalizePhoneNumber(phone);
+		  console.log(`📦 [ORDER LOOKUP] Normalized search phone: "${normalizedSearchPhone}"`);
+		  
+		  // STRATEGY 1: Try GraphQL Customer Lookup first (much faster)
+		  if (orders.length === 0) {
+			console.log(`📦 [ORDER LOOKUP] Trying GraphQL customer lookup first...`);
+			
+			try {
+			  const customer = await this.lookupCustomerByPhone(shopDomain, accessToken, phone);
+			  
+			  if (customer && customer.orders?.nodes?.length > 0) {
+				console.log(`✅ [ORDER LOOKUP] Found ${customer.orders.nodes.length} orders via customer lookup`);
+				
+				// Convert GraphQL orders to REST format for compatibility
+				orders = customer.orders.nodes.map(order => this._convertGraphQLOrderToREST(order));
+				
+				// If we have orders from customer lookup, skip pagination
+				if (orders.length > 0) {
+				  console.log(`✅ [ORDER LOOKUP] Using ${orders.length} orders from customer lookup`);
+				}
+			  }
+			} catch (customerLookupError) {
+			  console.error(`⚠️ [ORDER LOOKUP] Customer lookup failed, will try pagination:`, customerLookupError.message);
 			}
-            
-            const response = await this._makeRequest(shopDomain, accessToken, endpoint);
-            const pageOrders = response.data.orders || [];
-            pageCount++;
-            totalOrdersSearched += pageOrders.length;
-            
-            console.log(`📦 [ORDER LOOKUP] Page ${pageCount}: Searching ${pageOrders.length} orders...`);
-            
-            // Check each order for phone match
-            for (const order of pageOrders) {
-              const orderPhones = [
-                order.phone,
-                order.customer?.phone,
-                order.customer?.default_address?.phone,
-                order.billing_address?.phone,
-                order.shipping_address?.phone
-              ].filter(Boolean);
-              
-              // Debug: Log first few orders' phone numbers on first page
-              if (pageCount === 1 && pageOrders.indexOf(order) < 3) {
-                console.log(`📦 [ORDER LOOKUP] Sample order ${order.name}: phones = [${orderPhones.join(', ')}]`);
-              }
-              
-              const phoneMatch = orderPhones.some(orderPhone => {
-                const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
-                const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
-                return isMatch;
-              });
-              
-              if (phoneMatch) {
-                console.log(`✅ [ORDER LOOKUP] Phone match found in order ${order.name}!`);
-                matchedOrders.push(order);
-              }
-            }
-            
-            // Check pagination for next page
-            const pageInfo = this._parsePageInfo(response);
-            hasNextPage = pageInfo.hasNextPage && pageOrders.length === 250;
-            cursor = pageInfo.endCursor;
-            
-            // If we found matches, stop searching
-            if (matchedOrders.length > 0) {
-              console.log(`✅ [ORDER LOOKUP] Found ${matchedOrders.length} matching order(s) after searching ${totalOrdersSearched} orders`);
-              break;
-            }
-            
-            // If no more pages, stop
-            if (!hasNextPage || pageOrders.length < 250) {
-              console.log(`📦 [ORDER LOOKUP] Reached end of orders (${totalOrdersSearched} searched)`);
-              break;
-            }
-          }
-          
-          orders = matchedOrders;
-          console.log(`📦 [ORDER LOOKUP] Final result: ${orders.length} orders matching phone (searched ${totalOrdersSearched} total)`);
-        } else {
-          // We already have orders (from order_number or email search), filter by phone
-          console.log(`📦 [ORDER LOOKUP] Filtering ${orders.length} existing orders by phone...`);
-          
-          const matchedOrders = orders.filter(order => {
-            const orderPhones = [
-              order.phone,
-              order.customer?.phone,
-              order.customer?.default_address?.phone,
-              order.billing_address?.phone,
-              order.shipping_address?.phone
-            ].filter(Boolean);
+		  }
+		  
+		  // STRATEGY 2: Fallback to pagination if customer lookup didn't find orders
+		  if (orders.length === 0) {
+			// Fetch orders with pagination to find phone matches in older orders
+			console.log(`📦 [ORDER LOOKUP] Customer lookup found no orders, falling back to pagination...`);
+			
+			let matchedOrders = [];
+			let hasNextPage = true;
+			let cursor = null;
+			let pageCount = 0;
+			const maxPages = 50; // Search up to 12500 orders (50 pages × 250)
+			let totalOrdersSearched = 0;
+			
+			while (hasNextPage && pageCount < maxPages && matchedOrders.length === 0) {
+			  let endpoint;
+			  if (cursor) {
+				// When using page_info, you cannot include other parameters like status
+				endpoint = `/orders.json?limit=250&page_info=${cursor}`;
+			  } else {
+				// First request - include status
+				endpoint = `/orders.json?status=any&limit=250`;
+			  }
+			  
+			  const response = await this._makeRequest(shopDomain, accessToken, endpoint);
+			  const pageOrders = response.data.orders || [];
+			  pageCount++;
+			  totalOrdersSearched += pageOrders.length;
+			  
+			  console.log(`📦 [ORDER LOOKUP] Page ${pageCount}: Searching ${pageOrders.length} orders...`);
+			  
+			  // Check each order for phone match
+			  for (const order of pageOrders) {
+				const orderPhones = [
+				  order.phone,
+				  order.customer?.phone,
+				  order.customer?.default_address?.phone,
+				  order.billing_address?.phone,
+				  order.shipping_address?.phone
+				].filter(Boolean);
+				
+				// Debug: Log first few orders' phone numbers on first page
+				if (pageCount === 1 && pageOrders.indexOf(order) < 3) {
+				  console.log(`📦 [ORDER LOOKUP] Sample order ${order.name}: phones = [${orderPhones.join(', ')}]`);
+				}
+				
+				const phoneMatch = orderPhones.some(orderPhone => {
+				  const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
+				  const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
+				  return isMatch;
+				});
+				
+				if (phoneMatch) {
+				  console.log(`✅ [ORDER LOOKUP] Phone match found in order ${order.name}!`);
+				  matchedOrders.push(order);
+				}
+			  }
+			  
+			  // Check pagination for next page
+			  const pageInfo = this._parsePageInfo(response);
+			  hasNextPage = pageInfo.hasNextPage && pageOrders.length === 250;
+			  cursor = pageInfo.endCursor;
+			  
+			  // If we found matches, stop searching
+			  if (matchedOrders.length > 0) {
+				console.log(`✅ [ORDER LOOKUP] Found ${matchedOrders.length} matching order(s) after searching ${totalOrdersSearched} orders`);
+				break;
+			  }
+			  
+			  // If no more pages, stop
+			  if (!hasNextPage || pageOrders.length < 250) {
+				console.log(`📦 [ORDER LOOKUP] Reached end of orders (${totalOrdersSearched} searched)`);
+				break;
+			  }
+			}
+			
+			orders = matchedOrders;
+			console.log(`📦 [ORDER LOOKUP] Final result: ${orders.length} orders matching phone (searched ${totalOrdersSearched} total)`);
+		  } else if (orders.length > 0 && !orders[0]._fromCustomerLookup) {
+			// We already have orders (from order_number or email search), filter by phone
+			console.log(`📦 [ORDER LOOKUP] Filtering ${orders.length} existing orders by phone...`);
+			
+			const matchedOrders = orders.filter(order => {
+			  const orderPhones = [
+				order.phone,
+				order.customer?.phone,
+				order.customer?.default_address?.phone,
+				order.billing_address?.phone,
+				order.shipping_address?.phone
+			  ].filter(Boolean);
 
-            return orderPhones.some(orderPhone => {
-              const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
-              const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
-              
-              if (isMatch) {
-                console.log(`✅ [ORDER LOOKUP] Phone match found: "${orderPhone}" matches "${phone}"`);
-              }
-              
-              return isMatch;
-            });
-          });
+			  return orderPhones.some(orderPhone => {
+				const normalizedOrderPhone = this._normalizePhoneNumber(orderPhone);
+				const isMatch = this._phonesMatch(normalizedSearchPhone, normalizedOrderPhone);
+				
+				if (isMatch) {
+				  console.log(`✅ [ORDER LOOKUP] Phone match found: "${orderPhone}" matches "${phone}"`);
+				}
+				
+				return isMatch;
+			  });
+			});
 
-          orders = matchedOrders;
-          console.log(`📦 [ORDER LOOKUP] Found ${orders.length} orders matching phone`);
-        }
-      }
+			orders = matchedOrders;
+			console.log(`📦 [ORDER LOOKUP] Found ${orders.length} orders matching phone`);
+		  }
+		}
 
       // ============================================
       // PROCESS RESULTS
@@ -1671,6 +1695,253 @@ class ShopifyService {
     
     return response;
   }
+  
+  /**
+	 * Lookup customer and their orders by phone using GraphQL
+	 * @param {string} shopDomain - Shop domain
+	 * @param {string} accessToken - Access token  
+	 * @param {string} phone - Phone number to search
+	 * @returns {Promise<Object|null>} Customer with orders or null if not found
+	 */
+	async lookupCustomerByPhone(shopDomain, accessToken, phone) {
+	  const normalizedPhone = this._normalizePhoneNumber(phone);
+	  
+	  // Try multiple phone format variants for better matching
+	  const phoneVariants = [
+		normalizedPhone,                                    // digits only: 3333365631
+		`+92${normalizedPhone}`,                           // +923333365631
+		`92${normalizedPhone}`,                            // 923333365631
+		`0${normalizedPhone}`,                             // 03333365631
+	  ];
+	  
+	  // If phone starts with 92, also try without country code
+	  if (normalizedPhone.startsWith('92') && normalizedPhone.length === 12) {
+		phoneVariants.push(normalizedPhone.substring(2));  // 3333365631
+		phoneVariants.push(`0${normalizedPhone.substring(2)}`); // 03333365631
+	  }
+	  
+	  // If phone starts with 0, also try without leading 0
+	  if (normalizedPhone.startsWith('0')) {
+		phoneVariants.push(normalizedPhone.substring(1));  // 3333365631
+		phoneVariants.push(`92${normalizedPhone.substring(1)}`); // 923333365631
+	  }
+	  
+	  // Remove duplicates
+	  const uniqueVariants = [...new Set(phoneVariants)];
+	  
+	  //console.log(`📱 [CUSTOMER LOOKUP] Searching for phone variants:`, uniqueVariants);
+	  
+	  const graphqlUrl = `https://${shopDomain}/admin/api/2024-01/graphql.json`;
+	  
+	  for (const phoneVariant of uniqueVariants) {
+		try {
+		  const query = `
+			  query findCustomerByPhone($phoneQuery: String!) {
+				customers(first: 1, query: $phoneQuery) {
+				  nodes {
+					id
+					email
+					phone
+					firstName
+					lastName
+					numberOfOrders
+					orders(first: 10, sortKey: CREATED_AT, reverse: true) {
+					  nodes {
+						id
+						name
+						email
+						phone
+						createdAt
+						updatedAt
+						processedAt
+						closedAt
+						cancelledAt
+						displayFulfillmentStatus
+						displayFinancialStatus
+						totalPriceSet {
+						  shopMoney { amount currencyCode }
+						}
+						subtotalPriceSet {
+						  shopMoney { amount currencyCode }
+						}
+						totalTaxSet {
+						  shopMoney { amount currencyCode }
+						}
+						totalShippingPriceSet {
+						  shopMoney { amount currencyCode }
+						}
+						currencyCode
+						lineItems(first: 50) {
+						  nodes {
+							name
+							title
+							quantity
+							sku
+							variantTitle
+							originalUnitPriceSet {
+							  shopMoney { amount currencyCode }
+							}
+						  }
+						}
+						shippingAddress {
+						  firstName
+						  lastName
+						  address1
+						  address2
+						  city
+						  province
+						  country
+						  zip
+						  phone
+						}
+						billingAddress {
+						  firstName
+						  lastName
+						  address1
+						  city
+						  province
+						  country
+						  phone
+						}
+						fulfillments {
+						  status
+						  trackingInfo {
+							number
+							url
+							company
+						  }
+						}
+						statusPageUrl
+					  }
+					}
+				  }
+				}
+			  }
+			`;
+		  
+		  const queryString = `phone:${phoneVariant}`;
+		  console.log(`📱 [CUSTOMER LOOKUP] Trying GraphQL query: "${queryString}"`);
+
+
+		  const response = await axios.post(graphqlUrl, {
+			query,
+			variables: { phoneQuery: queryString }
+		  }, {
+			headers: {
+			  'X-Shopify-Access-Token': accessToken,
+			  'Content-Type': 'application/json'
+			}
+		  });
+		  
+		  //console.log(`📱 [CUSTOMER LOOKUP] GraphQL response for ${phoneVariant}:`, JSON.stringify(response.data, null, 2));
+
+		  const customers = response.data?.data?.customers?.nodes || [];
+		  
+		  if (customers.length > 0 && customers[0].orders?.nodes?.length > 0) {
+			console.log(`✅ [CUSTOMER LOOKUP] Found customer with phone variant: ${phoneVariant}`);
+			console.log(`✅ [CUSTOMER LOOKUP] Customer has ${customers[0].ordersCount} orders`);
+			return customers[0];
+		  }
+		  
+		} catch (error) {
+		  console.error(`❌ [CUSTOMER LOOKUP] Error searching phone ${phoneVariant}:`, error.message);
+		}
+	  }
+	  
+	  console.log(`📱 [CUSTOMER LOOKUP] No customer found for any phone variant`);
+	  return null;
+	}
+
+	/**
+	 * Convert GraphQL order to REST-like format for compatibility
+	 * @private
+	 */
+	_convertGraphQLOrderToREST(graphqlOrder) {
+	  const order = graphqlOrder;
+	  
+	  // Extract tracking info from fulfillments
+	  const fulfillments = order.fulfillments || [];
+	  const latestFulfillment = fulfillments[fulfillments.length - 1];
+	  let trackingInfo = null;
+	  
+	  if (latestFulfillment?.trackingInfo?.length > 0) {
+		const tracking = latestFulfillment.trackingInfo[0];
+		trackingInfo = {
+		  company: tracking.company || 'Courier',
+		  number: tracking.number,
+		  url: tracking.url,
+		  status: latestFulfillment.status
+		};
+	  }
+	  
+	  // Map line items
+	  const lineItems = (order.lineItems?.nodes || []).map(item => ({
+		name: item.name || item.title,
+		title: item.title,
+		quantity: item.quantity,
+		price: item.originalUnitPriceSet?.shopMoney?.amount || '0',
+		sku: item.sku,
+		variant_title: item.variantTitle
+	  }));
+	  
+	  // Build REST-compatible order object
+	  return {
+		id: order.id.replace('gid://shopify/Order/', ''),
+		name: order.name,
+		order_number: order.name,
+		email: order.email,
+		phone: order.phone,
+		created_at: order.createdAt,
+		updated_at: order.updatedAt,
+		processed_at: order.processedAt,
+		closed_at: order.closedAt,
+		cancelled_at: order.cancelledAt,
+		financial_status: order.financialStatus?.toLowerCase(),
+		fulfillment_status: order.fulfillmentStatus?.toLowerCase() || 'unfulfilled',
+		display_financial_status: order.displayFinancialStatus,
+		display_fulfillment_status: order.displayFulfillmentStatus,
+		currency: order.currencyCode,
+		total_price: order.totalPriceSet?.shopMoney?.amount || '0',
+		subtotal_price: order.subtotalPriceSet?.shopMoney?.amount || '0',
+		total_tax: order.totalTaxSet?.shopMoney?.amount || '0',
+		total_shipping_price_set: {
+		  shop_money: {
+			amount: order.totalShippingPriceSet?.shopMoney?.amount || '0'
+		  }
+		},
+		line_items: lineItems,
+		shipping_address: order.shippingAddress ? {
+		  first_name: order.shippingAddress.firstName,
+		  last_name: order.shippingAddress.lastName,
+		  address1: order.shippingAddress.address1,
+		  address2: order.shippingAddress.address2,
+		  city: order.shippingAddress.city,
+		  province: order.shippingAddress.province,
+		  country: order.shippingAddress.country,
+		  zip: order.shippingAddress.zip,
+		  phone: order.shippingAddress.phone
+		} : null,
+		billing_address: order.billingAddress ? {
+		  first_name: order.billingAddress.firstName,
+		  last_name: order.billingAddress.lastName,
+		  address1: order.billingAddress.address1,
+		  city: order.billingAddress.city,
+		  province: order.billingAddress.province,
+		  country: order.billingAddress.country,
+		  phone: order.billingAddress.phone
+		} : null,
+		fulfillments: fulfillments.map(f => ({
+		  status: f.status,
+		  tracking_company: f.trackingInfo?.[0]?.company,
+		  tracking_numbers: f.trackingInfo?.map(t => t.number).filter(Boolean) || [],
+		  tracking_urls: f.trackingInfo?.map(t => t.url).filter(Boolean) || []
+		})),
+		order_status_url: order.statusPageUrl,
+		// Pre-computed fields
+		tracking: trackingInfo,
+		has_tracking: !!trackingInfo
+	  };
+	}
 }
 
 module.exports = new ShopifyService();

@@ -10,6 +10,20 @@ const AgentService = require('../services/AgentService');
 const CreditService = require('../services/CreditService');
 const ResponseBuilder = require('../utils/response-builder');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
+const path = require('path');
+const AudioService = require('../services/AudioService');
+
+// Configure multer for audio uploads
+const audioUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedExtensions = ['.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm', '.ogg', '.flac'];
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, allowedExtensions.includes(ext));
+    }
+});
 
 /**
  * @route POST /api/public/chat/init
@@ -91,14 +105,15 @@ router.post('/init', async (req, res) => {
  * @desc Send message (no auth required)
  * @access Public
  */
-router.post('/message', async (req, res) => {
+router.post('/message', audioUpload.single('audio'), async (req, res) => {
   try {
-    const { session_id, message, image, agent_id } = req.body;
+    let { session_id, message, image, agent_id, voice, generate_audio_response, stt_provider, language } = req.body;
 
-    if (!message) {
+    // Validate - need message, image, OR audio
+    if (!message && !image && !req.file) {
       return res.status(400).json({
         success: false,
-        error: 'message is required'
+        error: 'message, image, or audio is required'
       });
     }
 
@@ -175,6 +190,54 @@ router.post('/message', async (req, res) => {
         error: 'Service temporarily unavailable'
       });
     }
+	
+	// ============================================
+    // 🎤 AUDIO HANDLING
+    // ============================================
+    let audioTranscription = null;
+    let audioCost = 0;
+    let audioConfig = null;
+    
+    if (req.file) {
+      console.log('🎤 [PUBLIC] Audio file detected, processing...');
+      
+      // Get agent for audio config
+      const agent = await AgentService.getAgent(session.agent_id);
+      
+      // Get effective audio configuration
+      audioConfig = AudioService.getConfigFromAgent(agent, {
+        stt_provider: stt_provider,
+        voice: voice,
+        language: language
+      });
+      
+      // Transcribe audio
+      const transcription = await AudioService.transcribe({
+        audio: req.file.buffer,
+        filename: req.file.originalname,
+        config: audioConfig
+      });
+      
+      if (!transcription.success || !transcription.text) {
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to transcribe audio or audio was empty'
+        });
+      }
+      
+      // Use transcribed text as the message
+      message = transcription.text;
+      audioCost += transcription.cost.final_cost;
+      
+      audioTranscription = {
+        text: transcription.text,
+        language: transcription.language,
+        duration: transcription.duration,
+        provider: transcription.provider
+      };
+      
+      console.log(`📝 [PUBLIC] Transcribed: "${message.substring(0, 100)}..."`);
+    }
 
     // Send message using ChatService.sendMessage()
     const result = await ChatService.sendMessage({
@@ -193,6 +256,49 @@ router.post('/message', async (req, res) => {
 	  }
     });
 
+	// ============================================
+    // 🔊 TTS GENERATION
+    // ============================================
+    let audioResponse = null;
+    
+    // Generate audio if: explicitly requested OR audio was sent (and not disabled)
+    const shouldGenerateAudio = (generate_audio_response === 'true' || generate_audio_response === true) 
+                                || (req.file && generate_audio_response !== 'false' && generate_audio_response !== false);
+    
+    if (shouldGenerateAudio && result.response?.text) {
+      try {
+        // Get audio config if not already fetched
+        if (!audioConfig) {
+          const agent = await AgentService.getAgent(session.agent_id);
+          audioConfig = AudioService.getConfigFromAgent(agent, { voice, language });
+        }
+        
+        // Only generate if agent has audio response enabled
+        if (audioConfig.autoGenerateAudio) {
+          const ttsResult = await AudioService.synthesize({
+            text: result.response.text,
+            config: audioConfig,
+            sessionId: sessionId
+          });
+          
+          audioCost += ttsResult.cost.final_cost;
+          
+          audioResponse = {
+            url: ttsResult.audio_url,
+            audio_id: ttsResult.audio_id,
+            format: ttsResult.format,
+            voice: ttsResult.voice,
+            estimated_duration: ttsResult.estimated_duration
+          };
+          
+          console.log(`🔊 [PUBLIC] TTS generated: ${ttsResult.audio_url}`);
+        }
+      } catch (ttsError) {
+        console.error('TTS generation failed:', ttsError.message);
+        // Continue without audio - don't fail the whole request
+      }
+    }
+	
     console.log('🔍 [PUBLIC CHAT] Result received:', {
       cost: result.cost,
       has_cost_breakdown: !!result.cost_breakdown,
@@ -278,6 +384,24 @@ router.post('/message', async (req, res) => {
 
     console.log('✅ [PUBLIC CHAT] Credit deduction complete');
 
+	if (audioCost > 0) {
+      console.log('💰 [PUBLIC CHAT] Deducting audio cost:', audioCost);
+      await CreditService.deductCredits(
+        session.tenant_id,
+        audioCost,
+        'audio_processing',
+        {
+          session_id: sessionId,
+          message_id: result.message_id,
+          has_transcription: !!audioTranscription,
+          has_tts: !!audioResponse,
+          stt_provider: audioTranscription?.provider,
+          tts_voice: audioResponse?.voice
+        },
+        sessionId
+      );
+    }
+	
     res.json({
       success: true,
       data: {
@@ -287,6 +411,9 @@ router.post('/message', async (req, res) => {
 		interaction_closed: result.interaction_closed || false,  // ✅ ADD THIS LINE
         show_feedback_prompt: result.show_feedback_prompt || false,
         response: result.response,
+		transcription: audioTranscription,
+        // Audio response (if generated)
+        audio_response: audioResponse,
         formatted_html: result.formatted_html || null,
         formatted_markdown: result.formatted_markdown || null,
         formatted_text: result.formatted_text || null,
