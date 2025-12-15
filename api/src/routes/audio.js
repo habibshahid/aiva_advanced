@@ -31,7 +31,7 @@ const audioUpload = multer({
         
         const allowedExtensions = [
             '.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', 
-            '.wav', '.webm', '.ogg', '.flac'
+            '.wav', '.webm', '.ogg', '.flac', '.oga'
         ];
         
         const ext = path.extname(file.originalname).toLowerCase();

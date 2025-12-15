@@ -60,6 +60,7 @@ const limiter = rateLimit({
   skip: (req) => {
     // Skip rate limiting for public endpoints
     return req.path.startsWith('/api/public/') || 
+		   req.path.startsWith('/api/audio/output/') ||
            req.path === '/widget.js' ||
            req.path === '/api/health';
   }
@@ -71,6 +72,7 @@ app.use('/api/', limiter);
 // 6. PUBLIC ROUTES FIRST (NO AUTH, NO RATE LIMIT)
 app.use('/', widgetRoutes); // Serves /widget.js
 app.use('/api/public/chat', publicChatRoutes); // Public chat API
+app.use('/api/audio', audioRoutes);
 
 // 7. HEALTH CHECK
 app.get('/api/health', (req, res) => {
@@ -128,7 +130,6 @@ app.use('/api/transcriptions', transcriptionRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/tenants', tenantsRoutes);
-app.use('/api/audio', audioRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {
