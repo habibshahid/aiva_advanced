@@ -1061,7 +1061,7 @@ class ChatService {
 				const formattedResponse = markdown.formatResponse(llmDecision.response);
 				
 				// Calculate total cost
-				const totalCost = CostCalculator.combineCosts([llmCost]);
+				const totalCost = CostCalculator.combineCosts([complaintResult.llmCost || llmCost]);
 				if (userAnalysisCost > 0) {
 					totalCost.final_cost += userAnalysisCost;
 				}
