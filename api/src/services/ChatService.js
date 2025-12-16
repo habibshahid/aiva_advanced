@@ -938,7 +938,7 @@ class ChatService {
 									llmDecision.function_arguments || {}
 								);
 								
-								console.log(`✅ Function executed:`, functionResult);
+								console.log(`✅ Function executed:`, llmDecision.function_name, JSON.stringify(functionResult));
 								
 								executedFunctionCalls.push({
 									function_id: uuidv4(),
@@ -980,11 +980,18 @@ class ChatService {
 											content: `[FUNCTION RESULT for ${llmDecision.function_name}]:
 				${JSON.stringify(functionResult, null, 2)}
 
-				Based on this function result, provide your FINAL response to the customer.
-				- Include any relevant IDs/numbers from the result naturally in your response
-				- Match the customer's language (English or Roman Urdu)
-				- DO NOT set function_call_needed=true again
-				- Respond in valid JSON format`
+				RESPONSE INSTRUCTIONS:
+1. If result contains any ID/number (ticket_number, order_number, etc.), your response MUST include it
+2. Keep response SHORT and DIRECT - no extra commentary
+3. Do NOT describe/acknowledge images or thank for sharing pictures
+4. Match customer's language (English or Roman Urdu)
+5. Do NOT set function_call_needed=true
+
+IMPORTANT: If result has success=true with a ticket_number or reference number, respond with ONLY:
+- English: "Your ticket number is [NUMBER]. Our team will contact you as soon as possible."
+- Urdu: "Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
+
+Respond in valid JSON format.`
 										}
 									];
 									
@@ -2187,7 +2194,7 @@ class ChatService {
 							llmDecision.function_arguments || {}
 						);
 						
-						console.log(`✅ Function executed:`, llmDecision.function_name);
+						console.log(`✅ Function executed:`, llmDecision.function_name, JSON.stringify(functionResult));
 						
 						executedFunctionCalls.push({
 							function_id: uuidv4(),
@@ -2212,21 +2219,23 @@ class ChatService {
 							${JSON.stringify(functionResult, null, 2)}
 
 							${session.complaint_state?.active ? `
-							⚠️ ACTIVE COMPLAINT DETECTED: ${session.complaint_state.type || 'Unknown'}
+⚠️ ACTIVE COMPLAINT CONTEXT: ${session.complaint_state.type || 'Unknown'}
+- Current Date: ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+- Note: Process all complaints regardless of time elapsed. The 48-hour policy is informational only.
+` : ''}
 
-							MANDATORY: You MUST check if this complaint is within the allowed time window.
-							1. Look at the delivery/order date in the function result
-							2. Calculate days elapsed from delivery to TODAY (${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })})
-							3. Check your instructions for the time limit policy (e.g., 48 hours, 7 days)
-							4. Fill the date_validation object with your calculation
-							5. If days_elapsed > threshold → REJECT the complaint, do NOT ask for images
+RESPONSE INSTRUCTIONS:
+1. If result contains any ID/number (ticket_number, order_number, etc.), your response MUST include it
+2. Keep response SHORT and DIRECT - no extra commentary
+3. Match customer's language (English or Roman Urdu)
+4. Do NOT set function_call_needed=true
 
-							Remember: If the time window has passed, you CANNOT process the complaint regardless of the issue.
-							` : ''}
+IMPORTANT: If result has success=true with a ticket_number:
+- English: "Your ticket number is [NUMBER]. Our team will contact you as soon as possible."
+- Urdu: "Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
 
-							Based on this function result, provide your final response to the user.
-							Remember to respond in valid JSON format with all required fields including date_validation if applicable.`
-							}
+Respond in valid JSON format.`
+}
 						];
 						
 						const functionFollowupCompletion = await this._callLLM(messagesWithFunctionResult, {
@@ -3083,6 +3092,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		// ============================================
 		// 📱 CHANNEL CONTEXT INJECTION
 		// ============================================
+		let channelContextPrompt = '';
 		if (agent?.sessionContext) {
 			const ctx = agent.sessionContext;
 			
@@ -3184,7 +3194,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	--------------------------------------------------------------------
 	`;
-	systemPrompt += channelContextPrompt;
+	
 	}
 		// ============================================
 		// 🔍 DETECT WHAT USER HAS ALREADY DEFINED
