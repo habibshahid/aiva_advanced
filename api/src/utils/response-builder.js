@@ -80,15 +80,20 @@ class ResponseBuilder {
    * @returns {Object} Credits information
    */
   buildCreditsInfo(operation, cost, remainingBalance, breakdown) {
+    // Safely handle undefined/null values
+    const safeCost = parseFloat(cost) || 0;
+    const safeBalance = parseFloat(remainingBalance) || 0;
+    const safeBreakdown = breakdown || {};
+    
     return {
       operation: operation,
-      cost: parseFloat(cost.toFixed(6)),
-      remaining_balance: parseFloat(remainingBalance.toFixed(6)),
+      cost: parseFloat(safeCost.toFixed(6)),
+      remaining_balance: parseFloat(safeBalance.toFixed(6)),
       breakdown: {
-        base_cost: parseFloat(breakdown.base_cost.toFixed(6)),
-        profit_amount: parseFloat(breakdown.profit_amount.toFixed(6)),
-        final_cost: parseFloat(breakdown.final_cost.toFixed(6)),
-        operations: breakdown.operations || []
+        base_cost: parseFloat((parseFloat(safeBreakdown.base_cost) || 0).toFixed(6)),
+        profit_amount: parseFloat((parseFloat(safeBreakdown.profit_amount) || 0).toFixed(6)),
+        final_cost: parseFloat((parseFloat(safeBreakdown.final_cost) || 0).toFixed(6)),
+        operations: safeBreakdown.operations || []
       }
     };
   }

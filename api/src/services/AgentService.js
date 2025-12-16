@@ -13,7 +13,8 @@ class AgentService {
             model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
             tts_provider, custom_voice, language_hints, llm_model,
             temperature, max_tokens, vad_threshold, 
-            silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice
+            silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, 
+			chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             agentId,
