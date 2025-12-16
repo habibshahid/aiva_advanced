@@ -41,8 +41,14 @@ class DynamicAgentLoader {
             
             const agent = response.data.agent;
 			
-            if (!agent || !agent.is_active) {
-                logger.warn(`Agent ${agentId} not found or inactive`);
+            if (!agent) {
+                logger.warn(`Agent ${agentId} not found in API response`);
+                console.log('API Response:', response.data);
+                return null;
+            }
+            
+            if (!agent.is_active) {
+                logger.warn(`Agent ${agentId} exists but is inactive (is_active=${agent.is_active})`);
                 return null;
             }
             
@@ -72,9 +78,16 @@ class DynamicAgentLoader {
             
             return formattedAgent;
             
-        } catch (error) {
-			console.log(`${this.apiUrl}/agents/${agentId}`, this.apiKey) 
-            logger.error(`Failed to load agent ${agentId}:`, error.message);
+		} catch (error) {
+            console.log('API URL:', `${this.apiUrl}/agents/${agentId}`);
+            console.log('API Key:', this.apiKey ? `${this.apiKey.substring(0, 8)}...` : 'NOT SET');
+            console.log('Error details:', {
+                message: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data
+            });
+            logger.error(`Failed to load agent ${agentId}: ${error.message}`);
             return null;
         }
     }
