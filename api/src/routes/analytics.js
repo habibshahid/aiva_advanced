@@ -1427,7 +1427,20 @@ router.get('/chats', verifyToken, async (req, res) => {
     // Get chat sessions with analytics
     const [chats] = await db.query(`
       SELECT 
-        cs.*,
+        cs.id,
+		cs.tenant_id,
+		cs.agent_id,
+		cs.user_id,
+		cs.session_name,
+		cs.status,
+		cs.start_time,
+		cs.end_time,
+		cs.total_messages,
+		cs.total_cost,
+		cs.channel,
+		cs.channel_user_id,
+		cs.channel_user_name,
+		cs.model_provider,
         a.name as agent_name,
         a.type as agent_type,
         ca.overall_sentiment,
