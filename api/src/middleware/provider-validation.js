@@ -36,6 +36,9 @@ const validateProvider = (req, res, next) => {
             }
             // Deepgram voice is optional (has defaults)
             break;
+		case 'intent-ivr':
+           
+            break;
             
         default:
             errors.push(`Invalid provider: ${selectedProvider}. Must be 'openai' or 'deepgram'`);

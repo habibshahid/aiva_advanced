@@ -221,7 +221,59 @@ class DynamicAgentLoader {
 				languageHints = ['ur', 'en'];
 			}
 		}
-		return {
+		
+		// ===========================================================
+		// INTENT-IVR PROVIDER HANDLING
+		// ===========================================================
+		const cacheKey = `agent:${agent.id}`;
+		if (agent.provider === 'intent-ivr') {
+			const config = {
+				id: agent.id,
+				agentId: agent.id,
+				name: agent.name,
+				type: agent.type,
+				provider: 'intent-ivr',
+				
+				// IVR-specific settings
+				tts_provider: agent.tts_provider || 'uplift',
+				custom_voice: agent.custom_voice || 'v_meklc281',
+				language_hints: languageHints || ['ur', 'en'],
+				
+				// Greeting
+				greeting: agent.greeting,
+				
+				// KB for fallback
+				kb_id: agent.kb_id,
+				
+				// Instructions
+				instructions: agent.instructions,
+				
+				// Functions
+				functions: [
+					builtInTransferFunction,
+					...(builtInOrderStatusFunction ? [builtInOrderStatusFunction] : []),
+					...(agent.functions || [])
+				],
+				tools: openAITools,
+				
+				config: {
+					language: agent.language || 'ur',
+					silenceDurationMs: parseInt(agent.silence_duration_ms) || 700,
+				},
+				
+				tenant_id: agent.tenant_id,
+				tenantId: agent.tenant_id
+			};
+			
+			// Cache
+			this.cache.set(cacheKey, { config, timestamp: Date.now() });
+			return config;
+		}
+		
+		// ===========================================================
+		// EXISTING PROVIDER HANDLING (openai, deepgram, custom)
+		// ===========================================================
+		const config = {
 			id: agent.id,
 			name: agent.name,
 			type: agent.type,
@@ -230,8 +282,8 @@ class DynamicAgentLoader {
 			custom_voice: agent.custom_voice || 'v_meklc281',
 			language_hints: languageHints || ['ur', 'en'],
 			llm_model: agent.llm_model || 'gpt-4o-mini',
-			openai_tts_model: 'tts-1',           // Hardcoded
-			uplift_output_format: 'MP3_22050_32', //'ULAW_8000_8', //'MP3_22050_32', // Hardcoded for telephony
+			openai_tts_model: 'tts-1',
+			uplift_output_format: 'MP3_22050_32',
 			uplift_resample_16to8: true,
 			greeting: agent.greeting || `Hello! This is ${agent.name}. How can I help you?`,
 			instructions: agent.instructions,
@@ -251,13 +303,16 @@ class DynamicAgentLoader {
 				vadThreshold: parseFloat(agent.vad_threshold) || 0.5,
 				silenceDurationMs: parseInt(agent.silence_duration_ms) || 500,
 				prefixPaddingMs: 300,
-				// ADD Deepgram fields
 				deepgram_model: agent.deepgram_model,
 				deepgram_voice: agent.deepgram_voice,
 				deepgram_language: agent.deepgram_language
 			},
 			tenant_id: agent.tenant_id
 		};
+		
+		// Cache
+		this.cache.set(cacheKey, { config, timestamp: Date.now() });
+		return config;
 	}
     
     /**

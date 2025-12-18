@@ -52,6 +52,8 @@ import SatisfactionReport from './pages/Analytics/SatisfactionReport';
 import TenantManager from './pages/TenantManager';
 import APISettings from './pages/APISettings';
 
+import IntentIVRConfig from './pages/IntentIVRConfig';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -109,6 +111,7 @@ function App() {
             <Route path="calls" element={<Calls />} />
             <Route path="/test" element={<AgentTest />} />
 			<Route path="agent-test" element={<AgentTestChat />} />
+			<Route path="/agents/:id/ivr" element={<IntentIVRConfig />} />
 			
             {/* Knowledge Base Routes */}
             <Route path="knowledge" element={<KnowledgeList />} />

@@ -1291,33 +1291,165 @@ class ShopifyService {
   }
 
   /**
-   * Extract the "core" phone number without country code
-   * For Pakistani numbers: returns the 10 digits after country code
+   * Extract the "core" phone number and detect country code
+   * Returns both the core number and detected country info for smarter variant generation
+   * @private
+   * @param {string} phone - Normalized phone (digits only)
+   * @returns {Object} { core: string, countryCode: string|null, countryPattern: string|null }
+   */
+  _extractPhoneInfo(phone) {
+    if (!phone) return { core: '', countryCode: null, countryPattern: null };
+    
+    // Common country codes with their typical local number lengths
+    // Format: [countryCode, localNumberLength, hasLeadingZero]
+    const countryPatterns = [
+      { code: '92', localLen: 10, hasLeadingZero: true, name: 'PK' },    // Pakistan: 92 + 10 digits (3XX...)
+      { code: '1', localLen: 10, hasLeadingZero: false, name: 'US' },    // US/Canada: 1 + 10 digits
+      { code: '44', localLen: 10, hasLeadingZero: true, name: 'UK' },    // UK: 44 + 10 digits (7XXX...)
+      { code: '971', localLen: 9, hasLeadingZero: true, name: 'UAE' },   // UAE: 971 + 9 digits
+      { code: '966', localLen: 9, hasLeadingZero: true, name: 'SA' },    // Saudi: 966 + 9 digits
+      { code: '91', localLen: 10, hasLeadingZero: false, name: 'IN' },   // India: 91 + 10 digits
+      { code: '86', localLen: 11, hasLeadingZero: false, name: 'CN' },   // China: 86 + 11 digits
+      { code: '61', localLen: 9, hasLeadingZero: true, name: 'AU' },     // Australia: 61 + 9 digits
+      { code: '49', localLen: 10, hasLeadingZero: true, name: 'DE' },    // Germany: 49 + 10-11 digits
+      { code: '33', localLen: 9, hasLeadingZero: true, name: 'FR' },     // France: 33 + 9 digits
+    ];
+    
+    // Try to match country code
+    for (const pattern of countryPatterns) {
+      if (phone.startsWith(pattern.code)) {
+        const expectedLen = pattern.code.length + pattern.localLen;
+        // Allow some flexibility in length (±1 digit)
+        if (phone.length >= expectedLen - 1 && phone.length <= expectedLen + 1) {
+          const core = phone.substring(pattern.code.length);
+          return { 
+            core, 
+            countryCode: pattern.code, 
+            countryPattern: pattern,
+            hasLeadingZero: pattern.hasLeadingZero 
+          };
+        }
+      }
+    }
+    
+    // Pakistani format with leading 0: 03XXXXXXXXX (11 digits)
+    if (phone.startsWith('0') && phone.length === 11 && phone[1] === '3') {
+      return { 
+        core: phone.substring(1), // Remove leading 0
+        countryCode: '92', 
+        countryPattern: countryPatterns[0],
+        hasLeadingZero: true 
+      };
+    }
+    
+    // No country code detected - return as-is
+    // For numbers 9-11 digits, assume it's a local number
+    return { 
+      core: phone, 
+      countryCode: null, 
+      countryPattern: null,
+      hasLeadingZero: null
+    };
+  }
+
+  /**
+   * Extract the "core" phone number without country code (backward compatible)
    * @private
    * @param {string} phone - Normalized phone (digits only)
    * @returns {string} Core phone number
    */
   _extractCorePhone(phone) {
-    if (!phone) return '';
-    
-    // Pakistani format: 923XXXXXXXXX (12 digits) -> 3XXXXXXXXX (10 digits)
-    if (phone.startsWith('92') && phone.length === 12) {
-      return phone.substring(2); // Remove 92, get 3XXXXXXXXX
-    }
-    
-    // Pakistani format: 03XXXXXXXXX (11 digits) -> 3XXXXXXXXX (10 digits)
-    if (phone.startsWith('0') && phone.length === 11) {
-      return phone.substring(1); // Remove leading 0, get 3XXXXXXXXX
-    }
-    
-    // For other international numbers, return last 10 digits as core
-    if (phone.length > 10) {
-      return phone.slice(-10);
-    }
-    
-    return phone;
+    const info = this._extractPhoneInfo(phone);
+    return info.core || phone;
   }
 
+  /**
+   * Generate all possible phone format variants for searching
+   * @private
+   * @param {string} normalizedPhone - Digits only phone
+   * @param {Object} phoneInfo - Result from _extractPhoneInfo
+   * @returns {Array<string>} Array of phone variants to try
+   */
+  _generatePhoneVariants(normalizedPhone, phoneInfo) {
+    const variants = [];
+    const { core, countryCode, hasLeadingZero } = phoneInfo;
+    
+    // Always include the original normalized phone
+    variants.push(normalizedPhone);
+    
+    if (countryCode && core) {
+      // ============================================
+      // KNOWN COUNTRY CODE - Generate targeted variants
+      // ============================================
+      
+      // Core number without any prefix
+      variants.push(core);
+      
+      // With country code (various formats)
+      variants.push(`${countryCode}${core}`);           // 923004322088
+      variants.push(`+${countryCode}${core}`);          // +923004322088
+      variants.push(`00${countryCode}${core}`);         // 00923004322088
+      
+      // With leading zero (if country uses it for local calls)
+      if (hasLeadingZero) {
+        variants.push(`0${core}`);                      // 03004322088
+        // Some might store as 0 + country + number (unusual but seen)
+        variants.push(`0${countryCode}${core}`);        // 0923004322088
+      }
+      
+      // Special handling for Pakistani numbers (most common case)
+      if (countryCode === '92' && core.startsWith('3')) {
+        // Ensure we have all PK formats
+        variants.push(core);                            // 3004322088
+        variants.push(`0${core}`);                      // 03004322088
+        variants.push(`92${core}`);                     // 923004322088
+        variants.push(`+92${core}`);                    // +923004322088
+        variants.push(`0092${core}`);                   // 00923004322088
+      }
+      
+    } else {
+      // ============================================
+      // UNKNOWN FORMAT - Try common variations
+      // ============================================
+      
+      // If it looks like a local number without country code
+      if (normalizedPhone.length >= 9 && normalizedPhone.length <= 11) {
+        // Original
+        variants.push(normalizedPhone);
+        
+        // With/without leading zero
+        if (normalizedPhone.startsWith('0')) {
+          variants.push(normalizedPhone.substring(1));
+        } else {
+          variants.push(`0${normalizedPhone}`);
+        }
+        
+        // Try common country codes (Pakistan first since most likely)
+        const tryCountryCodes = ['92', '1', '44', '971'];
+        for (const cc of tryCountryCodes) {
+          const numWithoutZero = normalizedPhone.startsWith('0') 
+            ? normalizedPhone.substring(1) 
+            : normalizedPhone;
+          variants.push(`${cc}${numWithoutZero}`);
+          variants.push(`+${cc}${numWithoutZero}`);
+        }
+      }
+      
+      // For longer numbers, try stripping possible country codes
+      if (normalizedPhone.length >= 11) {
+        // Last 10 digits (common subscriber number length)
+        variants.push(normalizedPhone.slice(-10));
+        variants.push(`0${normalizedPhone.slice(-10)}`);
+        
+        // Last 9 digits (for countries with 9-digit local numbers)
+        variants.push(normalizedPhone.slice(-9));
+        variants.push(`0${normalizedPhone.slice(-9)}`);
+      }
+    }
+    
+    return variants;
+  }
+  
   /**
    * Check if two phone numbers match (handling different formats)
    * @private
@@ -1705,29 +1837,17 @@ class ShopifyService {
 	 */
 	async lookupCustomerByPhone(shopDomain, accessToken, phone) {
 	  const normalizedPhone = this._normalizePhoneNumber(phone);
+	  const phoneInfo = this._extractPhoneInfo(normalizedPhone);
 	  
-	  // Try multiple phone format variants for better matching
-	  const phoneVariants = [
-		normalizedPhone,                                    // digits only: 3333365631
-		`+92${normalizedPhone}`,                           // +923333365631
-		`92${normalizedPhone}`,                            // 923333365631
-		`0${normalizedPhone}`,                             // 03333365631
-	  ];
+	  console.log(`📱 [CUSTOMER LOOKUP] Input: "${phone}", Normalized: "${normalizedPhone}", Core: "${phoneInfo.core}", Country: ${phoneInfo.countryCode || 'unknown'}`);
 	  
-	  // If phone starts with 92, also try without country code
-	  if (normalizedPhone.startsWith('92') && normalizedPhone.length === 12) {
-		phoneVariants.push(normalizedPhone.substring(2));  // 3333365631
-		phoneVariants.push(`0${normalizedPhone.substring(2)}`); // 03333365631
-	  }
+	  // Generate phone variants based on detected format
+	  const phoneVariants = this._generatePhoneVariants(normalizedPhone, phoneInfo);
 	  
-	  // If phone starts with 0, also try without leading 0
-	  if (normalizedPhone.startsWith('0')) {
-		phoneVariants.push(normalizedPhone.substring(1));  // 3333365631
-		phoneVariants.push(`92${normalizedPhone.substring(1)}`); // 923333365631
-	  }
+	  // Remove duplicates and filter valid ones
+	  const uniqueVariants = [...new Set(phoneVariants.filter(v => v && v.length >= 7))];
 	  
-	  // Remove duplicates
-	  const uniqueVariants = [...new Set(phoneVariants)];
+	  console.log(`📱 [CUSTOMER LOOKUP] Generated ${uniqueVariants.length} variants:`, uniqueVariants.slice(0, 8));
 	  
 	  //console.log(`📱 [CUSTOMER LOOKUP] Searching for phone variants:`, uniqueVariants);
 	  

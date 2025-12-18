@@ -85,7 +85,18 @@ class ConnectionManager extends EventEmitter {
 				instructions: config.instructions || '',
 				greeting: config.greeting || null,
 				functions: config.functions || [],
-				language: config.language || 'en'
+				language: config.language || 'en',
+				// Additional fields for intent-ivr and other providers
+				agentId: config.agentId,
+				id: config.agentId,  // Alias
+				tenantId: config.tenantId,
+				name: config.name || config.agentName,
+				kb_id: config.kb_id,
+				// Voice/TTS settings
+				voice: config.voice || config.custom_voice,
+				tts_provider: config.tts_provider,
+				custom_voice: config.custom_voice,
+				language_hints: config.language_hints
 			});
 			
 			// Create audio queue
@@ -312,7 +323,7 @@ class ConnectionManager extends EventEmitter {
 				this.emit('agentSpeechStarted', connection);
 			}
 			
-			this.handleProviderAudio(connection, event.delta);
+			this.handleProviderAudio(connection, event.delta, event);
 		});
         
         provider.on('audio.done', () => {
@@ -438,23 +449,17 @@ class ConnectionManager extends EventEmitter {
 				connection.lastAudioSent = now;
 			}
 			
-		} else if (connection.providerName === 'custom') {
-			// ============================================
-			// NEW: Custom provider accepts mulaw directly
-			// Soniox STT handles mulaw 8kHz natively
-			// ============================================
+		} else if (connection.providerName === 'custom' || connection.providerName === 'intent-ivr') {
+			// Custom & Intent-IVR: Send mulaw directly to Soniox STT
 			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
 			
 			const now = Date.now();
-			const targetBufferSize = 1600;  // 100ms of mulaw audio at 8kHz (8000 * 0.1 * 2 bytes)
-			const bufferInterval = 100;     // Send at least every 100ms
+			const targetBufferSize = 1600;
+			const bufferInterval = 100;
 			
 			if (connection.audioBuffer.length >= targetBufferSize || 
 				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
-				
-				// Send mulaw directly - no conversion needed!
 				await connection.provider.sendAudio(connection.audioBuffer);
-				
 				connection.audioBuffer = Buffer.alloc(0);
 				connection.lastAudioSent = now;
 			}
@@ -526,7 +531,7 @@ class ConnectionManager extends EventEmitter {
 		}
 	}*/
 	
-	handleProviderAudio(connection, audioData) {
+	handleProviderAudio(connection, audioData, event = {}) {
 		this.updateConnectionActivity(connection.clientKey);
 		
 		try {
@@ -546,18 +551,15 @@ class ConnectionManager extends EventEmitter {
 			// Resample based on provider output format
 			let downsampledBuffer;
 			
-			if (connection.providerName === 'custom') {
-				// ============================================
-				// NEW: Custom provider audio handling
-				// 
-				// Uplift AI outputs MP3 22kHz - requires decoding
-				// Azure TTS outputs PCM16 24kHz - same as OpenAI
-				// 
-				// For initial integration, use Azure TTS (PCM16 24kHz)
-				// or convert MP3 to PCM in the custom provider before emitting
-				// ============================================
-				
-				// Assuming PCM16 24kHz output (from Azure TTS or decoded MP3)
+			if (connection.providerName === 'custom' || connection.providerName === 'intent-ivr') {
+				// Custom & Intent-IVR: PCM16 from MP3 conversion or Azure/OpenAI TTS
+				// MP3 converter outputs 22050Hz, Azure/OpenAI output 24kHz
+				// resample24to8 handles both (3:1 ratio is close enough for 22050→8000)
+				if (event.format === 'mulaw_8000') {
+					// Already mulaw 8kHz - send directly to queue
+					connection.audioQueue.addAudio(pcmBuffer);  // pcmBuffer is actually mulaw here
+					return;
+				}
 				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
 				
 			} else if (connection.providerName === 'openai') {

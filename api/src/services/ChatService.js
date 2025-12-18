@@ -437,7 +437,8 @@ class ChatService {
 			sessionId,
 			agentId,
 			message,
-			userId
+			userId,
+			channelInfo
 		)
 		
         let session;
@@ -662,6 +663,7 @@ class ChatService {
 
 		agent.sessionContext = {
 			channel: session.channel,
+			channel_caller_id: session.channel_user_id,
 			channel_user_id: session.channel_user_id,
 			channel_user_name: session.channel_user_name,
 			channel_metadata: session.channel_metadata,
@@ -3096,12 +3098,10 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		if (agent?.sessionContext) {
 			const ctx = agent.sessionContext;
 			
-			let channelContextPrompt = `
-
+			channelContextPrompt = `
 		--------------------------------------------------------------------
 		📱 CHANNEL & USER CONTEXT
 		--------------------------------------------------------------------
-
 		`;
 		
 			const todayFormatted = new Date().toLocaleDateString('en-US', {
@@ -3119,6 +3119,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 			// Add user info
 			if (ctx.channel_user_id) {
 				channelContextPrompt += `User ID: ${ctx.channel_user_id}\n`;
+			}
+			if (ctx.channel_user_id) {
+				channelContextPrompt += `Caller ID: ${ctx.channel_user_id}\n`;
 			}
 			if (ctx.channel_user_name) {
 				channelContextPrompt += `User Name: ${ctx.channel_user_name}\n`;

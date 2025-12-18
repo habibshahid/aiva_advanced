@@ -260,7 +260,7 @@ IMPORTANT: Before calling the search_knowledge function:
 → This prepares the caller for a brief pause while searching
 `;
 					const fullInstructions = contextString + agentConfig.instructions + "\n\nMOST CRITICAL: Never answer out of context. You are here to answer and carry out the conversations based on the instructions given. If the user asks anything out of context, Politely and apologetically decline and ask if they would like to be transferred to a human agent." + transferInstructions;
-					
+
 					// Create connection
 					const connection = await this.connectionManager.createConnection(
 						clientKey,
@@ -294,7 +294,9 @@ IMPORTANT: Before calling the search_knowledge function:
 							// Metadata
 							agentId: agentConfig.id,
 							tenantId: tenantId,
-							asteriskPort: client.port
+							asteriskPort: client.port,
+							kbId: agentConfig.kb_id,
+							kb_id: agentConfig.kb_id
 						}
 					);
 

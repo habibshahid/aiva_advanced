@@ -2,12 +2,13 @@
  * Provider Factory - UPDATED
  * Creates appropriate provider instance based on agent configuration
  * 
- * Now supports: openai, deepgram, custom
+ * Supports: openai, deepgram, custom, intent-ivr
  */
 
 const OpenAIProvider = require('./openai-provider');
 const DeepgramProvider = require('./deepgram-provider');
 const CustomVoiceProvider = require('./custom/custom-voice-provider');
+const IntentIVRProvider = require('./custom/intent-ivr-provider');
 const logger = require('../utils/logger');
 
 class ProviderFactory {
@@ -63,61 +64,86 @@ class ProviderFactory {
                 });
                 
             case 'custom':
-                // NEW: Custom Voice Provider
+                // Custom Voice Provider
                 // Uses Soniox STT + Groq/OpenAI LLM + Azure/Uplift/OpenAI TTS
                 
-                // Debug: log agent config for voice settings
                 logger.info(`Custom provider config from agent:`, {
                     tts_provider: agentConfig.tts_provider,
                     custom_voice: agentConfig.custom_voice,
                     tts_voice: agentConfig.tts_voice
                 });
                 
-                // Resolve voice - prioritize agent config over env
+                // Resolve voice
                 const resolvedVoice = agentConfig.custom_voice || agentConfig.tts_voice;
                 const finalVoice = resolvedVoice || process.env.OPENAI_TTS_VOICE || 'nova';
                 
-                logger.info(`Resolved voice: ${finalVoice} (from: ${resolvedVoice ? 'agent config' : 'env/default'})`);
+                logger.info(`Resolved voice: ${finalVoice}`);
                 
                 return new CustomVoiceProvider({
                     // STT Config
-                    sonioxApiKey: process.env.SONIOX_API_KEY,
-                    sttModel: agentConfig.stt_model || 'stt-rt-preview',
+                    sttApiKey: process.env.SONIOX_API_KEY,
                     languageHints: agentConfig.language_hints || ['ur', 'en'],
                     
                     // LLM Config
-                    groqApiKey: process.env.GROQ_API_KEY,
-                    openaiApiKey: process.env.OPENAI_API_KEY,
-                    llmModel: agentConfig.llm_model || 'llama-3.3-70b-versatile',
-                    temperature: agentConfig.temperature || 0.7,
-                    maxTokens: agentConfig.max_tokens || 1024,
+                    llmProvider: process.env.GROQ_API_KEY ? 'groq' : 'openai',
+                    llmApiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
+                    llmModel: agentConfig.llm_model || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
                     
-                    // TTS Provider Selection
+                    // TTS Config
                     ttsProvider: agentConfig.tts_provider || process.env.TTS_PROVIDER || 'uplift',
-                    
-                    // Azure TTS Config
-                    azureKey: process.env.AZURE_SPEECH_KEY,
-                    azureRegion: process.env.AZURE_SPEECH_REGION || 'eastus',
-                    
-                    // Uplift TTS Config
-                    upliftApiKey: process.env.UPLIFT_API_KEY,
-					upliftOutputFormat: agentConfig.uplift_output_format,
-					upliftResample16to8: agentConfig.uplift_resample_16to8,
-                    
-                    // OpenAI TTS Config
-                    openaiTtsModel: agentConfig.openai_tts_model || process.env.OPENAI_TTS_MODEL || 'tts-1',
-                    
-                    // Voice - from agent config, fallback to env
                     voice: finalVoice,
+                    openaiTtsModel: agentConfig.openai_tts_model || 'tts-1',
+                    upliftOutputFormat: agentConfig.uplift_output_format || 'ULAW_8000_8',
+                    upliftResample16to8: agentConfig.uplift_resample_16to8 !== false,
                     
-                    // Conversation Config
-                    silenceTimeoutMs: agentConfig.silence_timeout_ms || 30000,
+                    // Conversation settings
+                    temperature: agentConfig.temperature || 0.6,
                     allowBargeIn: agentConfig.allow_barge_in !== false,
                     
                     // Agent config
                     instructions: agentConfig.instructions,
                     functions: agentConfig.functions || [],
                     greeting: agentConfig.greeting,
+                    
+                    // Session config
+                    ...sessionConfig
+                });
+            
+            case 'intent-ivr':
+                // Intent-based IVR Provider
+                // Uses Soniox STT + Intent Matching + Pre-recorded Audio
+                
+                logger.info(`Intent IVR provider config:`, {
+                    agentId: agentConfig.agentId,
+                    tts_provider: agentConfig.tts_provider,
+                    custom_voice: agentConfig.custom_voice
+                });
+                return new IntentIVRProvider({
+                    // Agent info
+                    agentId: agentConfig.agentId || agentConfig.id,
+                    tenantId: agentConfig.tenantId || agentConfig.tenant_id,
+                    
+                    // STT Config (for speech recognition)
+                    languageHints: agentConfig.language_hints || ['ur', 'en'],
+                    
+                    // TTS Config (fallback for uncached responses)
+                    // Uses same config as custom provider for consistency
+                    ttsProvider: agentConfig.tts_provider || process.env.TTS_PROVIDER || 'uplift',
+                    voice: agentConfig.custom_voice || agentConfig.tts_voice || 'v_meklc281',
+                    
+                    // Uplift-specific TTS settings (same as custom provider)
+                    upliftOutputFormat: agentConfig.uplift_output_format || 'ULAW_8000_8',
+                    upliftResample16to8: agentConfig.uplift_resample_16to8 !== false, // Default true
+                    
+                    // API Config (for loading IVR configuration)
+                    apiBaseUrl: process.env.MANAGEMENT_API_URL || 'http://localhost:62001/api',
+                    apiKey: process.env.MANAGEMENT_API_KEY,
+                    
+                    // Agent config
+                    instructions: agentConfig.instructions,
+                    functions: agentConfig.functions || [],
+                    greeting: agentConfig.greeting,
+                    kb_id: agentConfig.kb_id,
                     
                     // Session config
                     ...sessionConfig
@@ -158,7 +184,6 @@ class ProviderFactory {
                 if (!process.env.GROQ_API_KEY && !process.env.OPENAI_API_KEY) {
                     errors.push('GROQ_API_KEY or OPENAI_API_KEY is required for custom provider');
                 }
-                // Check TTS provider - need at least one configured
                 const ttsProvider = process.env.TTS_PROVIDER || 'uplift';
                 if (ttsProvider === 'azure' && !process.env.AZURE_SPEECH_KEY) {
                     errors.push('AZURE_SPEECH_KEY is required when TTS_PROVIDER=azure');
@@ -169,6 +194,15 @@ class ProviderFactory {
                 if (ttsProvider === 'openai' && !process.env.OPENAI_API_KEY) {
                     errors.push('OPENAI_API_KEY is required when TTS_PROVIDER=openai');
                 }
+                break;
+            
+            case 'intent-ivr':
+                // Intent IVR only requires STT for speech recognition
+                if (!process.env.SONIOX_API_KEY) {
+                    errors.push('SONIOX_API_KEY is required for intent-ivr provider');
+                }
+                // TTS is optional (used as fallback for uncached responses)
+                // API access is optional (can work with pre-loaded config)
                 break;
         }
         
@@ -206,6 +240,14 @@ class ProviderFactory {
                 name: 'custom',
                 description: 'Custom Stack (Soniox STT + Groq/OpenAI LLM + Azure/Uplift/OpenAI TTS)',
                 costPerMinute: 0.01
+            });
+        }
+        
+        if (process.env.SONIOX_API_KEY) {
+            providers.push({
+                name: 'intent-ivr',
+                description: 'Intent IVR (Soniox STT + Intent Matching + Pre-recorded Audio)',
+                costPerMinute: 0.005 // Very low cost - mostly pre-recorded audio
             });
         }
         

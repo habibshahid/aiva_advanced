@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle, Play } from 'lucide-react';
+import { useNavigate, useParams, Link } from 'react-router-dom';
+import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle, Play, Phone, ArrowRight, Shirt, Laptop, Sofa, Utensils } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
   getAgent, 
@@ -220,6 +220,14 @@ const AgentEditor = () => {
 		  language_hints: agent.language_hints || ['ur', 'en'],
 		  llm_model: agent.llm_model || 'llama-3.3-70b-versatile'
 		});
+	  } else if (newProvider === 'intent-ivr') {
+		  setAgent({
+			...agent,
+			provider: newProvider,
+			tts_provider: agent.tts_provider || 'uplift',
+			custom_voice: agent.custom_voice || 'ur-PK-female',
+			language_hints: agent.language_hints || ['ur', 'en']
+		  });
 	  }
 	};
 	
@@ -406,6 +414,15 @@ const AgentEditor = () => {
 			custom_voice: loadedAgent.custom_voice || 'v_meklc281',
 			language_hints: loadedAgent.language_hints || ['ur', 'en'],
 			llm_model: loadedAgent.llm_model || 'llama-3.3-70b-versatile',
+			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
+			kb_id: loadedAgent.kb_id || null
+		  });
+		} else if (loadedAgent.provider === 'intent-ivr') {
+		  setAgent({
+			...loadedAgent,
+			tts_provider: loadedAgent.tts_provider || 'uplift',
+			custom_voice: loadedAgent.custom_voice || 'ur-PK-female',
+			language_hints: loadedAgent.language_hints || ['ur', 'en'],
 			chat_model: loadedAgent.chat_model || 'gpt-4o-mini',
 			kb_id: loadedAgent.kb_id || null
 		  });
@@ -1084,13 +1101,16 @@ const AgentEditor = () => {
 				<option value="openai">OpenAI Realtime API</option>
 				<option value="deepgram">Deepgram</option>
 				<option value="custom">Custom (Intellicon AiVA)</option>
+				<option value="intent-ivr">Intent IVR (Pre-recorded Audio)</option>
 			  </select>
 			  <p className="mt-1 text-xs text-gray-500">
-				{agent.provider === 'deepgram' 
-				  ? 'Deepgram provides more natural sounding voices'
-				  : agent.provider === 'custom'
-				  ? 'Custom stack: Best for Urdu/Pakistani languages, lowest cost (~$0.01/min)'
-				  : 'OpenAI provides superior conversation handling and function calling'}
+				  {agent.provider === 'deepgram' 
+					? 'Deepgram provides more natural sounding voices'
+					: agent.provider === 'custom'
+					? 'Custom provider using Soniox STT + Groq LLM + Uplift TTS'
+					: agent.provider === 'intent-ivr'
+					? 'Intent-based IVR with pre-recorded/cached audio (lowest cost)'
+					: 'OpenAI Realtime provides integrated voice experience'}
 			  </p>
 			</div>
             {agent.provider === 'openai' && (
@@ -1497,7 +1517,6 @@ const AgentEditor = () => {
 				</div>
 			  </div>
 			)}
-
             <div>
               <label className="block text-sm font-medium text-gray-700">Language</label>
               <select
@@ -1512,7 +1531,22 @@ const AgentEditor = () => {
               </select>
             </div>
           </div>
-		  
+		  {agent.provider === 'intent-ivr' && id && (
+			  <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+				<div className="flex items-center justify-between">
+				  <div>
+					<h4 className="text-sm font-medium text-blue-800">Intent IVR Configuration</h4>
+					<p className="text-xs text-blue-600">Configure intents, audio files, and caching</p>
+				  </div>
+				  <Link
+					to={`/agents/${id}/ivr`}
+					className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+				  >
+					Configure IVR
+				  </Link>
+				</div>
+			  </div>
+			)}
 		  <div className="mt-6 pt-6 border-t border-gray-200">
             <h4 className="text-sm font-medium text-gray-900 mb-4">
               Chat Model Configuration
