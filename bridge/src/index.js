@@ -410,22 +410,42 @@ IMPORTANT: Before calling the search_knowledge function:
 			
 			if (finalCost && finalCost.cost) {
 				const cost = finalCost.cost;
+				const provider = connectionData?.provider || 'openai';
 				
-				logger.info(`Final Cost: ${cost.formatted.finalCost} (Session: ${finalCost.sessionId})`);
+				logger.info(`Final Cost: ${cost.formatted?.finalCost || 'N/A'} (Session: ${finalCost.sessionId})`);
 				
 				// Log detailed breakdown
 				console.log('\n' + '='.repeat(60));
 				console.log(`CALL COST BREAKDOWN - Session: ${finalCost.sessionId}`);
 				console.log('='.repeat(60));
-				console.log(`Duration: ${cost.duration.formatted}`);
-				console.log(`Audio Input: ${cost.audio.input.seconds}s ($${cost.audio.input.cost})`);
-				console.log(`Audio Output: ${cost.audio.output.seconds}s ($${cost.audio.output.cost})`);
-				console.log(`Text Input: ${cost.text.input.tokens} tokens ($${cost.text.input.cost})`);
-				console.log(`Text Output: ${cost.text.output.tokens} tokens ($${cost.text.output.cost})`);
-				console.log(`Cached Tokens: ${cost.text.cached.tokens} tokens ($${cost.text.cached.cost})`);
-				console.log(`Base Cost: $${cost.costs.baseCost}`);
-				console.log(`Profit (${(this.config.profitMargin * 100).toFixed(0)}%): $${cost.costs.profitAmount}`);
-				console.log(`Final Cost: $${cost.costs.finalCost}`);
+				console.log(`Provider: ${provider}`);
+				console.log(`Duration: ${cost.duration?.formatted || 'N/A'}`);
+				
+				// Provider-specific logging
+				if (provider === 'custom' || provider === 'intent-ivr') {
+					// Custom/Intent-IVR providers have different cost structure
+					const metrics = connectionData?.metrics || {};
+					const breakdown = metrics.breakdown || {};
+					
+					console.log(`STT: ${metrics.input_audio_seconds || 0}s ($${(breakdown.stt || 0).toFixed(6)})`);
+					console.log(`LLM: ${metrics.input_tokens || 0}+${metrics.output_tokens || 0} tokens ($${(breakdown.llm || 0).toFixed(6)})`);
+					console.log(`TTS: ${metrics.output_audio_seconds || 0}s / ${metrics.tts_characters || 0} chars ($${(breakdown.tts || 0).toFixed(6)})`);
+					
+					if (provider === 'intent-ivr') {
+						console.log(`Classifier Calls: ${metrics.classifier_calls || 0}`);
+					}
+				} else {
+					// OpenAI/Deepgram format
+					console.log(`Audio Input: ${cost.audio?.input?.seconds || 0}s ($${cost.audio?.input?.cost || 0})`);
+					console.log(`Audio Output: ${cost.audio?.output?.seconds || 0}s ($${cost.audio?.output?.cost || 0})`);
+					console.log(`Text Input: ${cost.text?.input?.tokens || 0} tokens ($${cost.text?.input?.cost || 0})`);
+					console.log(`Text Output: ${cost.text?.output?.tokens || 0} tokens ($${cost.text?.output?.cost || 0})`);
+					console.log(`Cached Tokens: ${cost.text?.cached?.tokens || 0} tokens ($${cost.text?.cached?.cost || 0})`);
+				}
+				
+				console.log(`Base Cost: $${cost.costs?.baseCost || 0}`);
+				console.log(`Profit (${(this.config.profitMargin * 100).toFixed(0)}%): $${cost.costs?.profitAmount || 0}`);
+				console.log(`Final Cost: $${cost.costs?.finalCost || 0}`);
 				console.log('='.repeat(60) + '\n');
 				
 				if (connectionData) {
@@ -436,38 +456,87 @@ IMPORTANT: Before calling the search_knowledge function:
 						sessionId: finalCost.sessionId,
 						callLogId: callLogId,
 						tenantId: tenantId,
+						provider: provider,
 						hasCallLogger: !!this.callLogger
 					});
 					
 					// Update call log
 					if (this.callLogger) {
+						// Use safe parsing to avoid NaN
+						const safeParseFloat = (val) => {
+							const parsed = parseFloat(val);
+							return isNaN(parsed) ? 0 : parsed;
+						};
+						
 						const updateData = {
 							end_time: new Date(),
-							duration_seconds: Math.floor(parseFloat(cost.duration.seconds)),
-							audio_input_seconds: cost.audio.input.seconds,
-							audio_output_seconds: cost.audio.output.seconds,
-							base_cost: parseFloat(cost.costs.baseCost),
-							profit_amount: parseFloat(cost.costs.profitAmount),
-							final_cost: parseFloat(cost.costs.finalCost),
+							duration_seconds: Math.floor(safeParseFloat(cost.duration?.seconds)),
+							audio_input_seconds: safeParseFloat(cost.audio?.input?.seconds),
+							audio_output_seconds: safeParseFloat(cost.audio?.output?.seconds),
+							base_cost: safeParseFloat(cost.costs?.baseCost),
+							profit_amount: safeParseFloat(cost.costs?.profitAmount),
+							final_cost: safeParseFloat(cost.costs?.finalCost),
 							status: 'completed'
 						};
 						
 						// Add provider-specific data
-						const provider = connectionData.provider || 'openai';
-						if (provider === 'openai' || !provider) {
-							updateData.text_input_tokens = cost.text.input.tokens;
-							updateData.text_output_tokens = cost.text.output.tokens;
-							updateData.cached_tokens = cost.text.cached.tokens;
+						if (provider === 'custom') {
+							// Custom provider - similar structure to intent-ivr
+							const providerMetrics = connectionData.metrics || {};
+							
+							// Override audio seconds with custom provider specific values
+							updateData.audio_input_seconds = safeParseFloat(providerMetrics.input_audio_seconds);
+							updateData.audio_output_seconds = safeParseFloat(providerMetrics.output_audio_seconds);
+							updateData.provider_audio_minutes = safeParseFloat(providerMetrics.session_minutes);
+							
+							// Store detailed breakdown in provider_metadata
+							updateData.provider_metadata = JSON.stringify({
+								stt_cost: safeParseFloat(providerMetrics.breakdown?.stt),
+								llm_cost: safeParseFloat(providerMetrics.breakdown?.llm),
+								tts_cost: safeParseFloat(providerMetrics.breakdown?.tts),
+								input_audio_cost: safeParseFloat(providerMetrics.breakdown?.input_audio),
+								output_audio_cost: safeParseFloat(providerMetrics.breakdown?.output_audio),
+								input_tokens: providerMetrics.input_tokens || 0,
+								output_tokens: providerMetrics.output_tokens || 0,
+								session_minutes: safeParseFloat(providerMetrics.session_minutes)
+							});
+							
+						} else if (provider === 'intent-ivr') {
+							// Intent-IVR provider - get metrics from connectionData
+							const providerMetrics = connectionData.metrics || {};
+							
+							// Override audio seconds with intent-ivr specific values
+							updateData.audio_input_seconds = safeParseFloat(providerMetrics.input_audio_seconds);
+							updateData.audio_output_seconds = safeParseFloat(providerMetrics.output_audio_seconds);
+							updateData.provider_audio_minutes = safeParseFloat(providerMetrics.session_minutes);
+							
+							// Store detailed breakdown in provider_metadata
+							updateData.provider_metadata = JSON.stringify({
+								stt_cost: safeParseFloat(providerMetrics.breakdown?.stt),
+								llm_cost: safeParseFloat(providerMetrics.breakdown?.llm),
+								tts_cost: safeParseFloat(providerMetrics.breakdown?.tts),
+								classifier_calls: providerMetrics.classifier_calls || 0,
+								tts_characters: providerMetrics.tts_characters || 0,
+								input_tokens: providerMetrics.input_tokens || 0,
+								output_tokens: providerMetrics.output_tokens || 0,
+								session_minutes: safeParseFloat(providerMetrics.session_minutes)
+							});
+							
+						} else if (provider === 'openai' || !provider) {
+							updateData.text_input_tokens = cost.text?.input?.tokens || 0;
+							updateData.text_output_tokens = cost.text?.output?.tokens || 0;
+							updateData.cached_tokens = cost.text?.cached?.tokens || 0;
+							
 						} else if (provider === 'deepgram') {
 							// Get cost metrics from provider
 							const providerCost = cost.provider_metrics || {};
 							
-							updateData.provider_audio_minutes = providerCost.session_minutes || 0;
+							updateData.provider_audio_minutes = safeParseFloat(providerCost.session_minutes);
 							
 							// Store provider metadata as JSON string
 							updateData.provider_metadata = JSON.stringify({
-								stt_minutes: providerCost.session_minutes || 0,
-								tts_minutes: providerCost.session_minutes || 0,
+								stt_minutes: safeParseFloat(providerCost.session_minutes),
+								tts_minutes: safeParseFloat(providerCost.session_minutes),
 								llm_calls: 0,
 								model: connectionData.deepgram_model || 'nova-2',
 								voice: connectionData.deepgram_voice || 'shimmer'
@@ -479,11 +548,14 @@ IMPORTANT: Before calling the search_knowledge function:
 					
 					// Deduct credits
 					if (this.creditManager && tenantId) {
-						await this.creditManager.deductCredits(
-							tenantId,
-							parseFloat(cost.costs.finalCost),
-							callLogId
-						);
+						const finalCostAmount = parseFloat(cost.costs?.finalCost || 0) || 0;
+						if (finalCostAmount > 0) {
+							await this.creditManager.deductCredits(
+								tenantId,
+								finalCostAmount,
+								callLogId
+							);
+						}
 					}
 					
 					// Clean up Redis
