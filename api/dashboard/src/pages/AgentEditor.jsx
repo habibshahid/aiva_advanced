@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle, Play, Phone, ArrowRight, Shirt, Laptop, Sofa, Utensils } from 'lucide-react';
+import { Save, X, Plus, Trash2, Edit2, Info, CheckCircle, Play, Phone, ArrowRight, Shirt, Laptop, Sofa, Utensils, GitBranch, Volume2, FileText, Globe, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { 
   getAgent, 
@@ -1532,17 +1532,68 @@ const AgentEditor = () => {
             </div>
           </div>
 		  {agent.provider === 'intent-ivr' && id && (
-			  <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-				<div className="flex items-center justify-between">
-				  <div>
-					<h4 className="text-sm font-medium text-blue-800">Intent IVR Configuration</h4>
-					<p className="text-xs text-blue-600">Configure intents, audio files, and caching</p>
-				  </div>
+			  <div className="mt-3 p-4 bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg">
+				<h4 className="text-sm font-semibold text-gray-800 mb-3">IVR Configuration</h4>
+				
+				<div className="grid grid-cols-2 gap-3">
+				  {/* Intent IVR */}
 				  <Link
 					to={`/agents/${id}/ivr`}
-					className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+					className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:shadow-sm transition-all"
 				  >
-					Configure IVR
+					<MessageSquare className="w-5 h-5 text-blue-600" />
+					<div>
+					  <div className="text-sm font-medium text-gray-900">Intents</div>
+					  <div className="text-xs text-gray-500">Static responses & triggers</div>
+					</div>
+				  </Link>
+				  
+				  {/* Conversation Flows */}
+				  <Link
+					to={`/agents/${id}/ivr/flows`}
+					className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-purple-400 hover:shadow-sm transition-all"
+				  >
+					<GitBranch className="w-5 h-5 text-purple-600" />
+					<div>
+					  <div className="text-sm font-medium text-gray-900">Flows</div>
+					  <div className="text-xs text-gray-500">Multi-turn conversations</div>
+					</div>
+				  </Link>
+				  
+				  {/* Segments */}
+				  <Link
+					to={`/agents/${id}/ivr/segments`}
+					className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-green-400 hover:shadow-sm transition-all"
+				  >
+					<Volume2 className="w-5 h-5 text-green-600" />
+					<div>
+					  <div className="text-sm font-medium text-gray-900">Segments</div>
+					  <div className="text-xs text-gray-500">Reusable audio pieces</div>
+					</div>
+				  </Link>
+				  
+				  {/* Templates */}
+				  <Link
+					to={`/agents/${id}/ivr/templates`}
+					className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-yellow-400 hover:shadow-sm transition-all"
+				  >
+					<FileText className="w-5 h-5 text-yellow-600" />
+					<div>
+					  <div className="text-sm font-medium text-gray-900">Templates</div>
+					  <div className="text-xs text-gray-500">Dynamic audio templates</div>
+					</div>
+				  </Link>
+				  
+				  {/* Languages */}
+				  <Link
+					to={`/agents/${id}/ivr/languages`}
+					className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-teal-400 hover:shadow-sm transition-all col-span-2"
+				  >
+					<Globe className="w-5 h-5 text-teal-600" />
+					<div>
+					  <div className="text-sm font-medium text-gray-900">Languages</div>
+					  <div className="text-xs text-gray-500">Multi-language configuration (20 languages)</div>
+					</div>
 				  </Link>
 				</div>
 			  </div>

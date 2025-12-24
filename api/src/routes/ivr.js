@@ -8,6 +8,7 @@ const { verifyToken, verifyApiKey } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const IVRService = require('../services/IVRService');
 const AgentService = require('../services/AgentService');
+const FlowService = require('../services/FlowService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -18,6 +19,16 @@ const router = express.Router();
 // Audio storage configuration - uses same base as AudioService
 const STORAGE_BASE = process.env.AUDIO_STORAGE_PATH || '/etc/aiva-oai/storage';
 const IVR_AUDIO_PATH = process.env.IVR_AUDIO_PATH || path.join(STORAGE_BASE, 'ivr-audio');
+
+const FLOW_AUDIO_FIELDS = [
+    'intro_audio_id',
+    'on_complete_audio_id',
+    'on_cancel_audio_id',
+    'on_timeout_audio_id',
+    'on_error_audio_id',
+    'anything_else_audio_id',
+    'closing_audio_id'
+];
 
 // Ensure directory exists
 if (!fs.existsSync(IVR_AUDIO_PATH)) {
@@ -590,6 +601,153 @@ router.get('/:agentId/audio/:audioId', authenticate, verifyAgentAccess, async (r
     } catch (error) {
         console.error('Get audio error:', error);
         res.status(500).json({ error: 'Failed to get audio file' });
+    }
+});
+
+/**
+ * @route POST /api/ivr/:agentId/audio/cache-base64
+ * @desc Save auto-generated TTS audio from bridge using base64 JSON
+ * Creates audio record and updates:
+ * - Flow step (if step_id provided)
+ * - Flow (if flow_id provided without step_id)
+ * - Intent (if intent_id provided)
+ * Saves as MP3 for universal web playback
+ */
+router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const { 
+            audio_data,  // base64 encoded audio (MP3)
+            name, 
+            source_text,
+            file_format,
+            duration_ms,
+            tts_provider,
+            tts_voice,
+            language,
+            step_id,
+            flow_id,
+            intent_id,
+            audio_field
+        } = req.body;
+        
+        if (!audio_data) {
+            return res.status(400).json({ error: 'audio_data (base64) is required' });
+        }
+        
+        const agentId = req.params.agentId;
+        const tenantId = req.agent.tenant_id;
+        
+        // Decode base64 audio
+        const audioBuffer = Buffer.from(audio_data, 'base64');
+        const fileSizeBytes = audioBuffer.length;
+        
+        // Determine file extension from format
+        const format = file_format || 'mp3';
+        const extension = format === 'mp3' ? 'mp3' : 
+                         format === 'mulaw_8000' ? 'raw' : 
+                         format === 'wav' ? 'wav' : 'mp3';
+        
+        console.log('[IVR-CACHE-B64] Saving cached audio:', {
+            agentId,
+            stepId: step_id,
+            flowId: flow_id,
+            intentId: intent_id,
+            audioField: audio_field,
+            size: fileSizeBytes,
+            format: format,
+            extension: extension
+        });
+        
+        // Ensure audio directory exists
+        const agentAudioPath = path.join(IVR_AUDIO_PATH, agentId);
+        if (!fs.existsSync(agentAudioPath)) {
+            fs.mkdirSync(agentAudioPath, { recursive: true });
+        }
+        
+        // Generate unique filename with correct extension
+        const filename = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${extension}`;
+        const filePath = path.join(agentAudioPath, filename);
+        
+        // Write audio to file
+        fs.writeFileSync(filePath, audioBuffer);
+        console.log('[IVR-CACHE-B64] Audio file saved:', filePath);
+        
+        // Create audio record in library
+        const audio = await IVRService.createAudio(
+            agentId,
+            tenantId,
+            {
+                name: name || `Auto-TTS ${new Date().toISOString()}`,
+                description: `Auto-generated from: ${(source_text || '').substring(0, 100)}`,
+                source_type: 'generated_auto',
+                source_text: source_text || '',
+                file_path: filePath,
+                file_format: format,  // Store actual format (mp3)
+                file_size_bytes: fileSizeBytes,
+                duration_ms: duration_ms || 0,
+                tts_provider: tts_provider || null,
+                tts_voice: tts_voice || null,
+                language: language || 'ur'
+            }
+        );
+        
+        console.log('[IVR-CACHE-B64] Audio record created:', audio.id);
+        
+        let stepUpdated = false;
+        let intentUpdated = false;
+        let flowUpdated = false;
+        
+        // Update flow step if step_id provided
+        if (step_id && audio_field) {
+            try {
+                await FlowService.updateStep(step_id, { 
+                    [audio_field]: audio.id 
+                });
+                stepUpdated = true;
+                console.log(`[IVR-CACHE-B64] Flow step updated: ${step_id} -> ${audio_field}=${audio.id}`);
+            } catch (stepErr) {
+                console.error('[IVR-CACHE-B64] Failed to update flow step:', stepErr.message);
+            }
+        }
+        // Update flow (not step) if flow_id provided without step_id
+        else if (flow_id && audio_field && FLOW_AUDIO_FIELDS.includes(audio_field)) {
+            try {
+                await FlowService.updateFlow(flow_id, { 
+                    [audio_field]: audio.id 
+                });
+                flowUpdated = true;
+                console.log(`[IVR-CACHE-B64] Flow updated: ${flow_id} -> ${audio_field}=${audio.id}`);
+            } catch (flowErr) {
+                console.error('[IVR-CACHE-B64] Failed to update flow:', flowErr.message);
+            }
+        }
+        
+        // Update intent if intent_id provided
+        if (intent_id && audio_field) {
+            try {
+                await IVRService.updateIntent(intent_id, { 
+                    [audio_field]: audio.id 
+                });
+                intentUpdated = true;
+                console.log(`[IVR-CACHE-B64] Intent updated: ${intent_id} -> ${audio_field}=${audio.id}`);
+            } catch (intentErr) {
+                console.error('[IVR-CACHE-B64] Failed to update intent:', intentErr.message);
+            }
+        }
+        
+        res.json({
+            success: true,
+            audio_id: audio.id,
+            file_path: filePath,
+            file_format: format,
+            step_updated: stepUpdated,
+            flow_updated: flowUpdated,
+            intent_updated: intentUpdated
+        });
+        
+    } catch (error) {
+        console.error('[IVR-CACHE-B64] Error:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 

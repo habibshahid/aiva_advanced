@@ -142,12 +142,12 @@ class OpenAIRealtimeClient extends EventEmitter {
             }
         });
         
-        this.ws.on('close', () => {
-            this.isConnected = false;
-            this.sessionId = null;
-            logger.info('Disconnected from OpenAI');
-            this.emit('disconnected');
-        });
+        this.ws.on('close', (code, reason) => {
+			this.isConnected = false;
+			this.sessionId = null;
+			logger.info(`Disconnected from OpenAI - Code: ${code}, Reason: ${reason || 'No reason provided'}`);
+			this.emit('disconnected', { code, reason });
+		})
         
         this.ws.on('error', (error) => {
             logger.error('WebSocket error:', error);

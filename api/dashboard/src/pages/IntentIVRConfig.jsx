@@ -10,7 +10,7 @@ import {
   Upload, Volume2, Settings, Database, Zap, 
   RefreshCw, ChevronDown, ChevronUp, GripVertical,
   Mic, FileAudio, MessageSquare, Phone, ArrowRight,
-  CheckCircle, XCircle, AlertCircle, Loader2
+  CheckCircle, XCircle, AlertCircle, Loader2, GitBranch
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAgent } from '../services/api';
@@ -22,7 +22,8 @@ const INTENT_TYPES = [
   { value: 'kb_lookup', label: 'Knowledge Base', icon: Database, description: 'Search KB and respond with results' },
   { value: 'function_call', label: 'Function Call', icon: Zap, description: 'Execute function and respond with result' },
   { value: 'transfer', label: 'Transfer Call', icon: Phone, description: 'Transfer to human agent/queue' },
-  { value: 'collect_input', label: 'Collect Input', icon: Mic, description: 'Collect specific information from caller' }
+  { value: 'collect_input', label: 'Collect Input', icon: Mic, description: 'Collect specific information from caller' },
+  { value: 'flow', label: 'Start Flow', description: 'Start a conversation flow' } 
 ];
 
 const IntentIVRConfig = () => {
@@ -37,6 +38,7 @@ const IntentIVRConfig = () => {
   const [intents, setIntents] = useState([]);
   const [audioFiles, setAudioFiles] = useState([]);
   const [cacheStats, setCacheStats] = useState(null);
+  const [flows, setFlows] = useState([]);
   
   // UI state
   const [activeTab, setActiveTab] = useState('intents');
@@ -53,6 +55,19 @@ const IntentIVRConfig = () => {
     loadData();
   }, [agentId]);
   
+  useEffect(() => {
+    const loadFlows = async () => {
+      try {
+        const res = await ivrApi.getFlows(agentId, true);
+        setFlows(res.data?.data || res.data || []);
+      } catch (error) {
+		setFlows([]);
+        console.error('Failed to load flows:', error);
+      }
+    };
+    loadFlows();
+  }, [agentId]);
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -66,10 +81,10 @@ const IntentIVRConfig = () => {
       ]);
       
       setAgent(agentRes.data.agent);
-      setConfig(configRes.data.data);
-      setIntents(intentsRes.data.data || []);
-      setAudioFiles(audioRes.data.data || []);
-      setCacheStats(cacheRes.data.data);
+      setConfig(configRes.data);
+      setIntents(intentsRes.data || []);
+	  setAudioFiles(audioRes.data || []);
+      setCacheStats(cacheRes.data);
       
     } catch (error) {
       console.error('Failed to load IVR config:', error);
@@ -181,6 +196,7 @@ const IntentIVRConfig = () => {
             agentId={agentId}
             intents={intents}
             audioFiles={audioFiles}
+			flows={flows}
             onRefresh={loadData}
             onPlayAudio={handlePlayAudio}
             playingAudio={playingAudio}
@@ -222,7 +238,7 @@ const IntentIVRConfig = () => {
 // INTENTS TAB
 // =============================================================================
 
-const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, playingAudio }) => {
+const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudio, playingAudio }) => {
   const [showModal, setShowModal] = useState(false);
   const [editingIntent, setEditingIntent] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -242,7 +258,8 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
     function_name: '',
     confidence_threshold: 0.70,
     priority: 0,
-    is_active: true
+    is_active: true,
+	flow_id: ''
   });
   
   const [generatingAudio, setGeneratingAudio] = useState(false);
@@ -264,7 +281,8 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
         function_name: intent.function_name || '',
         confidence_threshold: intent.confidence_threshold || 0.70,
         priority: intent.priority || 0,
-        is_active: intent.is_active !== false
+        is_active: intent.is_active !== false,
+		flow_id: intent.flow_id || '',
       });
     } else {
       setEditingIntent(null);
@@ -282,7 +300,8 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
         function_name: '',
         confidence_threshold: 0.70,
         priority: 0,
-        is_active: true
+        is_active: true,
+		flow_id: ''
       });
     }
     setShowModal(true);
@@ -300,6 +319,11 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
       return;
     }
     
+	if (form.intent_type === 'flow' && !form.flow_id) {
+      toast.error('Please select a conversation flow');
+      return;
+    }
+	
     try {
       setSaving(true);
       
@@ -428,6 +452,12 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
                         Audio Ready
                       </span>
                     )}
+					{intent.flow_id && (
+                      <span className="px-2 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full flex items-center">
+                        <GitBranch className="w-3 h-3 mr-1" />
+                        Flow
+                      </span>
+                    )}
                     {!intent.is_active && (
                       <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
                         Inactive
@@ -552,6 +582,38 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
                       ))}
                     </select>
                   </div>
+				  {/* Flow Selection - Required when intent_type is 'flow' */}
+					{form.intent_type === 'flow' && (
+					  <div className="md:col-span-2 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+						<label className="block text-sm font-medium text-purple-700 mb-1">
+						  <span className="flex items-center gap-2">
+							<GitBranch className="w-4 h-4" />
+							Select Conversation Flow *
+						  </span>
+						</label>
+						<select
+						  value={form.flow_id || ''}
+						  onChange={(e) => setForm({ ...form, flow_id: e.target.value || null })}
+						  className="w-full border border-purple-300 rounded-lg px-3 py-2 bg-white"
+						  required
+						>
+						  <option value="">-- Select a Flow --</option>
+						  {flows.filter(f => f.is_active).map(flow => (
+							<option key={flow.id} value={flow.id}>
+							  {flow.flow_name} {flow.description ? `- ${flow.description}` : ''}
+							</option>
+						  ))}
+						</select>
+						{flows.filter(f => f.is_active).length === 0 && (
+						  <p className="text-sm text-red-600 mt-2">
+							⚠️ No active flows available. Please create a flow first in the Flows tab.
+						  </p>
+						)}
+						<p className="text-xs text-purple-600 mt-1">
+						  When this intent matches, the selected flow will be started
+						</p>
+					  </div>
+					)}
                 </div>
                 
                 <div>
@@ -785,7 +847,33 @@ const IntentsTab = ({ agentId, intents, audioFiles, onRefresh, onPlayAudio, play
                     />
                   </div>
                 </div>
-                
+                {/* Link to Conversation Flow */}
+                {/* Link to Conversation Flow - Only show for non-flow intent types */}
+				{form.intent_type !== 'flow' && (
+				  <div className="border-t pt-4">
+					<label className="block text-sm font-medium text-gray-700 mb-1">
+					  <span className="flex items-center gap-2">
+						<GitBranch className="w-4 h-4 text-purple-600" />
+						Link to Conversation Flow (Optional)
+					  </span>
+					</label>
+					<select
+					  value={form.flow_id || ''}
+					  onChange={(e) => setForm({ ...form, flow_id: e.target.value || null })}
+					  className="w-full border rounded-lg px-3 py-2"
+					>
+					  <option value="">No flow - use response above</option>
+					  {flows.filter(f => f.is_active).map(flow => (
+						<option key={flow.id} value={flow.id}>
+						  {flow.flow_name} {flow.description ? `- ${flow.description}` : ''}
+						</option>
+					  ))}
+					</select>
+					<p className="text-xs text-gray-500 mt-1">
+					  If selected, this intent will start the conversation flow instead of responding directly
+					</p>
+				  </div>
+				)}
                 <div className="flex items-center">
                   <input
                     type="checkbox"

@@ -54,6 +54,8 @@ import APISettings from './pages/APISettings';
 
 import IntentIVRConfig from './pages/IntentIVRConfig';
 
+import { ivrRoutes } from './routes/ivrRoutes';
+
 // PrivateRoute must be inside Router to use useLocation
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -112,6 +114,7 @@ function App() {
             <Route path="/test" element={<AgentTest />} />
 			<Route path="agent-test" element={<AgentTestChat />} />
 			<Route path="/agents/:id/ivr" element={<IntentIVRConfig />} />
+			{ivrRoutes}
 			
             {/* Knowledge Base Routes */}
             <Route path="knowledge" element={<KnowledgeList />} />

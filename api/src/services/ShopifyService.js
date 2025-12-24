@@ -1069,6 +1069,7 @@ class ShopifyService {
         };
       }
 
+	  orders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       // Get the most recent order
       const order = orders[0];
 

@@ -1924,6 +1924,7 @@ Respond in valid JSON format.`
             agent
         );
 		
+		//console.log('@@@@@@@@', systemPrompt);
         // Build messages for OpenAI
         const messages = [{
                 role: 'system',
@@ -3091,6 +3092,35 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		
 		systemPrompt = dateHeader + systemPrompt;
 		
+		const stayInRoleInstructions = `
+============================================================
+🎯 CRITICAL: ONLY ANSWER FROM YOUR INSTRUCTIONS & KNOWLEDGE BASE
+============================================================
+
+You are a specialized agent. You can ONLY help with topics covered in:
+1. Your base instructions (above)
+2. Your knowledge base (if available)
+
+FOR ANY QUESTION OR REQUEST NOT COVERED IN YOUR INSTRUCTIONS OR KNOWLEDGE BASE:
+- Do NOT attempt to answer from your general knowledge
+- Do NOT explain why you can't help
+- Do NOT engage with the topic at all
+- Simply redirect to what you CAN help with
+
+RESPONSE FORMAT FOR OUT-OF-SCOPE REQUESTS:
+"I'm here to help you with [your domain]. Is there something I can assist you with?"
+
+RULES:
+- If it's not in your instructions → Don't answer it
+- If it's not in your knowledge base → Don't answer it
+- No exceptions, even for "simple" or "harmless" questions
+- Stay focused on your designated purpose only
+
+============================================================
+`;
+
+systemPrompt = dateHeader + stayInRoleInstructions + systemPrompt;
+
 		// ============================================
 		// 📱 CHANNEL CONTEXT INJECTION
 		// ============================================
@@ -3154,6 +3184,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		`;
 		}
 		
+		systemPrompt += channelContextPrompt;
 		systemPrompt += this._getDateValidationInstructions();
 		
 		const searchMode = agent?.knowledge_search_mode || 'auto';
@@ -3919,6 +3950,34 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 		// Anti-hallucination instructions
 		systemPrompt += this._getAntiHallucinationInstructions(hasDocuments, hasProducts);
 
+				// ============================================
+		// 🌐 FINAL LANGUAGE ENFORCEMENT (CRITICAL)
+		// ============================================
+		const languageEnforcement = `
+
+		============================================================
+		🚨 CRITICAL: LANGUAGE MATCHING - FINAL CHECK
+		============================================================
+
+		BEFORE GENERATING ANY RESPONSE, CHECK THE CUSTOMER'S LANGUAGE:
+
+		1. Customer's message is in ENGLISH → Your ENTIRE response MUST be in ENGLISH
+		2. Customer's message is in URDU/Roman Urdu → Your ENTIRE response MUST be in Roman Urdu
+		3. If mixed → Use the DOMINANT language
+
+		⚠️ The examples in these instructions show responses in ONE language for illustration.
+		   YOU MUST TRANSLATE the example response to match the customer's language!
+
+		SELF-CHECK:
+		- What language did customer use? → [detect]
+		- Is my response in that same language? → [verify]
+		- If NO → REWRITE in correct language before responding
+
+		============================================================
+		`;
+
+		systemPrompt += languageEnforcement;
+
 		return systemPrompt;
 	}
 
@@ -4283,6 +4342,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	 - Guess prices or availability
 	 - Assume any business information
 	 - Answer business questions without searching first
+	 - You must always follow the instructions and knowledge base. Never ever generate response to the questions which are not covered in instructions or Knowledge base
 
 	ORDER PROCESSING RULES:
 	1. Check if you have order functions → Use them
@@ -4292,6 +4352,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	5. NEVER generate fake order confirmations
 
 	STRICTLY OFF-LIMITS TOPICS (ALWAYS DECLINE):
+	- You must always follow the instructions and knowledge base. Never ever generate response to the questions which are not covered in instructions or Knowledge base
 	- Politics, politicians, current events
 	- Religious, controversial, or sensitive topics
 	- Medical, legal, or financial advice
@@ -4397,63 +4458,74 @@ Only ONE parameter is needed to search.`,
 		}
 
 		let instructions = `
+			--------------------------------------------------------------------
+			🔧 AVAILABLE FUNCTIONS - YOU CAN CALL THESE WHEN NEEDED
+			--------------------------------------------------------------------
 
-	--------------------------------------------------------------------
-	🔧 AVAILABLE FUNCTIONS - YOU CAN CALL THESE WHEN NEEDED
-	--------------------------------------------------------------------
+			You have access to the following functions. When you need to use one,
+			include the function call details in your JSON response.
 
-	You have access to the following functions. When you need to use one,
-	include the function call details in your JSON response.
+			AVAILABLE FUNCTIONS:
+			`;
 
-	AVAILABLE FUNCTIONS:
-	`;
+			activeFunctions.forEach((fn, index) => {
+				const paramNames = fn.parameters?.properties 
+					? Object.keys(fn.parameters.properties) 
+					: [];
+				const requiredParams = fn.parameters?.required || [];
+				
+				instructions += `
+			${index + 1}. **${fn.name}**
+			   Description: ${fn.description || 'No description provided'}
+			   Parameters: ${JSON.stringify(fn.parameters || {}, null, 2).split('\n').map((line, i) => i === 0 ? line : '   ' + line).join('\n')}
+			   
+			   ⚠️ EXACT parameter names to use: ${paramNames.map(p => `"${p}"`).join(', ')}
+			   ${requiredParams.length > 0 ? `Required: ${requiredParams.map(p => `"${p}"`).join(', ')}` : ''}
+			`;
+			});
 
-		activeFunctions.forEach((fn, index) => {
-			instructions += `
-	${index + 1}. **${fn.name}**
-	   Description: ${fn.description || 'No description provided'}
-	   Parameters: ${JSON.stringify(fn.parameters || {}, null, 2).split('\n').map((line, i) => i === 0 ? line : '   ' + line).join('\n')}
-	`;
-		});
+				let exampleArgs = '{}';
+				if (activeFunctions.length > 0) {
+					const firstFunc = activeFunctions[0];
+					const props = firstFunc.parameters?.properties || {};
+					const exampleObj = {};
+					for (const [paramName, paramDef] of Object.entries(props)) {
+						// Create example value based on type
+						if (paramDef.type === 'string') {
+							exampleObj[paramName] = `<${paramName}_value>`;
+						} else if (paramDef.type === 'number' || paramDef.type === 'integer') {
+							exampleObj[paramName] = 0;
+						} else if (paramDef.type === 'boolean') {
+							exampleObj[paramName] = true;
+						} else if (paramDef.type === 'array') {
+							exampleObj[paramName] = [];
+						} else {
+							exampleObj[paramName] = `<${paramName}_value>`;
+						}
+					}
+					exampleArgs = JSON.stringify(exampleObj, null, 4);
+				}
 
-		instructions += `
+				instructions += `
 
-	--------------------------------------------------------------------
-	HOW TO CALL A FUNCTION
-	--------------------------------------------------------------------
+		--------------------------------------------------------------------
+		HOW TO CALL A FUNCTION
+		--------------------------------------------------------------------
 
-	When you need to call a function, include these fields in your JSON response:
+		When you need to call a function, include these fields in your JSON response:
 
-	{
-	  "response": "Brief message to user (e.g., 'Let me transfer you to an agent...')",
-	  "function_call_needed": true,
-	  "function_name": "exact_function_name",
-	  "function_arguments": {
-		"param1": "value1",
-		"param2": "value2"
-	  },
-	  ... other fields as usual ...
-	}
+		{
+		  "response": "Brief message to user",
+		  "function_call_needed": true,
+		  "function_name": "exact_function_name",
+		  "function_arguments": ${exampleArgs}
+		}
 
-	RULES FOR FUNCTION CALLING:
-	1. Set function_call_needed = true ONLY when you need to execute a function
-	2. Use the EXACT function name from the list above
-	3. Provide ALL required parameters in function_arguments
-	4. Your "response" should be a brief acknowledgment (the function result will be shared separately)
-	5. DO NOT make up functions - only use the ones listed above
-
-	WHEN TO CALL FUNCTIONS:
-	- User explicitly requests an action that matches a function (e.g., "transfer me to agent")
-	- The conversation requires an action you cannot perform without the function
-	- User asks for information that requires an external API call
-
-	WHEN NOT TO CALL FUNCTIONS:
-	- General conversation or questions you can answer directly
-	- Product searches (use product_search_needed instead)
-	- Knowledge lookups (use knowledge_search_needed instead)
-
-	--------------------------------------------------------------------
-	`;
+		⚠️ CRITICAL: Use the EXACT parameter names from the function schema above.
+		   - If schema says "orderno" → use "orderno" (NOT "order_no" or "order_number")
+		   - If schema says "ticketsubtype" → use "ticketsubtype" (NOT "ticket_sub_type")
+		   - Copy parameter names EXACTLY as shown in the Parameters JSON above.
+		`;
 
 		return instructions;
 	}

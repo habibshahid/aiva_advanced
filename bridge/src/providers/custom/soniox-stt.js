@@ -77,14 +77,26 @@ class SonioxSTT extends EventEmitter {
             
             this.ws.on('error', (error) => {
                 console.error('[SONIOX-STT] WebSocket error:', error.message);
+                console.error('[SONIOX-STT] Error details:', {
+                    code: error.code,
+                    errno: error.errno,
+                    syscall: error.syscall
+                });
                 this.emit('error', error);
             });
             
             this.ws.on('close', (code, reason) => {
-                console.log(`[SONIOX-STT] WebSocket closed: ${code} - ${reason}`);
+                const reasonStr = reason?.toString() || '';
+                console.log(`[SONIOX-STT] WebSocket closed: code=${code}, reason="${reasonStr}"`);
+                console.log('[SONIOX-STT] Connection stats at close:', {
+                    audioSecondsProcessed: this.metrics.audioSeconds.toFixed(2),
+                    bytesProcessed: this.metrics.bytesProcessed,
+                    wasConnected: this.isConnected,
+                    wasConfigured: this.isConfigured
+                });
                 this.isConnected = false;
                 this.isConfigured = false;
-                this.emit('disconnected', { code, reason: reason?.toString() });
+                this.emit('disconnected', { code, reason: reasonStr });
             });
         });
     }
@@ -242,6 +254,11 @@ class SonioxSTT extends EventEmitter {
             return false;
         }
         
+        // Check WebSocket state (1 = OPEN)
+        if (this.ws.readyState !== 1) {
+            return false;
+        }
+        
         try {
             // Send binary audio data directly
             this.ws.send(audioData);
@@ -253,7 +270,7 @@ class SonioxSTT extends EventEmitter {
             
             return true;
         } catch (error) {
-            console.error('[SONIOX-STT] Error sending audio:', error);
+            console.error('[SONIOX-STT] Error sending audio:', error.message);
             return false;
         }
     }
@@ -283,9 +300,16 @@ class SonioxSTT extends EventEmitter {
     
     /**
      * Send keepalive to prevent connection timeout
+     * Soniox closes connection if no audio/keepalive for >20s
      */
     sendKeepalive() {
         if (!this.isConnected || !this.ws) {
+            return false;
+        }
+        
+        // Check WebSocket state (1 = OPEN)
+        if (this.ws.readyState !== 1) {
+            console.warn('[SONIOX-STT] Cannot send keepalive - WebSocket state:', this.ws.readyState);
             return false;
         }
         
@@ -295,6 +319,7 @@ class SonioxSTT extends EventEmitter {
             }));
             return true;
         } catch (error) {
+            console.error('[SONIOX-STT] Error sending keepalive:', error.message);
             return false;
         }
     }

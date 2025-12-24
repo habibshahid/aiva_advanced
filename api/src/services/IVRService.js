@@ -177,7 +177,6 @@ class IVRService {
         }
         
         query += ' ORDER BY i.priority DESC, i.created_at ASC';
-        
         const [intents] = await db.query(query, [agentId]);
         
         return intents.map(intent => this._parseIntent(intent));
@@ -211,49 +210,50 @@ class IVRService {
         // Helper to convert empty strings to null for foreign key fields
         const nullIfEmpty = (val) => (val === '' || val === null || val === undefined) ? null : val;
         
-        await db.query(
-            `INSERT INTO yovo_tbl_aiva_ivr_intents (
-                id, agent_id, tenant_id,
-                intent_name, intent_type, description,
-                trigger_phrases, trigger_keywords, confidence_threshold,
-                response_text, response_audio_id, auto_regenerate,
-                template_id,
-                kb_search_query_template, kb_response_prefix_audio_id, kb_response_suffix_audio_id, kb_no_result_audio_id,
-                action_type, action_config,
-                transfer_queue, transfer_audio_id,
-                function_name, function_id,
-                follow_up_intent_id, collect_input_config,
-                priority, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		await db.query(
+			`INSERT INTO yovo_tbl_aiva_ivr_intents (
+				id, agent_id, tenant_id,
+				intent_name, intent_type, description,
+				trigger_phrases, trigger_keywords, confidence_threshold,
+				response_text, response_audio_id, auto_regenerate,
+				template_id,
+				kb_search_query_template, kb_response_prefix_audio_id, kb_response_suffix_audio_id, kb_no_result_audio_id,
+				action_type, action_config,
+				transfer_queue, transfer_audio_id,
+				function_name, function_id,
+				follow_up_intent_id, flow_id, collect_input_config,
+				priority, is_active
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                intentId,
-                agentId,
-                tenantId,
-                intentData.intent_name,
-                intentData.intent_type || 'static',
-                intentData.description || null,
-                JSON.stringify(intentData.trigger_phrases || []),
-                intentData.trigger_keywords ? JSON.stringify(intentData.trigger_keywords) : null,
-                intentData.confidence_threshold || 0.70,
-                intentData.response_text || null,
-                nullIfEmpty(intentData.response_audio_id),
-                intentData.auto_regenerate !== false ? 1 : 0,
-                nullIfEmpty(intentData.template_id),
-                intentData.kb_search_query_template || null,
-                nullIfEmpty(intentData.kb_response_prefix_audio_id),
-                nullIfEmpty(intentData.kb_response_suffix_audio_id),
-                nullIfEmpty(intentData.kb_no_result_audio_id),
-                intentData.action_type || 'respond',
-                intentData.action_config ? JSON.stringify(intentData.action_config) : null,
-                intentData.transfer_queue || null,
-                nullIfEmpty(intentData.transfer_audio_id),
-                intentData.function_name || null,
-                nullIfEmpty(intentData.function_id),
-                nullIfEmpty(intentData.follow_up_intent_id),
-                intentData.collect_input_config ? JSON.stringify(intentData.collect_input_config) : null,
-                intentData.priority || 0,
-                intentData.is_active !== false ? 1 : 0
-            ]
+				intentId,
+				agentId,
+				tenantId,
+				intentData.intent_name,
+				intentData.intent_type || 'static',
+				intentData.description || null,
+				JSON.stringify(intentData.trigger_phrases || []),
+				intentData.trigger_keywords ? JSON.stringify(intentData.trigger_keywords) : null,
+				intentData.confidence_threshold || 0.70,
+				intentData.response_text || null,
+				nullIfEmpty(intentData.response_audio_id),
+				intentData.auto_regenerate !== false ? 1 : 0,
+				nullIfEmpty(intentData.template_id),
+				intentData.kb_search_query_template || null,
+				nullIfEmpty(intentData.kb_response_prefix_audio_id),
+				nullIfEmpty(intentData.kb_response_suffix_audio_id),
+				nullIfEmpty(intentData.kb_no_result_audio_id),
+				intentData.action_type || 'respond',
+				intentData.action_config ? JSON.stringify(intentData.action_config) : null,
+				intentData.transfer_queue || null,
+				nullIfEmpty(intentData.transfer_audio_id),
+				intentData.function_name || null,
+				nullIfEmpty(intentData.function_id),
+				nullIfEmpty(intentData.follow_up_intent_id),
+				nullIfEmpty(intentData.flow_id),
+				intentData.collect_input_config ? JSON.stringify(intentData.collect_input_config) : null,
+				intentData.priority || 0,
+				intentData.is_active !== false ? 1 : 0
+			]
         );
         
         // Invalidate agent intents cache
@@ -267,27 +267,27 @@ class IVRService {
      */
     async updateIntent(intentId, updates) {
         const allowedFields = [
-            'intent_name', 'intent_type', 'description',
-            'trigger_phrases', 'trigger_keywords', 'confidence_threshold',
-            'response_text', 'response_audio_id', 'auto_regenerate',
-            'template_id',
-            'kb_search_query_template', 'kb_response_prefix_audio_id', 'kb_response_suffix_audio_id', 'kb_no_result_audio_id',
-            'action_type', 'action_config',
-            'transfer_queue', 'transfer_audio_id',
-            'function_name', 'function_id',
-            'follow_up_intent_id', 'collect_input_config',
-            'priority', 'is_active'
-        ];
+			'intent_name', 'intent_type', 'description',
+			'trigger_phrases', 'trigger_keywords', 'confidence_threshold',
+			'response_text', 'response_audio_id', 'auto_regenerate',
+			'template_id',
+			'kb_search_query_template', 'kb_response_prefix_audio_id', 'kb_response_suffix_audio_id', 'kb_no_result_audio_id',
+			'action_type', 'action_config',
+			'transfer_queue', 'transfer_audio_id',
+			'function_name', 'function_id',
+			'follow_up_intent_id', 'flow_id', 'collect_input_config',
+			'priority', 'is_active'
+		];
         
         const jsonFields = ['trigger_phrases', 'trigger_keywords', 'action_config', 'collect_input_config'];
         const booleanFields = ['is_active', 'auto_regenerate'];
         
         // Foreign key fields - must be NULL instead of empty string
         const foreignKeyFields = [
-            'response_audio_id', 'template_id', 
-            'kb_response_prefix_audio_id', 'kb_response_suffix_audio_id', 'kb_no_result_audio_id',
-            'transfer_audio_id', 'function_id', 'follow_up_intent_id'
-        ];
+			'response_audio_id', 'template_id', 
+			'kb_response_prefix_audio_id', 'kb_response_suffix_audio_id', 'kb_no_result_audio_id',
+			'transfer_audio_id', 'function_id', 'follow_up_intent_id', 'flow_id'
+		];
         
         const fields = [];
         const values = [];

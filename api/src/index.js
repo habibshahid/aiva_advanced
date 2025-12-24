@@ -28,7 +28,13 @@ const feedbackRoutes = require('./routes/feedback');
 const tenantsRoutes = require('./routes/tenants');
 const audioRoutes = require('./routes/audio');
 const ivrRoutes = require('./routes/ivr');
+const internalRoutes = require('./routes/internal');
+const flowRoutes = require('./routes/flows');
+const segmentRoutes = require('./routes/segments');
+const templateRoutes = require('./routes/templates');
+const languageRoutes = require('./routes/languages');
 
+  
 const sessionCleanup = require('./jobs/session-cleanup');
 
 const app = express();
@@ -132,6 +138,11 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/tenants', tenantsRoutes);
 app.use('/api/ivr', ivrRoutes);
+app.use('/api/internal', internalRoutes);
+app.use('/api/flows', flowRoutes);         // NEW: /api/flows/:agentId
+app.use('/api/segments', segmentRoutes);   // NEW: /api/segments/:agentId
+app.use('/api/templates', templateRoutes); // NEW: /api/templates/:agentId
+app.use('/api/languages', languageRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {
