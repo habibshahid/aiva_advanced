@@ -13,7 +13,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-
+const db = require('../config/database');
 const router = express.Router();
 
 // Audio storage configuration - uses same base as AudioService
@@ -616,7 +616,7 @@ router.get('/:agentId/audio/:audioId', authenticate, verifyAgentAccess, async (r
 router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, async (req, res) => {
     try {
         const { 
-            audio_data,  // base64 encoded audio (MP3)
+            audio_data,
             name, 
             source_text,
             file_format,
@@ -627,7 +627,8 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
             step_id,
             flow_id,
             intent_id,
-            audio_field
+            audio_field,
+            update_i18n  // NEW: flag to update i18n table
         } = req.body;
         
         if (!audio_data) {
@@ -653,9 +654,10 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
             flowId: flow_id,
             intentId: intent_id,
             audioField: audio_field,
+            language: language,
+            updateI18n: update_i18n,
             size: fileSizeBytes,
-            format: format,
-            extension: extension
+            format: format
         });
         
         // Ensure audio directory exists
@@ -664,7 +666,7 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
             fs.mkdirSync(agentAudioPath, { recursive: true });
         }
         
-        // Generate unique filename with correct extension
+        // Generate unique filename
         const filename = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${extension}`;
         const filePath = path.join(agentAudioPath, filename);
         
@@ -682,7 +684,7 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
                 source_type: 'generated_auto',
                 source_text: source_text || '',
                 file_path: filePath,
-                file_format: format,  // Store actual format (mp3)
+                file_format: format,
                 file_size_bytes: fileSizeBytes,
                 duration_ms: duration_ms || 0,
                 tts_provider: tts_provider || null,
@@ -696,42 +698,68 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
         let stepUpdated = false;
         let intentUpdated = false;
         let flowUpdated = false;
+        let i18nUpdated = false;
         
-        // Update flow step if step_id provided
-        if (step_id && audio_field) {
+        // Determine entity info for i18n
+        const entityType = step_id ? 'step' : flow_id ? 'flow' : intent_id ? 'intent' : null;
+        const entityId = step_id || flow_id || intent_id;
+        const fieldName = audio_field?.replace('_audio_id', '_text') || 'prompt_text';
+        
+        // UPDATE I18N CONTENT FIRST (if flag is set and language provided)
+        if (update_i18n && language && entityType && entityId) {
             try {
-                await FlowService.updateStep(step_id, { 
-                    [audio_field]: audio.id 
-                });
-                stepUpdated = true;
-                console.log(`[IVR-CACHE-B64] Flow step updated: ${step_id} -> ${audio_field}=${audio.id}`);
-            } catch (stepErr) {
-                console.error('[IVR-CACHE-B64] Failed to update flow step:', stepErr.message);
+                const [result] = await db.query(`
+                    UPDATE yovo_tbl_aiva_ivr_i18n_content 
+                    SET audio_id = ?, updated_at = NOW()
+                    WHERE entity_type = ? 
+                      AND entity_id = ? 
+                      AND field_name = ? 
+                      AND language_code = ?
+                `, [audio.id, entityType, entityId, fieldName, language]);
+                
+                if (result.affectedRows > 0) {
+                    i18nUpdated = true;
+                    console.log(`[IVR-CACHE-B64] i18n content updated: ${entityType}/${entityId}/${fieldName}/${language} -> audio_id=${audio.id}`);
+                } else {
+                    console.log(`[IVR-CACHE-B64] No i18n record found for: ${entityType}/${entityId}/${fieldName}/${language}`);
+                }
+            } catch (i18nErr) {
+                console.error('[IVR-CACHE-B64] Failed to update i18n content:', i18nErr.message);
             }
         }
-        // Update flow (not step) if flow_id provided without step_id
-        else if (flow_id && audio_field && FLOW_AUDIO_FIELDS.includes(audio_field)) {
-            try {
-                await FlowService.updateFlow(flow_id, { 
-                    [audio_field]: audio.id 
-                });
-                flowUpdated = true;
-                console.log(`[IVR-CACHE-B64] Flow updated: ${flow_id} -> ${audio_field}=${audio.id}`);
-            } catch (flowErr) {
-                console.error('[IVR-CACHE-B64] Failed to update flow:', flowErr.message);
-            }
-        }
         
-        // Update intent if intent_id provided
-        if (intent_id && audio_field) {
-            try {
-                await IVRService.updateIntent(intent_id, { 
-                    [audio_field]: audio.id 
-                });
-                intentUpdated = true;
-                console.log(`[IVR-CACHE-B64] Intent updated: ${intent_id} -> ${audio_field}=${audio.id}`);
-            } catch (intentErr) {
-                console.error('[IVR-CACHE-B64] Failed to update intent:', intentErr.message);
+        // Update base tables only if i18n was NOT updated (fallback)
+        if (!i18nUpdated) {
+            // Update flow step if step_id provided
+            if (step_id && audio_field) {
+                try {
+                    await FlowService.updateStep(step_id, { [audio_field]: audio.id });
+                    stepUpdated = true;
+                    console.log(`[IVR-CACHE-B64] Flow step updated: ${step_id} -> ${audio_field}=${audio.id}`);
+                } catch (stepErr) {
+                    console.error('[IVR-CACHE-B64] Failed to update flow step:', stepErr.message);
+                }
+            }
+            // Update flow if flow_id provided without step_id
+            else if (flow_id && audio_field && FLOW_AUDIO_FIELDS.includes(audio_field)) {
+                try {
+                    await FlowService.updateFlow(flow_id, { [audio_field]: audio.id });
+                    flowUpdated = true;
+                    console.log(`[IVR-CACHE-B64] Flow updated: ${flow_id} -> ${audio_field}=${audio.id}`);
+                } catch (flowErr) {
+                    console.error('[IVR-CACHE-B64] Failed to update flow:', flowErr.message);
+                }
+            }
+            
+            // Update intent if intent_id provided
+            if (intent_id && audio_field) {
+                try {
+                    await IVRService.updateIntent(intent_id, { [audio_field]: audio.id });
+                    intentUpdated = true;
+                    console.log(`[IVR-CACHE-B64] Intent updated: ${intent_id} -> ${audio_field}=${audio.id}`);
+                } catch (intentErr) {
+                    console.error('[IVR-CACHE-B64] Failed to update intent:', intentErr.message);
+                }
             }
         }
         
@@ -742,7 +770,8 @@ router.post('/:agentId/audio/cache-base64', authenticate, verifyAgentAccess, asy
             file_format: format,
             step_updated: stepUpdated,
             flow_updated: flowUpdated,
-            intent_updated: intentUpdated
+            intent_updated: intentUpdated,
+            i18n_updated: i18nUpdated
         });
         
     } catch (error) {
@@ -907,7 +936,7 @@ router.post('/:agentId/audio/upload', authenticate, verifyAgentAccess, checkPerm
  */
 router.post('/:agentId/audio/generate', authenticate, verifyAgentAccess, checkPermission('agents.update'), async (req, res) => {
     try {
-        const { text, name, description, voice, language } = req.body;
+        const { text, name, description, voice, language, provider } = req.body;
         
         if (!text) {
             return res.status(400).json({ error: 'Text is required' });
@@ -922,9 +951,35 @@ router.post('/:agentId/audio/generate', authenticate, verifyAgentAccess, checkPe
         
         // Import AudioService for TTS
         const AudioService = require('../services/AudioService');
+        const LanguageService = require('../services/LanguageService');
         
-        const ttsProvider = config?.tts_provider || 'uplift';
-        const ttsVoice = voice || config?.tts_voice || 'ayesha';
+        // Determine TTS provider and voice
+        let ttsProvider = provider;
+        let ttsVoice = voice;
+        
+        // If voice/provider not specified but language is, lookup from agent languages
+        if ((!ttsVoice || !ttsProvider) && language) {
+            try {
+                const agentLangs = await LanguageService.getAgentLanguages(req.params.agentId);
+                const langConfig = agentLangs.find(l => l.language_code === language);
+                
+                if (langConfig) {
+                    if (!ttsVoice) {
+                        ttsVoice = langConfig.tts_voice_id || langConfig.tts_voice;
+                    }
+                    if (!ttsProvider) {
+                        ttsProvider = langConfig.tts_provider;
+                    }
+                    console.log(`[IVR-TTS] Using language config for ${language}: ${ttsProvider}/${ttsVoice}`);
+                }
+            } catch (langErr) {
+                console.warn('[IVR-TTS] Failed to lookup language config:', langErr.message);
+            }
+        }
+        
+        // Fallback to IVR config defaults
+        ttsProvider = ttsProvider || config?.tts_provider || 'uplift';
+        ttsVoice = ttsVoice || config?.tts_voice || 'ayesha';
         
         console.log(`[IVR-TTS] Generating audio: "${text.substring(0, 50)}..." (${ttsProvider}/${ttsVoice})`);
         
@@ -1914,6 +1969,222 @@ router.delete('/:agentId/cache', authenticate, verifyAgentAccess, checkPermissio
     } catch (error) {
         console.error('Clear cache error:', error);
         res.status(500).json({ error: 'Failed to clear cache' });
+    }
+});
+
+/**
+ * GET /api/ivr/:agentId/intents/:intentId/i18n
+ * Get all i18n content for an intent
+ */
+router.get('/:agentId/intents/:intentId/i18n', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const { intentId } = req.params;
+        
+        const [rows] = await db.query(`
+            SELECT * FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = 'intent' AND entity_id = ?
+        `, [intentId]);
+        
+        // Group by field and language
+        const content = {};
+        for (const row of rows) {
+            if (!content[row.field_name]) {
+                content[row.field_name] = {};
+            }
+            content[row.field_name][row.language_code] = {
+                text_content: row.text_content,
+                audio_id: row.audio_id,
+                audio_url: row.audio_url
+            };
+        }
+        
+        res.json({
+            success: true,
+            data: content
+        });
+    } catch (error) {
+        console.error('Get intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to get i18n content' });
+    }
+});
+
+/**
+ * PUT /api/ivr/:agentId/intents/:intentId/i18n/:fieldName/:languageCode
+ * Set i18n content for an intent field
+ */
+router.put('/:agentId/intents/:intentId/i18n/:fieldName/:languageCode', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const { agentId, intentId, fieldName, languageCode } = req.params;
+        const { text_content, audio_id, audio_url } = req.body;
+        
+        const id = require('uuid').v4();
+        
+        await db.query(`
+            INSERT INTO yovo_tbl_aiva_ivr_i18n_content 
+            (id, agent_id, entity_type, entity_id, field_name, language_code, text_content, audio_id, audio_url)
+            VALUES (?, ?, 'intent', ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                text_content = VALUES(text_content),
+                audio_id = VALUES(audio_id),
+                audio_url = VALUES(audio_url),
+                updated_at = NOW()
+        `, [
+            id,
+            agentId,
+            intentId,
+            fieldName,
+            languageCode,
+            text_content || null,
+            audio_id || null,
+            audio_url || null
+        ]);
+        
+        res.json({
+            success: true,
+            message: 'Content saved'
+        });
+    } catch (error) {
+        console.error('Set intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to set i18n content' });
+    }
+});
+
+/**
+ * DELETE /api/ivr/:agentId/intents/:intentId/i18n/:fieldName/:languageCode
+ * Delete i18n content for an intent field
+ */
+router.delete('/:agentId/intents/:intentId/i18n/:fieldName/:languageCode', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const { intentId, fieldName, languageCode } = req.params;
+        
+        await db.query(`
+            DELETE FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = 'intent' AND entity_id = ? AND field_name = ? AND language_code = ?
+        `, [intentId, fieldName, languageCode]);
+        
+        res.json({
+            success: true,
+            message: 'Content deleted'
+        });
+    } catch (error) {
+        console.error('Delete intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to delete i18n content' });
+    }
+});
+
+// ============================================================================
+// IVR CONFIG I18N ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/ivr/:agentId/config/i18n
+ * Get all i18n content for IVR config
+ */
+router.get('/:agentId/config/i18n', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const db = require('../config/database');
+        const { agentId } = req.params;
+        
+        // Get config to get its ID
+        const config = await IVRService.getConfig(agentId);
+        
+        if (!config) {
+            return res.json({ success: true, data: {} });
+        }
+        
+        const [rows] = await db.query(`
+            SELECT * FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = 'config' AND entity_id = ?
+        `, [config.id]);
+        
+        // Group by field and language
+        const content = {};
+        for (const row of rows) {
+            if (!content[row.field_name]) {
+                content[row.field_name] = {};
+            }
+            content[row.field_name][row.language_code] = {
+                text_content: row.text_content,
+                audio_id: row.audio_id,
+                audio_url: row.audio_url
+            };
+        }
+        
+        res.json({ success: true, data: content });
+    } catch (error) {
+        console.error('Get config i18n error:', error);
+        res.status(500).json({ error: 'Failed to get i18n content' });
+    }
+});
+
+/**
+ * PUT /api/ivr/:agentId/config/i18n/:fieldName/:languageCode
+ * Set i18n content for IVR config field
+ */
+router.put('/:agentId/config/i18n/:fieldName/:languageCode', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const db = require('../config/database');
+        const { agentId, fieldName, languageCode } = req.params;
+        const { text_content, audio_id, audio_url } = req.body;
+        
+        // Get or create config
+        let config = await IVRService.getConfig(agentId);
+        if (!config) {
+            config = await IVRService.createConfig(agentId, req.agent.tenant_id, {});
+        }
+        
+        const id = uuidv4();
+        
+        await db.query(`
+            INSERT INTO yovo_tbl_aiva_ivr_i18n_content 
+            (id, agent_id, entity_type, entity_id, field_name, language_code, text_content, audio_id, audio_url)
+            VALUES (?, ?, 'config', ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                text_content = VALUES(text_content),
+                audio_id = VALUES(audio_id),
+                audio_url = VALUES(audio_url),
+                updated_at = NOW()
+        `, [
+            id,
+            agentId,
+            config.id,
+            fieldName,
+            languageCode,
+            text_content || null,
+            audio_id || null,
+            audio_url || null
+        ]);
+        
+        res.json({ success: true, message: 'Content saved' });
+    } catch (error) {
+        console.error('Set config i18n error:', error);
+        res.status(500).json({ error: 'Failed to set i18n content' });
+    }
+});
+
+/**
+ * DELETE /api/ivr/:agentId/config/i18n/:fieldName/:languageCode
+ * Delete i18n content for IVR config field
+ */
+router.delete('/:agentId/config/i18n/:fieldName/:languageCode', authenticate, verifyAgentAccess, async (req, res) => {
+    try {
+        const db = require('../config/database');
+        const { agentId, fieldName, languageCode } = req.params;
+        
+        const config = await IVRService.getConfig(agentId);
+        if (!config) {
+            return res.status(404).json({ error: 'Config not found' });
+        }
+        
+        await db.query(`
+            DELETE FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = 'config' AND entity_id = ? AND field_name = ? AND language_code = ?
+        `, [config.id, fieldName, languageCode]);
+        
+        res.json({ success: true, message: 'Content deleted' });
+    } catch (error) {
+        console.error('Delete config i18n error:', error);
+        res.status(500).json({ error: 'Failed to delete i18n content' });
     }
 });
 

@@ -1093,6 +1093,20 @@ class ShopifyService {
           status: latestFulfillment.shipment_status || latestFulfillment.status
         };
       }
+	  let deliveredAt = null;
+      let shippedAt = null;
+      
+      if (latestFulfillment) {
+        // Shipped date is when fulfillment was created
+        shippedAt = latestFulfillment.created_at || null;
+        
+        // Delivery date is updated_at ONLY when status is 'delivered'
+        if (latestFulfillment.shipment_status === 'delivered') {
+          deliveredAt = latestFulfillment.updated_at || null;
+        }
+      }
+	  
+	  console.log(`📦 [ORDER LOOKUP] Dates - Shipped: ${shippedAt}, Delivered: ${deliveredAt}`);
 
       // ============================================
       // GET ORDER STATUS (Priority: Cancelled > Fulfillment > Financial)
@@ -1227,6 +1241,8 @@ class ShopifyService {
         financial_status: order.financial_status,
         fulfillment_status: order.fulfillment_status || 'unfulfilled',
         created_at: order.created_at,
+		shipped_at: shippedAt,
+        delivered_at: deliveredAt,
         total_price: order.total_price,
         subtotal_price: order.subtotal_price,
         total_shipping: order.total_shipping_price_set?.shop_money?.amount || '0.00',

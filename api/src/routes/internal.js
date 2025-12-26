@@ -67,6 +67,23 @@ router.get('/ivr/:agentId/audio/:audioId/stream', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/internal/i18n/:entityType/:entityId/:field/:language
+ */
+router.get('/i18n/:entityType/:entityId/:field/:language', async (req, res) => {
+    try {
+        const [rows] = await db.query(`
+            SELECT * FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = ? AND entity_id = ? AND field_name = ? AND language_code = ?
+        `, [req.params.entityType, req.params.entityId, req.params.field, req.params.language]);
+        
+        res.json({ success: true, data: rows[0] || null });
+    } catch (error) {
+        console.error('Get i18n content error:', error);
+        res.status(500).json({ error: 'Failed to get content' });
+    }
+});
+
 // Internal token verification
 const verifyInternalToken = (req, res, next) => {
     const token = req.headers['x-internal-token'] || req.headers['authorization']?.replace('Bearer ', '');
@@ -508,21 +525,246 @@ router.get('/i18n/:entityType/:entityId', async (req, res) => {
     }
 });
 
+// =============================================================================
+// INTENT I18N ENDPOINTS
+// =============================================================================
+
 /**
- * GET /api/internal/i18n/:entityType/:entityId/:field/:language
+ * @route GET /api/ivr/:agentId/intents/:intentId/i18n
+ * @desc Get all i18n content for an intent
  */
-router.get('/i18n/:entityType/:entityId/:field/:language', async (req, res) => {
+router.get('/:agentId/intents/:intentId/i18n', async (req, res) => {
     try {
-        const [rows] = await db.query(`
-            SELECT * FROM yovo_tbl_aiva_ivr_content_i18n
-            WHERE entity_type = ? AND entity_id = ? AND field_name = ? AND language_code = ?
-        `, [req.params.entityType, req.params.entityId, req.params.field, req.params.language]);
+        // Verify intent belongs to agent
+        const intent = await IVRService.getIntent(req.params.intentId);
         
-        res.json({ success: true, data: rows[0] || null });
+        if (!intent) {
+            return res.status(404).json({ error: 'Intent not found' });
+        }
+        
+        if (intent.agent_id !== req.params.agentId) {
+            return res.status(403).json({ error: 'Intent does not belong to this agent' });
+        }
+        
+        const content = await FlowService.getI18nContent('intent', req.params.intentId);
+        
+        res.json({
+            success: true,
+            data: content
+        });
     } catch (error) {
-        console.error('Get i18n content error:', error);
-        res.status(500).json({ error: 'Failed to get content' });
+        console.error('Get intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to get i18n content' });
     }
 });
+
+/**
+ * @route PUT /api/ivr/:agentId/intents/:intentId/i18n/:fieldName/:languageCode
+ * @desc Set i18n content for an intent field
+ */
+router.put('/:agentId/intents/:intentId/i18n/:fieldName/:languageCode', async (req, res) => {
+    try {
+        // Verify intent belongs to agent
+        const intent = await IVRService.getIntent(req.params.intentId);
+        
+        if (!intent) {
+            return res.status(404).json({ error: 'Intent not found' });
+        }
+        
+        if (intent.agent_id !== req.params.agentId) {
+            return res.status(403).json({ error: 'Intent does not belong to this agent' });
+        }
+        
+        // Validate field name
+        const allowedFields = [
+            'response_text',           // Main response text
+            'confirm_prompt_text',     // Confirmation prompt
+            'kb_prefix_text',          // KB response prefix
+            'kb_suffix_text',          // KB response suffix
+            'kb_no_result_text',       // KB no result message
+            'transfer_text',           // Transfer announcement
+            'collect_prompt_text'      // Collect input prompt
+        ];
+        
+        if (!allowedFields.includes(req.params.fieldName)) {
+            return res.status(400).json({ 
+                error: `Invalid field name. Allowed: ${allowedFields.join(', ')}` 
+            });
+        }
+        
+        await FlowService.setI18nContent(
+            req.params.agentId,
+            'intent',
+            req.params.intentId,
+            req.params.fieldName,
+            req.params.languageCode,
+            req.body
+        );
+        
+        res.json({
+            success: true,
+            message: 'Content saved'
+        });
+    } catch (error) {
+        console.error('Set intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to set i18n content' });
+    }
+});
+
+/**
+ * @route DELETE /api/ivr/:agentId/intents/:intentId/i18n/:fieldName/:languageCode
+ * @desc Delete i18n content for an intent field
+ */
+router.delete('/:agentId/intents/:intentId/i18n/:fieldName/:languageCode', async (req, res) => {
+    try {
+        // Verify intent belongs to agent
+        const intent = await IVRService.getIntent(req.params.intentId);
+        
+        if (!intent) {
+            return res.status(404).json({ error: 'Intent not found' });
+        }
+        
+        if (intent.agent_id !== req.params.agentId) {
+            return res.status(403).json({ error: 'Intent does not belong to this agent' });
+        }
+        
+        await FlowService.deleteI18nContent(
+            'intent',
+            req.params.intentId,
+            req.params.fieldName,
+            req.params.languageCode
+        );
+        
+        res.json({
+            success: true,
+            message: 'Content deleted'
+        });
+    } catch (error) {
+        console.error('Delete intent i18n error:', error);
+        res.status(500).json({ error: 'Failed to delete i18n content' });
+    }
+});
+
+// =============================================================================
+// CONFIG I18N ENDPOINTS
+// =============================================================================
+
+/**
+ * @route GET /api/ivr/:agentId/config/i18n
+ * @desc Get all i18n content for IVR config
+ */
+router.get('/:agentId/config/i18n', async (req, res) => {
+    try {
+        // Get config to verify it exists and get its ID
+        const config = await IVRService.getConfig(req.params.agentId);
+        
+        if (!config) {
+            // Return empty if no config exists yet
+            return res.json({
+                success: true,
+                data: {}
+            });
+        }
+        
+        const content = await FlowService.getI18nContent('config', config.id);
+        
+        res.json({
+            success: true,
+            data: content
+        });
+    } catch (error) {
+        console.error('Get config i18n error:', error);
+        res.status(500).json({ error: 'Failed to get i18n content' });
+    }
+});
+
+/**
+ * @route PUT /api/ivr/:agentId/config/i18n/:fieldName/:languageCode
+ * @desc Set i18n content for IVR config field
+ */
+router.put('/:agentId/config/i18n/:fieldName/:languageCode', async (req, res) => {
+    try {
+        // Get or create config
+        let config = await IVRService.getConfig(req.params.agentId);
+        
+        if (!config) {
+            // Create default config if it doesn't exist
+            config = await IVRService.createConfig(
+                req.params.agentId,
+                req.agent.tenant_id,
+                {}
+            );
+        }
+        
+        // Validate field name
+        const allowedFields = [
+            'greeting_text',           // Initial greeting
+            'closing_text',            // Goodbye message
+            'please_wait_text',        // Please wait / processing
+            'no_match_text',           // No intent matched
+            'error_text',              // General error message
+            'transfer_text',           // Transfer announcement
+            'fallback_text',           // Fallback response
+            'timeout_text',            // Timeout message
+            'retry_text'               // Retry prompt
+        ];
+        
+        if (!allowedFields.includes(req.params.fieldName)) {
+            return res.status(400).json({ 
+                error: `Invalid field name. Allowed: ${allowedFields.join(', ')}` 
+            });
+        }
+        
+        await FlowService.setI18nContent(
+            req.params.agentId,
+            'config',
+            config.id,
+            req.params.fieldName,
+            req.params.languageCode,
+            req.body
+        );
+        
+        res.json({
+            success: true,
+            message: 'Content saved'
+        });
+    } catch (error) {
+        console.error('Set config i18n error:', error);
+        res.status(500).json({ error: 'Failed to set i18n content' });
+    }
+});
+
+/**
+ * @route DELETE /api/ivr/:agentId/config/i18n/:fieldName/:languageCode
+ * @desc Delete i18n content for IVR config field
+ */
+router.delete('/:agentId/config/i18n/:fieldName/:languageCode', async (req, res) => {
+    try {
+        const config = await IVRService.getConfig(req.params.agentId);
+        
+        if (!config) {
+            return res.status(404).json({ error: 'Config not found' });
+        }
+        
+        await FlowService.deleteI18nContent(
+            'config',
+            config.id,
+            req.params.fieldName,
+            req.params.languageCode
+        );
+        
+        res.json({
+            success: true,
+            message: 'Content deleted'
+        });
+    } catch (error) {
+        console.error('Delete config i18n error:', error);
+        res.status(500).json({ error: 'Failed to delete i18n content' });
+    }
+});
+
+// ============================================================================
+// END OF I18N ENDPOINTS
+// ============================================================================
 
 module.exports = router;

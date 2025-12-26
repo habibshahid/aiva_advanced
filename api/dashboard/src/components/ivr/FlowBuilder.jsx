@@ -15,6 +15,7 @@ import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import toast from 'react-hot-toast';
 import * as ivrApi from '../../services/ivrApi';
 import { getFunctions } from '../../services/api';
+import { MultiLangAudioTextInput } from './multilang';
 
 const defaultFlowState = {
     flow_name: '',
@@ -323,6 +324,7 @@ const FlowBuilder = () => {
                         languages={languages}
                         audioFiles={audioFiles}
                         agentId={agentId}
+						flowId={flow?.id} 
                     />
                 )}
                 
@@ -336,6 +338,7 @@ const FlowBuilder = () => {
                         activeLang={activeLang}
                         languages={languages}
                         agentId={agentId}
+						flowId={flow?.id}
                     />
                 )}
             </div>
@@ -353,6 +356,7 @@ const FlowBuilder = () => {
                     agentId={agentId}
                     onSave={handleSaveStep}
                     onClose={() => setShowStepModal(false)}
+					flowId={flow?.id}
                 />
             )}
         </div>
@@ -534,7 +538,8 @@ const StepsTab = ({
 };
 
 // Settings Tab
-const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentId }) => {
+const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentId, flowId }) => {
+
     const [triggerInput, setTriggerInput] = useState('');
     const [cancelInput, setCancelInput] = useState('');
     
@@ -576,7 +581,7 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
                                 type="text"
                                 value={flow.flow_name || ''}
                                 onChange={(e) => onChange('flow_name', e.target.value)}
-                                placeholder="AC Installation Request"
+                                placeholder="Installation Request"
                                 className="w-full px-3 py-2 border rounded-lg"
                             />
                         </div>
@@ -653,24 +658,29 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
             </div>
             
             {/* Introduction Message */}
-            <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Introduction Message</h3>
-                <p className="text-sm text-gray-600 mb-4">
-                    Played when the flow starts (before first step)
-                </p>
-                
-                <AudioTextInput
-                    label="Intro Text"
-                    value={flow.intro_text || ''}
-                    onChange={(v) => onChange('intro_text', v)}
-                    audioId={flow.intro_audio_id}
-                    onAudioChange={(id) => onChange('intro_audio_id', id)}
-                    audioFiles={audioFiles}
-                    agentId={agentId}
-                    language={activeLang}
-                    placeholder="Sure, I'll help you with your AC installation..."
-                />
-            </div>
+			<div className="bg-white rounded-lg border p-6">
+				<h3 className="text-lg font-medium mb-4">Introduction Message</h3>
+				<p className="text-sm text-gray-600 mb-4">
+					Played when the flow starts (before first step)
+				</p>
+				
+				<MultiLangAudioTextInput
+					label="Intro Text"
+					entityType="flow"
+					entityId={flow.id}
+					fieldName="intro_text"
+					baseTextValue={flow.intro_text || ''}
+					baseAudioId={flow.intro_audio_id}
+					onBaseTextChange={(v) => onChange('intro_text', v)}
+					onBaseAudioChange={(id) => onChange('intro_audio_id', id)}
+					languages={languages}
+					defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+					audioFiles={audioFiles}
+					agentId={agentId}
+					placeholder="Sure, I'll help you with your AC installation..."
+					multiline={true}
+				/>
+			</div>
             
             {/* Cancel Handling (NEW) */}
             <div className="bg-white rounded-lg border p-6">
@@ -720,17 +730,22 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
                     </div>
                     
                     {/* Cancel Response */}
-                    <AudioTextInput
-                        label="Cancel Response"
-                        value={flow.on_cancel_response_text || ''}
-                        onChange={(v) => onChange('on_cancel_response_text', v)}
-                        audioId={flow.on_cancel_audio_id}
-                        onAudioChange={(id) => onChange('on_cancel_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="No problem, I've cancelled your request. Is there anything else I can help with?"
-                    />
+					<MultiLangAudioTextInput
+						label="Cancel Response"
+						entityType="flow"
+						entityId={flow.id}
+						fieldName="on_cancel_response_text"
+						baseTextValue={flow.on_cancel_response_text || ''}
+						baseAudioId={flow.on_cancel_audio_id}
+						onBaseTextChange={(v) => onChange('on_cancel_response_text', v)}
+						onBaseAudioChange={(id) => onChange('on_cancel_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="No problem, I've cancelled your request. Is there anything else I can help with?"
+						multiline={true}
+					/>
                     
                     {/* Cancel Action */}
                     <div>
@@ -787,17 +802,22 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
                         </div>
                     </div>
                     
-                    <AudioTextInput
-                        label="Timeout Message"
-                        value={flow.on_timeout_text || ''}
-                        onChange={(v) => onChange('on_timeout_text', v)}
-                        audioId={flow.on_timeout_audio_id}
-                        onAudioChange={(id) => onChange('on_timeout_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="I didn't hear a response. Let me repeat that..."
-                    />
+                    <MultiLangAudioTextInput
+						label="Timeout Message"
+						entityType="flow"
+						entityId={flow.id}
+						fieldName="on_timeout_text"
+						baseTextValue={flow.on_timeout_text || ''}
+						baseAudioId={flow.on_timeout_audio_id}
+						onBaseTextChange={(v) => onChange('on_timeout_text', v)}
+						onBaseAudioChange={(id) => onChange('on_timeout_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="I didn't hear a response. Let me repeat that..."
+						multiline={true}
+					/>
                     
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -824,17 +844,22 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
                 </p>
                 
                 <div className="space-y-4">
-                    <AudioTextInput
-                        label="Error Message"
-                        value={flow.on_error_text || ''}
-                        onChange={(v) => onChange('on_error_text', v)}
-                        audioId={flow.on_error_audio_id}
-                        onAudioChange={(id) => onChange('on_error_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="I'm sorry, something went wrong. Let me transfer you to an agent."
-                    />
+                    <MultiLangAudioTextInput
+						label="Error Message"
+						entityType="flow"
+						entityId={flow.id}
+						fieldName="on_error_text"
+						baseTextValue={flow.on_error_text || ''}
+						baseAudioId={flow.on_error_audio_id}
+						onBaseTextChange={(v) => onChange('on_error_text', v)}
+						onBaseAudioChange={(id) => onChange('on_error_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="I'm sorry, something went wrong. Let me transfer you to an agent."
+						multiline={true}
+					/>
                     
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -874,7 +899,8 @@ const SettingsTab = ({ flow, onChange, activeLang, languages, audioFiles, agentI
 };
 
 // Completion Tab
-const CompletionTab = ({ flow, onChange, functions, templates, audioFiles, activeLang, languages, agentId }) => {
+const CompletionTab = ({ flow, onChange, functions, templates, audioFiles, activeLang, languages, agentId, flowId }) => {
+
     return (
         <div className="max-w-2xl space-y-6">
             <div className="bg-white rounded-lg border p-6">
@@ -935,22 +961,26 @@ const CompletionTab = ({ flow, onChange, functions, templates, audioFiles, activ
                         </div>
                     )}
                     
-                    <AudioTextInput
-                        label="Completion Message"
-                        value={flow.on_complete_response_text || ''}
-                        onChange={(v) => onChange('on_complete_response_text', v)}
-                        audioId={flow.on_complete_audio_id}
-                        onAudioChange={(id) => onChange('on_complete_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="Your request has been submitted. Request ID is {{result.request_id}}"
-                        multiline
-                    />
+                    <MultiLangAudioTextInput
+						label="Completion Message"
+						entityType="flow"
+						entityId={flow.id}
+						fieldName="on_complete_response_text"
+						baseTextValue={flow.on_complete_response_text || ''}
+						baseAudioId={flow.on_complete_audio_id}
+						onBaseTextChange={(v) => onChange('on_complete_response_text', v)}
+						onBaseAudioChange={(id) => onChange('on_complete_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="Your request has been submitted. Request ID is {{result.request_id}}"
+						multiline={true}
+					/>
                 </div>
             </div>
             
-            <div className="bg-white rounded-lg border p-6">
+            {/*<div className="bg-white rounded-lg border p-6">
                 <h3 className="text-lg font-medium mb-4">WhatsApp Notification</h3>
                 
                 <label className="flex items-center gap-3 mb-4">
@@ -977,7 +1007,7 @@ const CompletionTab = ({ flow, onChange, functions, templates, audioFiles, activ
                         />
                     </div>
                 )}
-            </div>
+            </div>*/}
             
             <div className="bg-white rounded-lg border p-6">
                 <h3 className="text-lg font-medium mb-4">Anything Else & Closing</h3>
@@ -994,30 +1024,38 @@ const CompletionTab = ({ flow, onChange, functions, templates, audioFiles, activ
                     </label>
                     
                     {flow.ask_anything_else !== false && (
-                        <AudioTextInput
-                            label="Anything Else Text"
-                            value={flow.anything_else_text || ''}
-                            onChange={(v) => onChange('anything_else_text', v)}
-                            audioId={flow.anything_else_audio_id}
-                            onAudioChange={(id) => onChange('anything_else_audio_id', id)}
-                            audioFiles={audioFiles}
-                            agentId={agentId}
-                            language={activeLang}
-                            placeholder="Is there anything else I can help you with?"
-                        />
+                        <MultiLangAudioTextInput
+							label="Anything Else Text"
+							entityType="flow"
+							entityId={flow.id}
+							fieldName="anything_else_text"
+							baseTextValue={flow.anything_else_text || ''}
+							baseAudioId={flow.anything_else_audio_id}
+							onBaseTextChange={(v) => onChange('anything_else_text', v)}
+							onBaseAudioChange={(id) => onChange('anything_else_audio_id', id)}
+							languages={languages}
+							defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+							audioFiles={audioFiles}
+							agentId={agentId}
+							placeholder="Is there anything else I can help you with?"
+						/>
                     )}
                     
-                    <AudioTextInput
-                        label="Closing Message"
-                        value={flow.closing_text || ''}
-                        onChange={(v) => onChange('closing_text', v)}
-                        audioId={flow.closing_audio_id}
-                        onAudioChange={(id) => onChange('closing_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="Thank you for calling. Goodbye!"
-                    />
+                    <MultiLangAudioTextInput
+						label="Closing Message"
+						entityType="flow"
+						entityId={flow.id}
+						fieldName="closing_text"
+						baseTextValue={flow.closing_text || ''}
+						baseAudioId={flow.closing_audio_id}
+						onBaseTextChange={(v) => onChange('closing_text', v)}
+						onBaseAudioChange={(id) => onChange('closing_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="Thank you for calling. Goodbye!"
+					/>
                 </div>
             </div>
         </div>
@@ -1134,21 +1172,22 @@ const AudioTextInput = ({
 };
 
 // Step Modal (simplified for space - full version would include all fields)
-const StepModal = ({ step, steps, functions, templates, audioFiles, languages, activeLang, agentId, onSave, onClose }) => {
+const StepModal = ({ step, steps, functions, templates, audioFiles, languages, activeLang, agentId, onSave, onClose, flowId }) => {
     const [form, setForm] = useState({
-        step_key: step?.step_key || '',
-        step_name: step?.step_name || '',
-        step_type: step?.step_type || 'collect_slot',
-        prompt_text: step?.prompt_text || '',
-        prompt_audio_id: step?.prompt_audio_id || null,
-        slot_name: step?.slot_name || '',
-        slot_type: step?.slot_type || 'freeform',
-        requires_confirmation: step?.requires_confirmation || false,
-        confirm_template: step?.confirm_template || '',
-        next_step_key: step?.next_step_key || '',
-        is_terminal: step?.is_terminal || false,
-        ...step
-    });
+		step_key: step?.step_key || '',
+		step_name: step?.step_name || '',
+		step_type: step?.step_type || 'collect_slot',
+		prompt_text: step?.prompt_text || '',
+		prompt_audio_id: step?.prompt_audio_id || null,
+		slot_name: step?.slot_name || '',
+		slot_type: step?.slot_type || 'freeform',
+		requires_confirmation: step?.requires_confirmation || false,
+		confirm_template: step?.confirm_template || '',
+		confirm_audio_id: step?.confirm_audio_id || null,  // ADD THIS
+		next_step_key: step?.next_step_key || '',
+		is_terminal: step?.is_terminal || false,
+		...step
+	});
     
     const handleChange = (field, value) => {
         setForm(prev => ({ ...prev, [field]: value }));
@@ -1229,17 +1268,22 @@ const StepModal = ({ step, steps, functions, templates, audioFiles, languages, a
                         </select>
                     </div>
                     
-                    <AudioTextInput
-                        label="Prompt Text"
-                        value={form.prompt_text}
-                        onChange={(v) => handleChange('prompt_text', v)}
-                        audioId={form.prompt_audio_id}
-                        onAudioChange={(id) => handleChange('prompt_audio_id', id)}
-                        audioFiles={audioFiles}
-                        agentId={agentId}
-                        language={activeLang}
-                        placeholder="May I know your name please?"
-                    />
+                    <MultiLangAudioTextInput
+						label="Prompt Text"
+						entityType="step"
+						entityId={step?.id}
+						flowId={flowId}
+						fieldName="prompt_text"
+						baseTextValue={form.prompt_text}
+						baseAudioId={form.prompt_audio_id}
+						onBaseTextChange={(v) => handleChange('prompt_text', v)}
+						onBaseAudioChange={(id) => handleChange('prompt_audio_id', id)}
+						languages={languages}
+						defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+						audioFiles={audioFiles}
+						agentId={agentId}
+						placeholder="May I know your name please?"
+					/>
                     
                     {form.step_type === 'collect_slot' && (
                         <>
@@ -1283,19 +1327,26 @@ const StepModal = ({ step, steps, functions, templates, audioFiles, languages, a
                             </label>
                             
                             {form.requires_confirmation && (
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Confirmation Template
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={form.confirm_template}
-                                        onChange={(e) => handleChange('confirm_template', e.target.value)}
-                                        placeholder="The invoice number is {{invoice_no}}. Is that correct?"
-                                        className="w-full px-3 py-2 border rounded-lg"
-                                    />
-                                </div>
-                            )}
+								<>
+									<MultiLangAudioTextInput
+										label="Confirmation Prompt"
+										entityType="step"
+										entityId={step?.id}
+										flowId={flowId}
+										fieldName="confirm_template"
+										baseTextValue={form.confirm_template || ''}
+										baseAudioId={form.confirm_audio_id}
+										onBaseTextChange={(v) => handleChange('confirm_template', v)}
+										onBaseAudioChange={(id) => handleChange('confirm_audio_id', id)}
+										languages={languages}
+										defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+										audioFiles={audioFiles}
+										agentId={agentId}
+										placeholder="You said {{slot_name}} is {{value}}. Is that correct?"
+										helpText="Use {{value}}, {{slot_name}}, or the actual slot name like {{invoice_no}}"
+									/>
+								</>
+							)}
                         </>
                     )}
                     

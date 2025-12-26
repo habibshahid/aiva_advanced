@@ -481,7 +481,7 @@ class FlowService {
         const id = uuidv4();
         
         await db.query(`
-            INSERT INTO yovo_tbl_aiva_ivr_content_i18n 
+            INSERT INTO yovo_tbl_aiva_ivr_i18n_content 
             (id, agent_id, entity_type, entity_id, field_name, language_code, text_content, audio_id, template_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
@@ -506,7 +506,7 @@ class FlowService {
      */
     static async getI18nContent(entityType, entityId) {
         const [rows] = await db.query(`
-            SELECT * FROM yovo_tbl_aiva_ivr_content_i18n
+            SELECT * FROM yovo_tbl_aiva_ivr_i18n_content
             WHERE entity_type = ? AND entity_id = ?
         `, [entityType, entityId]);
         
@@ -530,7 +530,7 @@ class FlowService {
      * Delete i18n content
      */
     static async deleteI18nContent(entityType, entityId, fieldName = null, languageCode = null) {
-        let query = `DELETE FROM yovo_tbl_aiva_ivr_content_i18n WHERE entity_type = ? AND entity_id = ?`;
+        let query = `DELETE FROM yovo_tbl_aiva_ivr_i18n_content WHERE entity_type = ? AND entity_id = ?`;
         const params = [entityType, entityId];
         
         if (fieldName) {

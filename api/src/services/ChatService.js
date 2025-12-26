@@ -446,7 +446,11 @@ class ChatService {
 		
         if (sessionId) {
             session = await this.getSession(sessionId);
-            if (!session) {
+            if (!session || session.status === 'ended') {
+				if (session?.status === 'ended') {
+					console.log(`⚠️ Session ${sessionId} is ended - creating new session`);
+				}
+				
 				agent = await AgentService.getAgent(agentId);
 				if (!agent) {
 					throw new Error('Agent not found');
@@ -986,12 +990,12 @@ class ChatService {
 1. If result contains any ID/number (ticket_number, order_number, etc.), your response MUST include it
 2. Keep response SHORT and DIRECT - no extra commentary
 3. Do NOT describe/acknowledge images or thank for sharing pictures
-4. Match customer's language (English or Roman Urdu)
+4. Match customer's language (English or Roman Urdu). Must respond in the same language
 5. Do NOT set function_call_needed=true
 
 IMPORTANT: If result has success=true with a ticket_number or reference number, respond with ONLY:
-- English: "Your ticket number is [NUMBER]. Our team will contact you as soon as possible."
-- Urdu: "Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
+- English: "We apologize for the inconvenience. Your concern has been noted. Here is your ticket number: [Ticket Number]. Our team will contact you shortly."
+- Urdu: "Hum mazarat khuwan hain ap ki is pareshani ki waja say. Ap ka concern note kar leya gya hai. Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
 
 Respond in valid JSON format.`
 										}
@@ -2230,12 +2234,12 @@ Respond in valid JSON format.`
 RESPONSE INSTRUCTIONS:
 1. If result contains any ID/number (ticket_number, order_number, etc.), your response MUST include it
 2. Keep response SHORT and DIRECT - no extra commentary
-3. Match customer's language (English or Roman Urdu)
+3. Match customer's language (English or Roman Urdu). Must respond in the same language
 4. Do NOT set function_call_needed=true
 
 IMPORTANT: If result has success=true with a ticket_number:
-- English: "Your ticket number is [NUMBER]. Our team will contact you as soon as possible."
-- Urdu: "Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
+- English: "We apologize for the inconvenience. Your concern has been noted. Here is your ticket number: [Ticket Number]. Our team will contact you shortly."
+- Urdu: "Hum mazarat khuwan hai ap ki is pareshani ki waja say. Ap ka concern note kar leya gya hai. Aapka ticket number [NUMBER] hai. Humari team jald az jald aap se contact karegi."
 
 Respond in valid JSON format.`
 }
@@ -3119,7 +3123,6 @@ RULES:
 ============================================================
 `;
 
-systemPrompt = dateHeader + stayInRoleInstructions + systemPrompt;
 
 		// ============================================
 		// 📱 CHANNEL CONTEXT INJECTION
@@ -3185,6 +3188,7 @@ systemPrompt = dateHeader + stayInRoleInstructions + systemPrompt;
 		}
 		
 		systemPrompt += channelContextPrompt;
+		systemPrompt += stayInRoleInstructions;
 		systemPrompt += this._getDateValidationInstructions();
 		
 		const searchMode = agent?.knowledge_search_mode || 'auto';
@@ -5090,7 +5094,21 @@ Adapt based on context and user behavior.
                         month: 'long',
                         day: 'numeric'
                     }),
-                    
+                    // ADD THESE NEW FIELDS:
+                    shipped_date: order.shipped_at 
+                        ? new Date(order.shipped_at).toLocaleDateString('en-PK', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                        })
+                        : null,
+                    delivery_date: order.delivered_at 
+                        ? new Date(order.delivered_at).toLocaleDateString('en-PK', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                        })
+                        : null,
                     // Shipping
                     shipping_address: addressString,
                     shipping_city: order.shipping_address?.city,
@@ -5125,38 +5143,51 @@ FORMAT YOUR RESPONSE BASED ON ORDER STATUS:
 - NEVER mix languages or default to one language
 
 ====================================================================
+📅 DATE FIELDS EXPLAINED (USE THESE EXACTLY - DO NOT MAKE UP DATES):
+====================================================================
+- order_date: When order was PLACED (e.g., "November 25, 2025")
+- shipped_date: When order was DISPATCHED (may be null if not shipped yet)
+- delivery_date: When order was DELIVERED (may be null if not delivered yet)
+
+⚠️ NEVER invent or guess dates! Use ONLY what is provided above.
+⚠️ If delivery_date is null, do NOT say a delivery date - say "not delivered yet"
+
+====================================================================
 IF STATUS = "processing" (Order not yet dispatched):
 ====================================================================
 - Tell customer their order is confirmed and being prepared
+- order_date is available, shipped_date and delivery_date are NULL
 - If customer asks about tracking:
   * English: "Your order has not been dispatched yet. Once dispatched, you'll receive the tracking number via email/SMS."
   * Urdu: "Aapka order abhi dispatch nahi hua. Jaise hi dispatch hoga, aapko tracking number mil jayega."
 - DO NOT say "tracking number not found" or "could not find tracking"
-- Reassure them the order is being processed
-
-Example response structure (use customer's language):
-- Order Number: [number]
-- Order Date: [date]
-- Expected Delivery: [based on policy - 3-5 working days from order date]
-- Status: Being prepared for dispatch
-- Note: Tracking will be shared once dispatched
 
 ====================================================================
 IF STATUS = "shipped" / "in_transit" / "out_for_delivery":
 ====================================================================
-Example response structure (use customer's language):
-- Order Number: [number]
-- Order Date: [date]
-- Status: Shipped/In Transit/Out for Delivery
-- Courier: [company]
-- Tracking ID: [number]
-- Track Here: [url]
+- Use shipped_date for when it was dispatched
+- delivery_date will be NULL (not delivered yet)
+- Format:
+  * Order Number: [number]
+  * Order Date: [order_date]
+  * Shipped Date: [shipped_date]
+  * Status: In Transit
+  * Courier: [company]
+  * Tracking ID: [number]
+  * Track Here: [url]
 
 ====================================================================
 IF STATUS = "delivered":
 ====================================================================
-- Confirm delivery
+- Use delivery_date for when it was delivered (this comes from system data)
+- Example: "Your order was delivered on [delivery_date]"
 - Ask if they need any help with the product
+
+FORMAT:
+  * Order Number: [number]
+  * Order Date: [order_date]  
+  * Delivered On: [delivery_date]   ← USE THIS EXACT FIELD
+  * Status: Delivered
 
 ====================================================================
 IF STATUS = "cancelled":
@@ -5172,8 +5203,9 @@ GENERAL RULES:
 2. NEVER say "I don't have the tracking number" for processing orders
    → Instead: "Tracking will be available after dispatch"
 3. Always include Order Status URL if available
-4. Include expected delivery date based on order date + 3-5 working days
+4. For orders not yet delivered, calculate expected delivery as order_date + 3-5 working days
 5. Be reassuring and helpful
+6. ⚠️ CRITICAL: NEVER MAKE UP DATES - Use ONLY order_date, shipped_date, delivery_date provided
 `,
                 message: result.message
             };

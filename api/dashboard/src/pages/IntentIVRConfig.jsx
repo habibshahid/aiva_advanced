@@ -1,6 +1,12 @@
 /**
  * Intent IVR Configuration Page
  * Configure intents, audio files, templates, and caching for Intent-based IVR
+ * 
+ * MULTI-LANGUAGE SUPPORT:
+ * - Greeting message (greeting_text)
+ * - No-match fallback (no_match_text)
+ * - KB not found fallback (fallback_text)
+ * - Intent responses (response_text)
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -15,6 +21,7 @@ import {
 import toast from 'react-hot-toast';
 import { getAgent } from '../services/api';
 import * as ivrApi from '../services/ivrApi';
+import { MultiLangAudioTextInput } from '../components/ivr/multilang';
 
 // Intent type options
 const INTENT_TYPES = [
@@ -39,6 +46,7 @@ const IntentIVRConfig = () => {
   const [audioFiles, setAudioFiles] = useState([]);
   const [cacheStats, setCacheStats] = useState(null);
   const [flows, setFlows] = useState([]);
+  const [languages, setLanguages] = useState([]);
   
   // UI state
   const [activeTab, setActiveTab] = useState('intents');
@@ -72,19 +80,21 @@ const IntentIVRConfig = () => {
     try {
       setLoading(true);
       
-      const [agentRes, configRes, intentsRes, audioRes, cacheRes] = await Promise.all([
-        getAgent(agentId),
-        ivrApi.getIVRConfig(agentId),
-        ivrApi.getIntents(agentId, true),
-        ivrApi.getAudioFiles(agentId),
-        ivrApi.getCacheStats(agentId)
-      ]);
+      const [agentRes, configRes, intentsRes, audioRes, cacheRes, langRes] = await Promise.all([
+		getAgent(agentId),
+		ivrApi.getIVRConfig(agentId),
+		ivrApi.getIntents(agentId, true),
+		ivrApi.getAudioFiles(agentId),
+		ivrApi.getCacheStats(agentId),
+		ivrApi.getAgentLanguages(agentId)
+	  ]);
       
       setAgent(agentRes.data.agent);
       setConfig(configRes.data);
       setIntents(intentsRes.data || []);
 	  setAudioFiles(audioRes.data || []);
       setCacheStats(cacheRes.data);
+	  setLanguages(langRes.data || []);
       
     } catch (error) {
       console.error('Failed to load IVR config:', error);
@@ -190,13 +200,14 @@ const IntentIVRConfig = () => {
       </div>
       
       {/* Tab Content */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="mt-6">
         {activeTab === 'intents' && (
           <IntentsTab 
             agentId={agentId}
             intents={intents}
             audioFiles={audioFiles}
-			flows={flows}
+            flows={flows}
+            languages={languages}
             onRefresh={loadData}
             onPlayAudio={handlePlayAudio}
             playingAudio={playingAudio}
@@ -207,7 +218,6 @@ const IntentIVRConfig = () => {
           <AudioTab 
             agentId={agentId}
             audioFiles={audioFiles}
-            config={config}
             onRefresh={loadData}
             onPlayAudio={handlePlayAudio}
             playingAudio={playingAudio}
@@ -227,6 +237,8 @@ const IntentIVRConfig = () => {
             config={config}
             audioFiles={audioFiles}
             onChange={setConfig}
+            languages={languages}
+            agentId={agentId}
           />
         )}
       </div>
@@ -238,7 +250,8 @@ const IntentIVRConfig = () => {
 // INTENTS TAB
 // =============================================================================
 
-const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudio, playingAudio }) => {
+const IntentsTab = ({ agentId, intents, audioFiles, flows, languages, onRefresh, onPlayAudio, playingAudio }) => {
+
   const [showModal, setShowModal] = useState(false);
   const [editingIntent, setEditingIntent] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -343,14 +356,14 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
       setShowModal(false);
       onRefresh();
     } catch (error) {
-      toast.error('Failed to save intent');
+      toast.error(error.response?.data?.error || 'Failed to save intent');
     } finally {
       setSaving(false);
     }
   };
   
   const handleDelete = async (intentId) => {
-    if (!window.confirm('Are you sure you want to delete this intent?')) return;
+    if (!window.confirm('Delete this intent?')) return;
     
     try {
       setDeleting(intentId);
@@ -366,17 +379,25 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
   
   const handleGenerateAudio = async (intent) => {
     if (!intent.response_text) {
-      toast.error('Intent has no response text');
+      toast.error('No response text to generate audio from');
       return;
     }
     
     try {
-      toast.loading('Generating audio...', { id: 'gen-audio' });
-      await ivrApi.generateIntentAudio(agentId, intent.id);
-      toast.success('Audio generated', { id: 'gen-audio' });
-      onRefresh();
+      setGeneratingAudio(true);
+      const result = await ivrApi.generateTTS(agentId, intent.response_text);
+      
+      if (result.data?.id) {
+        await ivrApi.updateIntent(agentId, intent.id, {
+          response_audio_id: result.data.id
+        });
+        toast.success('Audio generated and saved');
+        onRefresh();
+      }
     } catch (error) {
-      toast.error('Failed to generate audio', { id: 'gen-audio' });
+      toast.error('Failed to generate audio');
+    } finally {
+      setGeneratingAudio(false);
     }
   };
   
@@ -385,23 +406,22 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
   };
   
   const updateTriggerPhrase = (index, value) => {
-    const phrases = [...form.trigger_phrases];
-    phrases[index] = value;
-    setForm({ ...form, trigger_phrases: phrases });
+    const updated = [...form.trigger_phrases];
+    updated[index] = value;
+    setForm({ ...form, trigger_phrases: updated });
   };
   
   const removeTriggerPhrase = (index) => {
-    const phrases = form.trigger_phrases.filter((_, i) => i !== index);
-    setForm({ ...form, trigger_phrases: phrases.length ? phrases : [''] });
+    const updated = form.trigger_phrases.filter((_, i) => i !== index);
+    setForm({ ...form, trigger_phrases: updated.length ? updated : [''] });
   };
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Intents</h2>
-          <p className="text-sm text-gray-500">Define trigger phrases and responses for your IVR</p>
+          <h2 className="text-lg font-medium text-gray-900">Intent Configuration</h2>
+          <p className="text-sm text-gray-500">Define intents and their responses</p>
         </div>
         <button
           onClick={() => openModal()}
@@ -412,35 +432,35 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
         </button>
       </div>
       
-      {/* Intent List */}
+      {/* Intents List */}
       {intents.length === 0 ? (
         <div className="text-center py-12 bg-gray-50 rounded-lg">
           <MessageSquare className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No intents yet</h3>
-          <p className="text-gray-500 mb-4">Create your first intent to get started</p>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No Intents</h3>
+          <p className="text-gray-500 mb-4">Create intents to handle caller requests</p>
           <button
             onClick={() => openModal()}
             className="inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
           >
             <Plus className="w-4 h-4 mr-2" />
-            Add Intent
+            Add First Intent
           </button>
         </div>
       ) : (
         <div className="space-y-3">
-          {intents.map((intent) => (
-            <div
+          {intents.map(intent => (
+            <div 
               key={intent.id}
-              className={`border rounded-lg p-4 ${intent.is_active ? 'bg-white' : 'bg-gray-50 opacity-60'}`}
+              className={`bg-white rounded-lg border p-4 ${!intent.is_active ? 'opacity-60' : ''}`}
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-2">
                     <h3 className="font-medium text-gray-900">{intent.intent_name}</h3>
                     <span className={`px-2 py-0.5 text-xs rounded-full ${
                       intent.intent_type === 'static' ? 'bg-blue-100 text-blue-700' :
                       intent.intent_type === 'kb_lookup' ? 'bg-purple-100 text-purple-700' :
-                      intent.intent_type === 'function_call' ? 'bg-orange-100 text-orange-700' :
+                      intent.intent_type === 'function_call' ? 'bg-yellow-100 text-yellow-700' :
                       intent.intent_type === 'transfer' ? 'bg-red-100 text-red-700' :
                       'bg-gray-100 text-gray-700'
                     }`}>
@@ -664,91 +684,50 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
                 </div>
                 
                 {/* Response Text */}
-                {form.intent_type === 'static' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Response Text
-                    </label>
-                    <textarea
-                      value={form.response_text}
-                      onChange={(e) => setForm({ ...form, response_text: e.target.value })}
-                      rows={3}
-                      className="w-full border rounded-lg px-3 py-2"
-                      placeholder="السلام علیکم! میں آپ کی کیا مدد کر سکتا ہوں؟"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      This text will be converted to speech or you can upload pre-recorded audio
-                    </p>
-                  </div>
-                )}
+				{form.intent_type === 'static' && (
+				  <div>
+					<MultiLangAudioTextInput
+					  label="Response Text"
+					  entityType="intent"
+					  entityId={editingIntent?.id}
+					  fieldName="response_text"
+					  baseTextValue={form.response_text}
+					  baseAudioId={form.response_audio_id}
+					  onBaseTextChange={(v) => setForm({ ...form, response_text: v })}
+					  onBaseAudioChange={(id) => setForm({ ...form, response_audio_id: id })}
+					  languages={languages}
+					  defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+					  audioFiles={audioFiles}
+					  agentId={agentId}
+					  placeholder="السلام علیکم! میں آپ کی کیا مدد کر سکتا ہوں؟"
+					  multiline={true}
+					/>
+					<p className="text-xs text-gray-500 mt-1">
+					  This text will be converted to speech or you can upload pre-recorded audio
+					</p>
+				  </div>
+				)}
                 
-                {/* Audio File Selection + Generate Button */}
-                {form.intent_type !== 'kb_lookup' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Audio File
-                    </label>
-                    <div className="flex gap-2">
-                      <select
-                        value={form.response_audio_id}
-                        onChange={(e) => setForm({ ...form, response_audio_id: e.target.value })}
-                        className="flex-1 border rounded-lg px-3 py-2"
-                      >
-                        <option value="">Select audio file...</option>
-                        {audioFiles.map(audio => (
-                          <option key={audio.id} value={audio.id}>
-                            {audio.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (!form.response_text) {
-                            toast.error('Enter response text first');
-                            return;
-                          }
-                          setGeneratingAudio(true);
-                          try {
-                            const res = await ivrApi.generateAudio(agentId, {
-                              text: form.response_text,
-                              name: `Intent: ${form.intent_name || 'New'}`,
-                              description: `Generated for intent "${form.intent_name}"`
-                            });
-                            if (res.data?.success) {
-                              toast.success('Audio generated');
-                              // Refresh audio files and select the new one
-                              const audioRes = await ivrApi.getAudioFiles(agentId);
-                              setAudioFiles(audioRes.data.data || []);
-                              setForm({ ...form, response_audio_id: res.data.data.id });
-                            }
-                          } catch (error) {
-                            toast.error('Failed to generate audio');
-                          } finally {
-                            setGeneratingAudio(false);
-                          }
-                        }}
-                        disabled={generatingAudio || !form.response_text}
-                        className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-2"
-                      >
-                        {generatingAudio ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            Generating...
-                          </>
-                        ) : (
-                          <>
-                            <Volume2 className="w-4 h-4" />
-                            Generate
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Select existing audio or generate from response text
-                    </p>
-                  </div>
-                )}
+                {/* Audio File Selection - Only for kb_lookup (response_text MultiLang handles audio for static) */}
+				{form.intent_type === 'kb_lookup' && (
+				  <div>
+					<label className="block text-sm font-medium text-gray-700 mb-1">
+					  Response Audio File (Optional)
+					</label>
+					<select
+					  value={form.response_audio_id || ''}
+					  onChange={(e) => setForm({ ...form, response_audio_id: e.target.value || null })}
+					  className="w-full border rounded-lg px-3 py-2"
+					>
+					  <option value="">None - Use generated TTS</option>
+					  {audioFiles.map(audio => (
+						<option key={audio.id} value={audio.id}>
+						  {audio.name}
+						</option>
+					  ))}
+					</select>
+				  </div>
+				)}
                 
                 {/* KB Search Query for kb_lookup */}
                 {form.intent_type === 'kb_lookup' && (
@@ -883,7 +862,7 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
                     className="h-4 w-4 text-primary-600 rounded"
                   />
                   <label htmlFor="is_active" className="ml-2 text-sm text-gray-700">
-                    Intent is active
+                    Active (enable matching)
                   </label>
                 </div>
               </div>
@@ -891,7 +870,7 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
               <div className="sticky bottom-0 bg-gray-50 px-6 py-4 border-t flex justify-end space-x-3">
                 <button
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+                  className="px-4 py-2 text-gray-700 bg-white border rounded-lg hover:bg-gray-50"
                 >
                   Cancel
                 </button>
@@ -900,7 +879,7 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
                   disabled={saving}
                   className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : (editingIntent ? 'Update' : 'Create')}
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : (editingIntent ? 'Update' : 'Create')}
                 </button>
               </div>
             </div>
@@ -915,72 +894,30 @@ const IntentsTab = ({ agentId, intents, audioFiles, flows, onRefresh, onPlayAudi
 // AUDIO TAB
 // =============================================================================
 
-const AudioTab = ({ agentId, audioFiles, config, onRefresh, onPlayAudio, playingAudio }) => {
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showGenerateModal, setShowGenerateModal] = useState(false);
+const AudioTab = ({ agentId, audioFiles, onRefresh, onPlayAudio, playingAudio }) => {
   const [uploading, setUploading] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [deleting, setDeleting] = useState(null);
-  const [filter, setFilter] = useState('all');
-  
-  const [uploadForm, setUploadForm] = useState({
-    name: '',
-    description: '',
-    language: 'ur',
-    file: null
-  });
-  
-  const [generateForm, setGenerateForm] = useState({
-    name: '',
-    text: '',
-    description: '',
-    language: 'ur'
-  });
-  
-  const handleUpload = async () => {
-    if (!uploadForm.name || !uploadForm.file) {
-      toast.error('Name and file are required');
-      return;
-    }
+  const [generating, setGenerating] = useState(false);
+  const [ttsText, setTtsText] = useState('');
+  const [ttsName, setTtsName] = useState('');
+  const fileInputRef = useRef(null);
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     
     try {
       setUploading(true);
-      
-      const formData = new FormData();
-      formData.append('audio', uploadForm.file);
-      formData.append('name', uploadForm.name);
-      formData.append('description', uploadForm.description);
-      formData.append('language', uploadForm.language);
-      
-      await ivrApi.uploadAudio(agentId, formData);
+      await ivrApi.uploadAudio(agentId, file);
       toast.success('Audio uploaded');
-      setShowUploadModal(false);
-      setUploadForm({ name: '', description: '', language: 'ur', file: null });
       onRefresh();
     } catch (error) {
       toast.error('Failed to upload audio');
     } finally {
       setUploading(false);
-    }
-  };
-  
-  const handleGenerate = async () => {
-    if (!generateForm.name || !generateForm.text) {
-      toast.error('Name and text are required');
-      return;
-    }
-    
-    try {
-      setGenerating(true);
-      await ivrApi.generateAudio(agentId, generateForm);
-      toast.success('Audio generated');
-      setShowGenerateModal(false);
-      setGenerateForm({ name: '', text: '', description: '', language: 'ur' });
-      onRefresh();
-    } catch (error) {
-      toast.error('Failed to generate audio');
-    } finally {
-      setGenerating(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
   
@@ -999,250 +936,140 @@ const AudioTab = ({ agentId, audioFiles, config, onRefresh, onPlayAudio, playing
     }
   };
   
-  const filteredAudio = filter === 'all' 
-    ? audioFiles 
-    : audioFiles.filter(a => a.source_type === filter);
+  const handleGenerateTTS = async () => {
+    if (!ttsText.trim()) {
+      toast.error('Enter text to generate');
+      return;
+    }
+    
+    try {
+      setGenerating(true);
+      await ivrApi.generateTTS(agentId, { text: ttsText, name: ttsName || 'Generated Audio' });
+      toast.success('Audio generated');
+      setTtsText('');
+      setTtsName('');
+      onRefresh();
+    } catch (error) {
+      toast.error('Failed to generate audio');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Audio Library</h2>
-          <p className="text-sm text-gray-500">Manage pre-recorded and generated audio files</p>
+    <div className="space-y-6">
+      {/* Upload & Generate */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Upload */}
+        <div className="bg-gray-50 rounded-lg p-6 border-2 border-dashed">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <div className="text-center">
+            <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Upload Audio</h3>
+            <p className="text-sm text-gray-500 mb-4">MP3, WAV, or other audio formats</p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+            >
+              {uploading ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4 mr-2" />
+              )}
+              Select File
+            </button>
+          </div>
         </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload
-          </button>
-          <button
-            onClick={() => setShowGenerateModal(true)}
-            className="inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-          >
-            <Volume2 className="w-4 h-4 mr-2" />
-            Generate
-          </button>
+        
+        {/* Generate TTS */}
+        <div className="bg-gray-50 rounded-lg p-6 border">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Generate from Text</h3>
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={ttsName}
+              onChange={(e) => setTtsName(e.target.value)}
+              placeholder="Audio name (optional)"
+              className="w-full border rounded-lg px-3 py-2"
+            />
+            <textarea
+              value={ttsText}
+              onChange={(e) => setTtsText(e.target.value)}
+              placeholder="Enter text to convert to speech..."
+              rows={3}
+              className="w-full border rounded-lg px-3 py-2"
+            />
+            <button
+              onClick={handleGenerateTTS}
+              disabled={generating || !ttsText.trim()}
+              className="w-full inline-flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              {generating ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Mic className="w-4 h-4 mr-2" />
+              )}
+              Generate Audio
+            </button>
+          </div>
         </div>
-      </div>
-      
-      {/* Filter */}
-      <div className="flex space-x-2 mb-4">
-        {['all', 'uploaded', 'generated_dashboard', 'generated_auto'].map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-3 py-1 text-sm rounded-full ${
-              filter === f
-                ? 'bg-primary-100 text-primary-700'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {f === 'all' ? 'All' : f.replace('_', ' ')}
-          </button>
-        ))}
       </div>
       
       {/* Audio List */}
-      {filteredAudio.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 rounded-lg">
-          <FileAudio className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No audio files</h3>
-          <p className="text-gray-500">Upload or generate audio files for your IVR</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredAudio.map(audio => (
-            <div key={audio.id} className="border rounded-lg p-4 hover:border-gray-300">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-medium text-gray-900 truncate">{audio.name}</h3>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {audio.source_type} • {audio.duration_ms ? `${(audio.duration_ms / 1000).toFixed(1)}s` : 'N/A'}
-                  </p>
-                  {audio.source_text && (
-                    <p className="text-xs text-gray-600 mt-2 line-clamp-2">{audio.source_text}</p>
-                  )}
-                </div>
-                
-                <div className="flex items-center space-x-1 ml-2">
-                  <button
-                    onClick={() => onPlayAudio(audio.id)}
-                    className="p-2 hover:bg-gray-100 rounded-lg"
-                  >
-                    {playingAudio === audio.id ? (
-                      <Pause className="w-4 h-4 text-primary-600" />
-                    ) : (
-                      <Play className="w-4 h-4 text-gray-600" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(audio.id)}
-                    disabled={deleting === audio.id}
-                    className="p-2 hover:bg-red-50 rounded-lg"
-                  >
-                    {deleting === audio.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-red-600" />
-                    ) : (
-                      <Trash2 className="w-4 h-4 text-red-600" />
-                    )}
-                  </button>
-                </div>
-              </div>
-              
-              <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
-                <span>Used {audio.usage_count || 0} times</span>
-                <span className="px-2 py-0.5 bg-gray-100 rounded">{audio.language}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      
-      {/* Upload Modal */}
-      {showUploadModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4">
-            <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowUploadModal(false)} />
-            
-            <div className="relative bg-white rounded-lg max-w-md w-full p-6">
-              <h3 className="text-lg font-semibold mb-4">Upload Audio</h3>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-                  <input
-                    type="text"
-                    value={uploadForm.name}
-                    onChange={(e) => setUploadForm({ ...uploadForm, name: e.target.value })}
-                    className="w-full border rounded-lg px-3 py-2"
-                    placeholder="e.g., Greeting Message"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">File *</label>
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={(e) => setUploadForm({ ...uploadForm, file: e.target.files[0] })}
-                    className="w-full border rounded-lg px-3 py-2"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Language</label>
-                  <select
-                    value={uploadForm.language}
-                    onChange={(e) => setUploadForm({ ...uploadForm, language: e.target.value })}
-                    className="w-full border rounded-lg px-3 py-2"
-                  >
-                    <option value="ur">Urdu</option>
-                    <option value="en">English</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                  <input
-                    type="text"
-                    value={uploadForm.description}
-                    onChange={(e) => setUploadForm({ ...uploadForm, description: e.target.value })}
-                    className="w-full border rounded-lg px-3 py-2"
-                  />
-                </div>
-              </div>
-              
-              <div className="mt-6 flex justify-end space-x-3">
-                <button
-                  onClick={() => setShowUploadModal(false)}
-                  className="px-4 py-2 border rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleUpload}
-                  disabled={uploading}
-                  className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {uploading ? 'Uploading...' : 'Upload'}
-                </button>
-              </div>
-            </div>
+      <div>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Audio Library</h3>
+        {audioFiles.length === 0 ? (
+          <div className="text-center py-12 bg-gray-50 rounded-lg">
+            <FileAudio className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500">No audio files yet</p>
           </div>
-        </div>
-      )}
-      
-      {/* Generate Modal */}
-      {showGenerateModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4">
-            <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowGenerateModal(false)} />
-            
-            <div className="relative bg-white rounded-lg max-w-md w-full p-6">
-              <h3 className="text-lg font-semibold mb-4">Generate Audio</h3>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-                  <input
-                    type="text"
-                    value={generateForm.name}
-                    onChange={(e) => setGenerateForm({ ...generateForm, name: e.target.value })}
-                    className="w-full border rounded-lg px-3 py-2"
-                    placeholder="e.g., Welcome Message"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Text *</label>
-                  <textarea
-                    value={generateForm.text}
-                    onChange={(e) => setGenerateForm({ ...generateForm, text: e.target.value })}
-                    rows={4}
-                    className="w-full border rounded-lg px-3 py-2"
-                    placeholder="السلام علیکم! میں آپ کی کیا مدد کر سکتا ہوں؟"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    ~{Math.round(generateForm.text.length * 80 / 1000)} seconds estimated
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Language</label>
-                  <select
-                    value={generateForm.language}
-                    onChange={(e) => setGenerateForm({ ...generateForm, language: e.target.value })}
-                    className="w-full border rounded-lg px-3 py-2"
-                  >
-                    <option value="ur">Urdu</option>
-                    <option value="en">English</option>
-                  </select>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {audioFiles.map(audio => (
+              <div key={audio.id} className="bg-white rounded-lg border p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-medium text-gray-900 truncate">{audio.name}</h4>
+                    <p className="text-xs text-gray-500">
+                      {audio.duration ? `${Math.round(audio.duration)}s` : 'Unknown duration'}
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => onPlayAudio(audio.id)}
+                      className="p-2 hover:bg-gray-100 rounded-lg"
+                    >
+                      {playingAudio === audio.id ? (
+                        <Pause className="w-4 h-4 text-primary-600" />
+                      ) : (
+                        <Play className="w-4 h-4 text-gray-600" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(audio.id)}
+                      disabled={deleting === audio.id}
+                      className="p-2 hover:bg-red-50 rounded-lg"
+                    >
+                      {deleting === audio.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                      ) : (
+                        <Trash2 className="w-4 h-4 text-red-600" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
-              
-              <div className="mt-6 flex justify-end space-x-3">
-                <button
-                  onClick={() => setShowGenerateModal(false)}
-                  className="px-4 py-2 border rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleGenerate}
-                  disabled={generating}
-                  className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {generating ? 'Generating...' : 'Generate'}
-                </button>
-              </div>
-            </div>
+            ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
@@ -1254,12 +1081,12 @@ const AudioTab = ({ agentId, audioFiles, config, onRefresh, onPlayAudio, playing
 const CacheTab = ({ agentId, cacheStats, onRefresh }) => {
   const [clearing, setClearing] = useState(false);
   
-  const handleClearCache = async (type) => {
-    if (!window.confirm(`Clear ${type === 'expired' ? 'expired' : 'all'} cache entries?`)) return;
+  const handleClearCache = async (cacheType) => {
+    if (!window.confirm(`Clear ${cacheType} cache? This cannot be undone.`)) return;
     
     try {
       setClearing(true);
-      await ivrApi.clearCache(agentId, type);
+      await ivrApi.clearCache(agentId, cacheType);
       toast.success('Cache cleared');
       onRefresh();
     } catch (error) {
@@ -1270,37 +1097,14 @@ const CacheTab = ({ agentId, cacheStats, onRefresh }) => {
   };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Response Cache</h2>
-          <p className="text-sm text-gray-500">Cached TTS responses to reduce costs and latency</p>
-        </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={() => handleClearCache('expired')}
-            disabled={clearing}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            Clear Expired
-          </button>
-          <button
-            onClick={() => handleClearCache('all')}
-            disabled={clearing}
-            className="inline-flex items-center px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
-          >
-            Clear All
-          </button>
-        </div>
-      </div>
-      
-      {/* Stats Cards */}
+    <div className="space-y-6">
+      {/* Cache Stats */}
       {cacheStats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-blue-50 rounded-lg p-4">
             <h3 className="text-sm font-medium text-blue-700">Response Cache</h3>
             <div className="mt-2">
-              <div className="text-2xl font-bold text-blue-900">{cacheStats.response_cache?.total_entries || 0}</div>
+              <div className="text-2xl font-bold text-blue-900">{cacheStats.response_cache?.entry_count || 0}</div>
               <div className="text-sm text-blue-600">entries</div>
             </div>
             <div className="mt-2 text-xs text-blue-600">
@@ -1308,10 +1112,21 @@ const CacheTab = ({ agentId, cacheStats, onRefresh }) => {
             </div>
           </div>
           
+          <div className="bg-orange-50 rounded-lg p-4">
+            <h3 className="text-sm font-medium text-orange-700">Audio Cache</h3>
+            <div className="mt-2">
+              <div className="text-2xl font-bold text-orange-900">{cacheStats.audio_cache?.entry_count || 0}</div>
+              <div className="text-sm text-orange-600">entries</div>
+            </div>
+            <div className="mt-2 text-xs text-orange-600">
+              {cacheStats.audio_cache?.total_hits || 0} hits • {cacheStats.audio_cache?.total_size_mb || 0} MB
+            </div>
+          </div>
+          
           <div className="bg-purple-50 rounded-lg p-4">
             <h3 className="text-sm font-medium text-purple-700">Variable Cache</h3>
             <div className="mt-2">
-              <div className="text-2xl font-bold text-purple-900">{cacheStats.variable_cache?.total_entries || 0}</div>
+              <div className="text-2xl font-bold text-purple-900">{cacheStats.variable_cache?.entry_count || 0}</div>
               <div className="text-sm text-purple-600">entries</div>
             </div>
             <div className="mt-2 text-xs text-purple-600">
@@ -1348,7 +1163,7 @@ const CacheTab = ({ agentId, cacheStats, onRefresh }) => {
 // SETTINGS TAB
 // =============================================================================
 
-const SettingsTab = ({ config, audioFiles, onChange }) => {
+const SettingsTab = ({ config, audioFiles, onChange, languages, agentId }) => {
   if (!config) return null;
   
   const update = (field, value) => {
@@ -1517,28 +1332,40 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">LLM Provider</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Confidence Threshold</label>
+            <input
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={config.confidence_threshold || 0.7}
+              onChange={(e) => update('confidence_threshold', parseFloat(e.target.value))}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Minimum confidence to match an intent (0.0 - 1.0)
+            </p>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Classifier LLM Provider</label>
             <select
               value={llmProvider}
               onChange={(e) => {
                 const provider = e.target.value;
-                const defaultModel = LLM_MODELS[provider]?.[0]?.value;
+                const defaultModel = provider === 'openai' ? 'gpt-4o-mini' : 'llama-3.3-70b-versatile';
                 update('classifier_provider', provider);
                 update('classifier_model', defaultModel);
               }}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
             >
-              <option value="groq">Groq (Fastest, cheapest - English)</option>
+              <option value="groq">Groq (Fast, good for English)</option>
               <option value="openai">OpenAI (Best for Urdu/multilingual)</option>
             </select>
-            <p className="text-xs text-gray-500 mt-1">
-              {llmProvider === 'groq' && '⚠️ Limited Urdu generation support'}
-              {llmProvider === 'openai' && '✅ Excellent Urdu understanding and generation'}
-            </p>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">LLM Model</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Classifier Model</label>
             <select
               value={config.classifier_model || LLM_MODELS[llmProvider]?.[0]?.value}
               onChange={(e) => update('classifier_model', e.target.value)}
@@ -1551,59 +1378,32 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Confidence Threshold</label>
-            <input
-              type="number"
-              step="0.05"
-              min="0"
-              max="1"
-              value={config.confidence_threshold || 0.70}
-              onChange={(e) => update('confidence_threshold', parseFloat(e.target.value))}
+            <label className="block text-sm font-medium text-gray-700 mb-1">KB Response Provider</label>
+            <select
+              value={config.kb_response_provider || 'openai'}
+              onChange={(e) => {
+                const provider = e.target.value;
+                const defaultModel = provider === 'openai' ? 'gpt-4o-mini' : 'llama-3.3-70b-versatile';
+                update('kb_response_provider', provider);
+                update('kb_response_model', defaultModel);
+              }}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Minimum confidence (0-1) to accept intent match. Lower = more matches, Higher = more fallbacks
-            </p>
+            >
+              <option value="openai">OpenAI (Recommended for Urdu)</option>
+              <option value="groq">Groq (Faster, English only)</option>
+            </select>
           </div>
-        </div>
-        
-        {/* KB Response LLM - separate from classifier */}
-        <div className="mt-4 p-4 bg-white rounded-lg border border-gray-200">
-          <h4 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-            <span>📚</span> Knowledge Base Response Generation
-          </h4>
-          <p className="text-xs text-gray-500 mb-3">
-            For KB lookup intents, this LLM generates natural responses from search results.
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">KB Response LLM</label>
-              <select
-                value={config.kb_response_provider || 'openai'}
-                onChange={(e) => {
-                  const provider = e.target.value;
-                  const defaultModel = provider === 'openai' ? 'gpt-4o-mini' : 'llama-3.3-70b-versatile';
-                  update('kb_response_provider', provider);
-                  update('kb_response_model', defaultModel);
-                }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="openai">OpenAI (Recommended for Urdu)</option>
-                <option value="groq">Groq (Faster, English only)</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">KB Response Model</label>
-              <select
-                value={config.kb_response_model || 'gpt-4o-mini'}
-                onChange={(e) => update('kb_response_model', e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-              >
-                {LLM_MODELS[config.kb_response_provider || 'openai']?.map(model => (
-                  <option key={model.value} value={model.value}>{model.label}</option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">KB Response Model</label>
+            <select
+              value={config.kb_response_model || 'gpt-4o-mini'}
+              onChange={(e) => update('kb_response_model', e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              {LLM_MODELS[config.kb_response_provider || 'openai']?.map(model => (
+                <option key={model.value} value={model.value}>{model.label}</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
@@ -1748,10 +1548,94 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
         </div>
       </div>
       
-      {/* Fallback & Transfer */}
+      {/* Greeting & Fallback Messages - MULTI-LANGUAGE SUPPORT */}
       <div className="bg-gray-50 rounded-lg p-5 border border-gray-200">
         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-          <span className="text-2xl">🔄</span> Fallback & Transfer
+          <span className="text-2xl">👋</span> Greeting & Messages
+        </h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Configure greeting and response messages with multi-language support.
+        </p>
+        
+        <div className="space-y-6">
+          {/* Greeting Message - Multi-language */}
+          <MultiLangAudioTextInput
+            label="Greeting Message"
+            entityType="config"
+            entityId={config.id}
+            fieldName="greeting_text"
+            baseTextValue={config.greeting_text || ''}
+            baseAudioId={config.greeting_audio_id}
+            onBaseTextChange={(v) => update('greeting_text', v)}
+            onBaseAudioChange={(id) => update('greeting_audio_id', id)}
+            languages={languages}
+            defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+            audioFiles={audioFiles}
+            agentId={agentId}
+            placeholder="السلام علیکم! میں آپ کی کیا مدد کر سکتی ہوں؟"
+            multiline={true}
+          />
+          <p className="text-xs text-gray-500 -mt-4">
+            Played when caller connects. Add translations for each language your IVR supports.
+          </p>
+          
+          {/* No Match Fallback - Multi-language */}
+          <MultiLangAudioTextInput
+            label="No Match Response"
+            entityType="config"
+            entityId={config.id}
+            fieldName="no_match_text"
+            baseTextValue={config.no_match_text || config.not_found_message || ''}
+            baseAudioId={config.no_match_audio_id || config.fallback_audio_id}
+            onBaseTextChange={(v) => {
+              update('no_match_text', v);
+              update('not_found_message', v); // Keep backward compatibility
+            }}
+            onBaseAudioChange={(id) => {
+              update('no_match_audio_id', id);
+              update('fallback_audio_id', id); // Keep backward compatibility
+            }}
+            languages={languages}
+            defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+            audioFiles={audioFiles}
+            agentId={agentId}
+            placeholder="معذرت، میں آپ کی بات نہیں سمجھ سکی۔ براہ کرم دوبارہ کوشش کریں۔"
+            multiline={true}
+          />
+          <p className="text-xs text-gray-500 -mt-4">
+            Spoken when no intent matches the caller's speech.
+          </p>
+          
+          {/* KB Not Found - Multi-language */}
+          <MultiLangAudioTextInput
+            label="KB Not Found Response"
+            entityType="config"
+            entityId={config.id}
+            fieldName="fallback_text"
+            baseTextValue={config.fallback_text || config.kb_not_found_message || ''}
+            baseAudioId={config.kb_no_result_audio_id}
+            onBaseTextChange={(v) => {
+              update('fallback_text', v);
+              update('kb_not_found_message', v);
+            }}
+            onBaseAudioChange={(id) => update('kb_no_result_audio_id', id)}
+            languages={languages}
+            defaultLanguage={languages?.find(l => l.is_default)?.language_code || 'en'}
+            audioFiles={audioFiles}
+            agentId={agentId}
+            placeholder="معذرت، مجھے اس سوال کا جواب نہیں مل سکا۔"
+            multiline={true}
+          />
+          <p className="text-xs text-gray-500 -mt-4">
+            Spoken when Knowledge Base search returns no results.
+          </p>
+        </div>
+      </div>
+      
+      {/* Transfer & Other Audio */}
+      <div className="bg-gray-50 rounded-lg p-5 border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">🔄</span> Transfer & System Audio
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -1775,34 +1659,6 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
               onChange={(e) => update('default_transfer_queue', e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
             />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Greeting Audio</label>
-            <select
-              value={config.greeting_audio_id || ''}
-              onChange={(e) => update('greeting_audio_id', e.target.value || null)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value="">None (use text greeting)</option>
-              {audioFiles.map(audio => (
-                <option key={audio.id} value={audio.id}>{audio.name}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Fallback Audio</label>
-            <select
-              value={config.fallback_audio_id || ''}
-              onChange={(e) => update('fallback_audio_id', e.target.value || null)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value="">None (use TTS fallback)</option>
-              {audioFiles.map(audio => (
-                <option key={audio.id} value={audio.id}>{audio.name}</option>
-              ))}
-            </select>
           </div>
           
           <div>
@@ -1850,31 +1706,6 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
             <p className="text-xs text-gray-500 mt-1">Played while processing KB lookups</p>
           </div>
           
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Fallback Text (TTS)</label>
-            <textarea
-              value={config.not_found_message || 'معذرت، میں آپ کی بات نہیں سمجھ سکا۔ براہ کرم دوبارہ کوشش کریں۔'}
-              onChange={(e) => update('not_found_message', e.target.value)}
-              rows={2}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-              placeholder="Sorry, I didn't understand. Please try again."
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Spoken when no intent matches and no fallback audio is set
-            </p>
-          </div>
-        </div>
-      </div>
-      
-      {/* KB Lookup Audio */}
-      <div className="bg-gray-50 rounded-lg p-5 border border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-          <span className="text-2xl">📚</span> Knowledge Base Audio
-        </h3>
-        <p className="text-sm text-gray-500 mb-4">
-          Audio files played during Knowledge Base lookup intents.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">KB Lookup Prefix Audio</label>
             <select
@@ -1889,39 +1720,28 @@ const SettingsTab = ({ config, audioFiles, onChange }) => {
             </select>
             <p className="text-xs text-gray-500 mt-1">Played before searching KB (e.g., "Let me check...")</p>
           </div>
-          
+        </div>
+      </div>
+      
+      {/* KB Lookup Settings */}
+      <div className="bg-gray-50 rounded-lg p-5 border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">📚</span> Knowledge Base Settings
+        </h3>
+        <div className="flex items-center justify-between p-3 bg-white rounded-lg border">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">KB No Result Audio</label>
-            <select
-              value={config.kb_no_result_audio_id || ''}
-              onChange={(e) => update('kb_no_result_audio_id', e.target.value || null)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value="">None (use fallback)</option>
-              {audioFiles.map(audio => (
-                <option key={audio.id} value={audio.id}>{audio.name}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">Played when KB search returns no results</p>
+            <div className="font-medium text-gray-700">Enable KB Lookup</div>
+            <div className="text-sm text-gray-500">Allow intents to search Knowledge Base</div>
           </div>
-          
-          <div className="md:col-span-2">
-            <div className="flex items-center justify-between p-3 bg-white rounded-lg border">
-              <div>
-                <div className="font-medium text-gray-700">Enable KB Lookup</div>
-                <div className="text-sm text-gray-500">Allow intents to search Knowledge Base</div>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={config.enable_kb_lookup !== false}
-                  onChange={(e) => update('enable_kb_lookup', e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
-              </label>
-            </div>
-          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.enable_kb_lookup !== false}
+              onChange={(e) => update('enable_kb_lookup', e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+          </label>
         </div>
       </div>
     </div>

@@ -1145,6 +1145,83 @@ class IVRService {
             return 0;
         }
     }
+	
+    // =========================================================================
+    // I18N CONTENT METHODS
+    // =========================================================================
+    
+    /**
+     * Get all i18n content for an entity
+     **/
+    async getI18nContent(entityType, entityId) {
+        const [rows] = await db.query(`
+            SELECT * FROM yovo_tbl_aiva_ivr_i18n_content
+            WHERE entity_type = ? AND entity_id = ?
+        `, [entityType, entityId]);
+        
+        // Group by field and language
+        const content = {};
+        for (const row of rows) {
+            if (!content[row.field_name]) {
+                content[row.field_name] = {};
+            }
+            content[row.field_name][row.language_code] = {
+                text_content: row.text_content,
+                audio_id: row.audio_id,
+                template_id: row.template_id
+            };
+        }
+        
+        return content;
+    }
+    
+    /**
+     * Set i18n content for an entity field
+     **/
+    async setI18nContent(agentId, entityType, entityId, fieldName, languageCode, data) {
+        const id = uuidv4();
+        
+        await db.query(`
+            INSERT INTO yovo_tbl_aiva_ivr_i18n_content 
+            (id, agent_id, entity_type, entity_id, field_name, language_code, text_content, audio_id, template_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                text_content = VALUES(text_content),
+                audio_id = VALUES(audio_id),
+                template_id = VALUES(template_id),
+                updated_at = CURRENT_TIMESTAMP
+        `, [
+            id,
+            agentId,
+            entityType,
+            entityId,
+            fieldName,
+            languageCode,
+            data.text_content || null,
+            data.audio_id || null,
+            data.template_id || null
+        ]);
+    }
+    
+    /**
+     * Delete i18n content for an entity
+     **/
+    async deleteI18nContent(entityType, entityId, fieldName = null, languageCode = null) {
+        let query = `DELETE FROM yovo_tbl_aiva_ivr_i18n_content WHERE entity_type = ? AND entity_id = ?`;
+        const params = [entityType, entityId];
+        
+        if (fieldName) {
+            query += ` AND field_name = ?`;
+            params.push(fieldName);
+        }
+        
+        if (languageCode) {
+            query += ` AND language_code = ?`;
+            params.push(languageCode);
+        }
+        
+        await db.query(query, params);
+    }
 }
 
 module.exports = new IVRService();

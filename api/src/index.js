@@ -62,15 +62,31 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 5. RATE LIMITING - Only for protected routes
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  skip: (req) => {
-    // Skip rate limiting for public endpoints
-    return req.path.startsWith('/api/public/') || 
-		   req.path.startsWith('/api/audio/output/') ||
-           req.path === '/widget.js' ||
-           req.path === '/api/health';
-  }
+    windowMs: 60 * 1000, // 1 minute
+    max: 100,
+    skip: (req) => {
+        // Skip rate limiting for internal API calls
+        const internalToken = req.headers['x-internal-token'];
+        const apiKey = req.headers['x-api-key'];
+        
+        // Skip if internal token matches
+        if (internalToken && internalToken === process.env.INTERNAL_API_TOKEN) {
+            return true;
+        }
+        
+        // Skip if API key matches bridge key
+        if (apiKey && (apiKey === process.env.BRIDGE_API_KEY || apiKey === process.env.SYSTEM_API_KEY)) {
+            return true;
+        }
+        
+        // Skip for /api/internal/* routes
+        if (req.path.startsWith('/api/internal')) {
+            return true;
+        }
+        
+        return false;
+    },
+    message: { error: 'Too many requests, please try again later' }
 });
 
 // Apply rate limiter to API routes (but will skip public routes)

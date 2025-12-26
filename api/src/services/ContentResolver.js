@@ -82,7 +82,7 @@ class ContentResolver {
     async fetchContent(entityType, entityId, fieldName, language) {
         const [rows] = await db.query(`
             SELECT text_content, audio_id, template_id
-            FROM yovo_tbl_aiva_ivr_content_i18n
+            FROM yovo_tbl_aiva_ivr_i18n_content
             WHERE entity_type = ? AND entity_id = ? 
               AND field_name = ? AND language_code = ?
         `, [entityType, entityId, fieldName, language]);

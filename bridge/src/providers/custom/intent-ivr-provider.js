@@ -31,6 +31,7 @@ const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { formatForTTS, processTextForTTS, detectNumberType } = require('./tts-number-formatter');
 
 // Try to load base provider
 let BaseProvider;
@@ -86,7 +87,7 @@ class IntentIVRProvider extends BaseProvider {
     constructor(config) {
         super(config);
         
-        logger.info('[INTENT-IVR] Initializing provider with config:', {
+        console.info('[INTENT-IVR] Initializing provider with config:', {
             agentId: config.agentId,
             tenantId: config.tenantId,
             ttsProvider: config.ttsProvider,
@@ -105,6 +106,11 @@ class IntentIVRProvider extends BaseProvider {
         this.audioFiles = new Map();
         this.audioCache = new Map();
         this.agentFunctions = [];
+		// Multi-language support
+		this.agentLanguages = [];
+		this.defaultLanguage = 'en';
+		this.sessionLanguage = null;  // Detected/set per call
+		this.languageVoiceMap = {};   // language_code -> { provider, voice }
         
         // STT
         this.stt = null;
@@ -126,6 +132,7 @@ class IntentIVRProvider extends BaseProvider {
         this.isGeneratingResponse = false;
         this.isDisconnecting = false;
         this.preventBargeIn = false;  // Prevents user speech from interrupting flow audio
+		this.isProcessingTranscript = false;  // Prevents parallel transcript processing
         this.currentAudioBuffer = null;
         this.playbackPosition = 0;
         this.playbackInterval = null;
@@ -315,7 +322,7 @@ class IntentIVRProvider extends BaseProvider {
      */
     async connect() {
         try {
-            logger.info('[INTENT-IVR] Connecting...');
+            console.info('[INTENT-IVR] Connecting...');
             
             this.costMetrics.startTime = Date.now();
             
@@ -333,11 +340,11 @@ class IntentIVRProvider extends BaseProvider {
             }
             
             this.isConnected = true;
-            logger.info('[INTENT-IVR] Connected successfully');
+            console.info('[INTENT-IVR] Connected successfully');
             
             return true;
         } catch (error) {
-            logger.error('[INTENT-IVR] Connection failed:', error);
+            console.error('[INTENT-IVR] Connection failed:', error);
             this.isConnected = false;
             throw error;
         }
@@ -356,7 +363,7 @@ class IntentIVRProvider extends BaseProvider {
         // Check if STT has keepalive support
         const hasKeepalive = this.stt && typeof this.stt.sendKeepalive === 'function';
         const hasWs = this.stt && this.stt.ws;
-        logger.info(`[INTENT-IVR] STT keepalive check: sendKeepalive=${hasKeepalive}, ws=${!!hasWs}`);
+        console.info(`[INTENT-IVR] STT keepalive check: sendKeepalive=${hasKeepalive}, ws=${!!hasWs}`);
         
         // Send keepalive every 5 seconds (Soniox timeout is 20s)
         this.sttKeepaliveInterval = setInterval(() => {
@@ -368,14 +375,14 @@ class IntentIVRProvider extends BaseProvider {
                     if (typeof this.stt.sendKeepalive === 'function') {
                         sent = this.stt.sendKeepalive();
                         if (sent) {
-                            logger.info('[INTENT-IVR] STT keepalive sent via sendKeepalive()');
+                            console.info('[INTENT-IVR] STT keepalive sent via sendKeepalive()');
                         }
                     }
                     
                     // Fallback: try direct WebSocket access
                     if (!sent && this.stt.ws && this.stt.ws.readyState === 1) {
                         this.stt.ws.send(JSON.stringify({ type: 'keepalive' }));
-                        logger.info('[INTENT-IVR] STT keepalive sent via ws.send()');
+                        console.info('[INTENT-IVR] STT keepalive sent via ws.send()');
                         sent = true;
                     }
                     
@@ -390,7 +397,7 @@ class IntentIVRProvider extends BaseProvider {
             }
         }, 5000);  // Every 5 seconds
         
-        logger.info('[INTENT-IVR] STT keepalive started (5s interval)');
+        console.info('[INTENT-IVR] STT keepalive started (5s interval)');
     }
     
     /**
@@ -400,7 +407,7 @@ class IntentIVRProvider extends BaseProvider {
         if (this.sttKeepaliveInterval) {
             clearInterval(this.sttKeepaliveInterval);
             this.sttKeepaliveInterval = null;
-            logger.info('[INTENT-IVR] STT keepalive stopped');
+            console.info('[INTENT-IVR] STT keepalive stopped');
         }
     }
     
@@ -411,36 +418,70 @@ class IntentIVRProvider extends BaseProvider {
         if (!this.stt) return;
         
         this.stt.on('transcript.interim', ({ text }) => {
-            if (text && text.trim().length > 0) {
-                // Don't interrupt if we're playing flow audio (intro, step prompts)
-                // Only allow barge-in for freeform conversation
-                if (this.isPlaying && !this.preventBargeIn) {
-                    logger.info('[INTENT-IVR] User interruption detected - stopping playback');
-                    this.stopPlayback();
-                    this.emit('user_started_speaking');
-                } else if (this.isPlaying && this.preventBargeIn) {
-                    logger.debug('[INTENT-IVR] User speech during prompt - barge-in prevented');
-                }
-            }
-        });
+			if (text && text.trim().length > 0) {
+				// Don't interrupt if we're playing flow audio (intro, step prompts)
+				// Only allow barge-in for freeform conversation
+				if (this.isPlaying && !this.preventBargeIn) {
+					console.info('[INTENT-IVR] User interruption detected - stopping playback');
+					this.stopPlayback();
+					
+					// Cancel any ongoing TTS synthesis to prevent overlap
+					if (this.tts) {
+						try {
+							if (typeof this.tts.cancel === 'function') {
+								this.tts.cancel();
+							} else if (typeof this.tts.stop === 'function') {
+								this.tts.stop();
+							}
+						} catch (e) {
+							logger.debug('[INTENT-IVR] TTS cancel error:', e.message);
+						}
+					}
+					
+					// Stop MP3 converter if running
+					if (this.mp3Converter) {
+						try {
+							this.mp3Converter.stop();
+							this.mp3Converter = null;
+						} catch (e) {}
+					}
+					
+					this.emit('user_started_speaking');
+				} else if (this.isPlaying && this.preventBargeIn) {
+					logger.debug('[INTENT-IVR] User speech during prompt - barge-in prevented');
+				}
+			}
+		});
         
-        this.stt.on('transcript.final', ({ text }) => {
-            if (text && text.trim().length > 0) {
-                // Clear response timer - user has responded
-                this.clearResponseTimer();
-                
-                logger.info('[INTENT-IVR] Final transcript:', text);
-                this.emit('transcript.user', { transcript: text });
-                this.processUserInput(text);
-            }
-        });
-        
+        this.stt.on('transcript.final', async ({ text }) => {
+			if (text && text.trim().length > 0) {
+				// Prevent parallel transcript processing
+				if (this.isProcessingTranscript) {
+					logger.warn('[INTENT-IVR] Skipping transcript (already processing):', text.substring(0, 40));
+					return;
+				}
+				
+				// Clear response timer - user has responded
+				this.clearResponseTimer();
+				
+				console.info('[INTENT-IVR] Final transcript:', text);
+				this.emit('transcript.user', { transcript: text });
+				
+				this.isProcessingTranscript = true;
+				try {
+					await this.processUserInput(text);
+				} finally {
+					this.isProcessingTranscript = false;
+				}
+			}
+		});
+       
         this.stt.on('error', (error) => {
             const errorMsg = error?.message || String(error);
             if (errorMsg.includes('Audio data decode timeout') || errorMsg.includes('No audio received')) {
                 return;
             }
-            logger.error('[INTENT-IVR] STT error:', error);
+            console.error('[INTENT-IVR] STT error:', error);
             this.emit('error', error);
         });
         
@@ -450,7 +491,7 @@ class IntentIVRProvider extends BaseProvider {
             
             // Don't reconnect if we're intentionally disconnecting
             if (!this.isConnected) {
-                logger.info('[INTENT-IVR] Provider disconnecting, not attempting STT reconnect');
+                console.info('[INTENT-IVR] Provider disconnecting, not attempting STT reconnect');
                 return;
             }
             
@@ -467,7 +508,7 @@ class IntentIVRProvider extends BaseProvider {
         const retryDelay = 1000; // 1 second
         
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            logger.info(`[INTENT-IVR] STT reconnect attempt ${attempt}/${maxRetries}...`);
+            console.info(`[INTENT-IVR] STT reconnect attempt ${attempt}/${maxRetries}...`);
             
             try {
                 // Stop old keepalive interval
@@ -489,11 +530,11 @@ class IntentIVRProvider extends BaseProvider {
                 // Start keepalive
                 this.startSTTKeepalive();
                 
-                logger.info('[INTENT-IVR] STT reconnected successfully');
+                console.info('[INTENT-IVR] STT reconnected successfully');
                 return true;
                 
             } catch (error) {
-                logger.error(`[INTENT-IVR] STT reconnect attempt ${attempt} failed:`, error.message);
+                console.error(`[INTENT-IVR] STT reconnect attempt ${attempt} failed:`, error.message);
                 
                 if (attempt < maxRetries) {
                     await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
@@ -501,7 +542,7 @@ class IntentIVRProvider extends BaseProvider {
             }
         }
         
-        logger.error('[INTENT-IVR] STT reconnection failed after all retries');
+        console.error('[INTENT-IVR] STT reconnection failed after all retries');
         return false;
     }
     
@@ -524,7 +565,7 @@ class IntentIVRProvider extends BaseProvider {
             const fragmentResult = this.handleFragmentedSpeech(utterance, slotType);
             
             if (fragmentResult.action === 'accumulate') {
-                logger.info(`[INTENT-IVR] Accumulating fragment: "${utterance}" -> Total: "${this.slotAccumulator}"`);
+                console.info(`[INTENT-IVR] Accumulating fragment: "${utterance}" -> Total: "${this.slotAccumulator}"`);
                 return { action: 'wait_more', extractedValue: null };
             }
             
@@ -645,7 +686,7 @@ Classify:`;
                 return { action: 'store', extractedValue: utterance.trim(), confidence: 0.3 };
             }
             
-            logger.info(`[INTENT-IVR] LLM classification:`, {
+            console.info(`[INTENT-IVR] LLM classification:`, {
                 action: response.action,
                 extracted: response.extracted_value,
                 target: response.target_slot,
@@ -662,7 +703,7 @@ Classify:`;
             };
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Slot classification error:', error.message);
+            console.error('[INTENT-IVR] Slot classification error:', error.message);
             return { action: 'store', extractedValue: utterance.trim(), confidence: 0.3 };
         }
     }
@@ -808,7 +849,7 @@ Classify:`;
                 this.slotValidationCosts.llmCalls++;
                 this.slotValidationCosts.llmInputTokens += usage.prompt_tokens || 0;
                 this.slotValidationCosts.llmOutputTokens += usage.completion_tokens || 0;
-                logger.info(`[INTENT-IVR] Slot LLM (${provider}/${model}): ${usage.prompt_tokens}+${usage.completion_tokens} tokens`);
+                console.info(`[INTENT-IVR] Slot LLM (${provider}/${model}): ${usage.prompt_tokens}+${usage.completion_tokens} tokens`);
             }
             
             const content = response.data.choices?.[0]?.message?.content;
@@ -820,9 +861,9 @@ Classify:`;
             return JSON.parse(content);
             
         } catch (error) {
-            logger.error('[INTENT-IVR] LLM API error:', error.message);
+            console.error('[INTENT-IVR] LLM API error:', error.message);
             if (error.response?.data) {
-                logger.error('[INTENT-IVR] API error details:', error.response.data);
+                console.error('[INTENT-IVR] API error details:', error.response.data);
             }
             return null;
         }
@@ -882,7 +923,7 @@ Classify:`;
             // Set/reset accumulator timeout (wait 4 seconds for next fragment)
             this.clearSlotAccumulatorTimer();
             this.slotAccumulatorTimer = setTimeout(() => {
-                logger.info(`[INTENT-IVR] Accumulator timeout, finalizing: "${this.slotAccumulator}"`);
+                console.info(`[INTENT-IVR] Accumulator timeout, finalizing: "${this.slotAccumulator}"`);
                 // Timer expired - the next processFlowStep call will use accumulated value
             }, 4000);
             
@@ -892,7 +933,7 @@ Classify:`;
         // Check if we have accumulated content to combine
         if (this.slotAccumulator.length > 0) {
             const combined = this.slotAccumulator + ' ' + utterance.trim();
-            logger.info(`[INTENT-IVR] Using accumulated response: "${combined}"`);
+            console.info(`[INTENT-IVR] Using accumulated response: "${combined}"`);
             return { action: 'finalize', finalUtterance: combined };
         }
         
@@ -969,7 +1010,7 @@ Classify:`;
             // Use MP3 for best quality with conversion to PCM
             const outputFormat = 'MP3_22050_32';
             
-            logger.info(`[INTENT-IVR] Initializing TTS: voice=${ttsVoice}, format=${outputFormat}`);
+            console.info(`[INTENT-IVR] Initializing TTS: voice=${ttsVoice}, format=${outputFormat}`);
             
             this.tts = new UpliftTTS({
                 apiKey: process.env.UPLIFT_API_KEY,
@@ -982,7 +1023,7 @@ Classify:`;
             this.setupTTSHandlers();
             
             await this.tts.initialize();
-            logger.info('[INTENT-IVR] TTS initialized');
+            console.info('[INTENT-IVR] TTS initialized');
             
         } catch (error) {
             logger.warn('[INTENT-IVR] TTS initialization failed:', error.message);
@@ -998,7 +1039,7 @@ Classify:`;
         const outputFormat = this.ttsOutputFormat || 'MP3_22050_32';
         const needsConversion = outputFormat.startsWith('MP3');
         
-        logger.info(`[INTENT-IVR] TTS output format: ${outputFormat}, needs conversion: ${needsConversion}`);
+        console.info(`[INTENT-IVR] TTS output format: ${outputFormat}, needs conversion: ${needsConversion}`);
         
         // Debug tracking
         this.hasReceivedAudioData = false;
@@ -1015,7 +1056,7 @@ Classify:`;
             // MP3 MODE - Stream MP3 chunks, convert to PCM
             // ============================================
             this.tts.on('synthesis.started', ({ requestId }) => {
-                logger.info('[INTENT-IVR] Synthesis started (MP3 mode):', requestId);
+                console.info('[INTENT-IVR] Synthesis started (MP3 mode):', requestId);
                 this.currentTtsRequestId = requestId;
                 this.upliftDebug.synthesisStartTime = Date.now();
                 this.upliftDebug.chunksReceived = 0;
@@ -1061,7 +1102,7 @@ Classify:`;
                         });
                         
                         this.mp3Converter.on('error', (err) => {
-                            logger.error('[INTENT-IVR] MP3 converter error:', err.message);
+                            console.error('[INTENT-IVR] MP3 converter error:', err.message);
                         });
                         
                         this.mp3Converter.start();
@@ -1075,7 +1116,7 @@ Classify:`;
             });
             
             this.tts.on('audio.done', ({ requestId }) => {
-                logger.info(`[INTENT-IVR] Synthesis complete: ${this.upliftDebug.totalBytesReceived} bytes MP3`);
+                console.info(`[INTENT-IVR] Synthesis complete: ${this.upliftDebug.totalBytesReceived} bytes MP3`);
                 
                 if (this.hasReceivedAudioData) {
                     // Process any remaining MP3 data
@@ -1104,7 +1145,7 @@ Classify:`;
                     // Wait for ffmpeg to flush, then calculate playback wait time
                     setTimeout(() => {
                         const pcmDurationSec = this.upliftDebug.totalPcmBytes / (24000 * 2);
-                        logger.info(`[INTENT-IVR] PCM: ${this.upliftDebug.totalPcmBytes} bytes = ${pcmDurationSec.toFixed(2)}s`);
+                        console.info(`[INTENT-IVR] PCM: ${this.upliftDebug.totalPcmBytes} bytes = ${pcmDurationSec.toFixed(2)}s`);
                         
                         if (this.mp3Converter) {
                             this.mp3Converter.stop();
@@ -1117,7 +1158,7 @@ Classify:`;
                         const totalDurationMs = pcmDurationSec * 1000;
                         const remainingMs = Math.max(0, totalDurationMs - elapsedMs) + 300; // 300ms buffer
                         
-                        logger.info(`[INTENT-IVR] Playback timing: ${elapsedMs}ms elapsed, ${remainingMs}ms remaining`);
+                        console.info(`[INTENT-IVR] Playback timing: ${elapsedMs}ms elapsed, ${remainingMs}ms remaining`);
                         
                         // Reset playback start time for next TTS
                         this.ttsPlaybackStartTime = null;
@@ -1139,7 +1180,7 @@ Classify:`;
             });
             
             this.tts.on('synthesis.cancelled', ({ requestId }) => {
-                logger.info('[INTENT-IVR] Synthesis cancelled:', requestId);
+                console.info('[INTENT-IVR] Synthesis cancelled:', requestId);
                 this.mp3Buffer = Buffer.alloc(0);
                 if (this.mp3Converter) {
                     this.mp3Converter.stop();
@@ -1153,7 +1194,7 @@ Classify:`;
             // ULAW/PCM MODE - Direct output (no conversion)
             // ============================================
             this.tts.on('synthesis.started', ({ requestId }) => {
-                logger.info(`[INTENT-IVR] TTS synthesis started (direct mode): ${requestId}`);
+                console.info(`[INTENT-IVR] TTS synthesis started (direct mode): ${requestId}`);
                 this.currentTtsRequestId = requestId;
                 this.isPlaying = true;
             });
@@ -1175,19 +1216,19 @@ Classify:`;
                 if (requestId && this.currentTtsRequestId && requestId !== this.currentTtsRequestId) {
                     return;
                 }
-                logger.info(`[INTENT-IVR] TTS complete (direct mode)`);
+                console.info(`[INTENT-IVR] TTS complete (direct mode)`);
                 this.emit('audio.done');
                 this.isPlaying = false;
             });
             
             this.tts.on('synthesis.cancelled', ({ requestId }) => {
-                logger.info('[INTENT-IVR] TTS cancelled:', requestId);
+                console.info('[INTENT-IVR] TTS cancelled:', requestId);
                 this.isPlaying = false;
             });
         }
         
         this.tts.on('error', (error) => {
-            logger.error('[INTENT-IVR] TTS error:', error);
+            console.error('[INTENT-IVR] TTS error:', error);
             this.isPlaying = false;
         });
     }
@@ -1206,7 +1247,7 @@ Classify:`;
         const agentId = agentConfig.agentId || agentConfig.id || this.config.agentId;
         const agentName = agentConfig.name || this.config.name || 'IVR Agent';
         
-        logger.info('[INTENT-IVR] Configuring session:', {
+        console.info('[INTENT-IVR] Configuring session:', {
             sessionId: this.sessionId,
             agentId: agentId,
             agentName: agentName
@@ -1242,7 +1283,7 @@ Classify:`;
             try {
                 await this.playGreeting();
             } catch (err) {
-                logger.error('[INTENT-IVR] Error playing greeting:', err.message);
+                console.error('[INTENT-IVR] Error playing greeting:', err.message);
             }
         }, 500);
         
@@ -1254,7 +1295,7 @@ Classify:`;
      */
     async loadIVRConfig(agentId) {
         try {
-            logger.info('[INTENT-IVR] Loading IVR config for agent:', agentId);
+            console.info('[INTENT-IVR] Loading IVR config for agent:', agentId);
             
             const headers = {};
             if (this.apiKey) {
@@ -1285,6 +1326,39 @@ Classify:`;
                 this.audioFiles.set(audio.id, audio);
             }
             
+			// Load agent languages for multi-language support
+			try {
+				const langRes = await axios.get(
+					`${this.apiBaseUrl}/api/languages/agent/${agentId}`,
+					{ headers, timeout: 10000 }
+				);
+				this.agentLanguages = langRes.data.data || [];
+				
+				// Find default language
+				const defaultLang = this.agentLanguages.find(l => l.is_default);
+				this.defaultLanguage = defaultLang?.language_code || 'en';
+				
+				// Build language -> voice mapping
+				this.languageVoiceMap = {};
+				for (const lang of this.agentLanguages) {
+					if (lang.tts_provider && lang.tts_voice) {
+						this.languageVoiceMap[lang.language_code] = {
+							provider: lang.tts_provider,
+							voice: lang.tts_voice
+						};
+					}
+				}
+				
+				console.info('[INTENT-IVR] Loaded languages:', {
+					count: this.agentLanguages.length,
+					default: this.defaultLanguage,
+					voiceMap: Object.keys(this.languageVoiceMap)
+				});
+			} catch (langErr) {
+				logger.warn('[INTENT-IVR] Could not load agent languages:', langErr.message);
+				this.agentLanguages = [];
+			}
+
             // Load agent functions for flow completion
             try {
                 const functionsRes = await axios.get(
@@ -1292,13 +1366,13 @@ Classify:`;
                     { headers, timeout: 10000 }
                 );
                 this.agentFunctions = functionsRes.data.functions || [];
-                logger.info('[INTENT-IVR] Loaded agent functions:', this.agentFunctions.length);
+                console.info('[INTENT-IVR] Loaded agent functions:', this.agentFunctions.length);
             } catch (funcErr) {
                 logger.warn('[INTENT-IVR] Could not load agent functions:', funcErr.message);
                 this.agentFunctions = [];
             }
             
-            logger.info('[INTENT-IVR] Loaded:', {
+            console.info('[INTENT-IVR] Loaded:', {
                 intents: this.intents.length,
                 audioFiles: this.audioFiles.size,
                 functions: this.agentFunctions?.length || 0,
@@ -1312,16 +1386,132 @@ Classify:`;
             await this.preloadAudioFiles();
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Failed to load IVR config:', error.message);
+            console.error('[INTENT-IVR] Failed to load IVR config:', error.message);
             throw error;
         }
     }
     
+	/**
+	 * Detect language from transcript
+	 * Simple heuristic based on script detection
+	 * Can be enhanced with LLM-based detection
+	 */
+	detectLanguageFromText(text) {
+		if (!text) return this.defaultLanguage;
+		
+		// Urdu/Arabic script detection
+		const urduArabicRegex = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
+		if (urduArabicRegex.test(text)) {
+			// Check if we have Urdu configured
+			if (this.agentLanguages.some(l => l.language_code === 'ur')) {
+				return 'ur';
+			}
+			if (this.agentLanguages.some(l => l.language_code.startsWith('ar'))) {
+				return 'ar';
+			}
+		}
+		
+		// Hindi/Devanagari script
+		const hindiRegex = /[\u0900-\u097F]/;
+		if (hindiRegex.test(text)) {
+			if (this.agentLanguages.some(l => l.language_code === 'hi')) {
+				return 'hi';
+			}
+		}
+		
+		// Default to configured default or English
+		return this.sessionLanguage || this.defaultLanguage;
+	}
+
+	/**
+	 * Set session language (can be called from external sources)
+	 * e.g., from caller profile lookup
+	 */
+	setSessionLanguage(languageCode) {
+		if (this.agentLanguages.some(l => l.language_code === languageCode)) {
+			this.sessionLanguage = languageCode;
+			console.info(`[INTENT-IVR] Session language set to: ${languageCode}`);
+		} else {
+			logger.warn(`[INTENT-IVR] Language ${languageCode} not configured, using default`);
+			this.sessionLanguage = this.defaultLanguage;
+		}
+	}
+
+	/**
+	 * Get current language for content resolution
+	 */
+	getCurrentLanguage() {
+		return this.sessionLanguage || this.defaultLanguage;
+	}
+	
+	/**
+	 * Resolve i18n content for an entity
+	 * Falls back to default language if translation not found
+	 * 
+	 * @param {string} entityType - 'intent', 'flow', 'step', 'config'
+	 * @param {string} entityId - UUID of the entity
+	 * @param {string} fieldName - Field to resolve (e.g., 'response_text')
+	 * @param {string} language - Target language code
+	 * @returns {Object} { text, audio_id } or null
+	 */
+	async resolveI18nContent(entityType, entityId, fieldName, language = null) {
+		const targetLang = language || this.getCurrentLanguage();
+		const agentId = this.agentConfig?.agentId || this.config.agentId;
+		try {
+			// Try target language first
+			const response = await axios.get(
+				`${this.apiBaseUrl}/api/internal/i18n/${entityType}/${entityId}/${fieldName}/${targetLang}`,
+				{ 
+					headers: this.apiKey ? { 'x-api-key': this.apiKey } : {}, 
+					timeout: 5000 
+				}
+			);
+			
+			if (response.data?.data?.text_content) {
+				logger.debug(`[INTENT-IVR] i18n resolved: ${entityType}/${fieldName} in ${targetLang}`);
+				return {
+					text: response.data.data.text_content,
+					audio_id: response.data.data.audio_id,
+					language: targetLang
+				};
+			}
+		} catch (err) {
+			// Not found in target language, try fallback
+			logger.debug(`[INTENT-IVR] No i18n for ${targetLang}, trying default`);
+		}
+		
+		// Fallback to default language if different
+		if (targetLang !== this.defaultLanguage) {
+			try {
+				const fallbackRes = await axios.get(
+					`${this.apiBaseUrl}/api/internal/i18n/${entityType}/${entityId}/${fieldName}/${this.defaultLanguage}`,
+					{ 
+						headers: this.apiKey ? { 'x-api-key': this.apiKey } : {}, 
+						timeout: 5000 
+					}
+				);
+				
+				if (fallbackRes.data?.data?.text_content) {
+					logger.debug(`[INTENT-IVR] i18n fallback: ${entityType}/${fieldName} in ${this.defaultLanguage}`);
+					return {
+						text: fallbackRes.data.data.text_content,
+						audio_id: fallbackRes.data.data.audio_id,
+						language: this.defaultLanguage
+					};
+				}
+			} catch (err) {
+				// No translation found at all
+			}
+		}
+		
+		return null;
+	}
+
     /**
      * Pre-load audio files into memory
      */
     async preloadAudioFiles() {
-        logger.info('[INTENT-IVR] Pre-loading audio files...');
+        console.info('[INTENT-IVR] Pre-loading audio files...');
         
         for (const [audioId, audioInfo] of this.audioFiles) {
             try {
@@ -1339,7 +1529,7 @@ Classify:`;
                     
                     if (buffer) {
                         this.audioCache.set(audioId, buffer);
-                        logger.info(`[INTENT-IVR] Cached: ${audioInfo.name} (${buffer.length} bytes)`);
+                        console.info(`[INTENT-IVR] Cached: ${audioInfo.name} (${buffer.length} bytes)`);
                     }
                 }
             } catch (error) {
@@ -1347,7 +1537,7 @@ Classify:`;
             }
         }
         
-        logger.info(`[INTENT-IVR] Pre-loaded ${this.audioCache.size} audio files`);
+        console.info(`[INTENT-IVR] Pre-loaded ${this.audioCache.size} audio files`);
     }
     
     /**
@@ -1375,7 +1565,7 @@ Classify:`;
                 return fs.readFileSync(outputPath);
             }
         } catch (error) {
-            logger.error('[INTENT-IVR] MP3 conversion failed:', error.message);
+            console.error('[INTENT-IVR] MP3 conversion failed:', error.message);
         }
         return null;
     }
@@ -1441,36 +1631,68 @@ Classify:`;
             return false;
         }
     }
-    
+
     /**
-     * Play greeting
-     */
-    async playGreeting() {
-        // Try greeting audio from IVR config
-        if (this.ivrConfig?.greeting_audio_id) {
-            const buffer = this.audioCache.get(this.ivrConfig.greeting_audio_id);
-            if (buffer) {
-                logger.info('[INTENT-IVR] Playing greeting audio from cache');
-                await this.playAudioBuffer(buffer);
-                return;
-            }
-            
-            // Try loading from API
-            const loadedBuffer = await this.loadAudioFromAPI(this.ivrConfig.greeting_audio_id);
-            if (loadedBuffer) {
-                this.audioCache.set(this.ivrConfig.greeting_audio_id, loadedBuffer);
-                await this.playAudioBuffer(loadedBuffer);
-                return;
-            }
-        }
-        
-        // Try greeting text
-        const greetingText = this.ivrConfig?.greeting_text || this.agentConfig?.greeting || this.config.greeting;
-        if (greetingText) {
-            logger.info('[INTENT-IVR] Playing greeting via TTS');
-            await this.generateAndPlayTTS(greetingText);
-        }
-    }
+	 * Play greeting with i18n support
+	 */
+	async playGreeting() {
+		const currentLang = this.getCurrentLanguage();
+		const configId = this.ivrConfig?.id;
+		
+		// Try i18n greeting first
+		if (configId) {
+			const i18nContent = await this.resolveI18nContent(
+				'config',
+				configId,
+				'greeting_text',
+				currentLang
+			);
+			
+			// Priority 1: i18n audio
+			if (i18nContent?.audio_id) {
+				let audioBuffer = this.audioCache.get(i18nContent.audio_id);
+				if (!audioBuffer) {
+					audioBuffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				}
+				if (audioBuffer) {
+					logger.info(`[INTENT-IVR] Playing i18n greeting audio (${currentLang})`);
+					await this.playAudioBuffer(audioBuffer);
+					return;
+				}
+			}
+			
+			// Priority 2: i18n text
+			if (i18nContent?.text) {
+				logger.info(`[INTENT-IVR] Playing i18n greeting TTS (${currentLang})`);
+				await this.generateAndPlayTTS(i18nContent.text, { language: currentLang });
+				return;
+			}
+		}
+		
+		// Priority 3: Base greeting audio from IVR config
+		if (this.ivrConfig?.greeting_audio_id) {
+			const buffer = this.audioCache.get(this.ivrConfig.greeting_audio_id);
+			if (buffer) {
+				logger.info('[INTENT-IVR] Playing base greeting audio from cache');
+				await this.playAudioBuffer(buffer);
+				return;
+			}
+			
+			const loadedBuffer = await this.loadAudioFromAPI(this.ivrConfig.greeting_audio_id);
+			if (loadedBuffer) {
+				this.audioCache.set(this.ivrConfig.greeting_audio_id, loadedBuffer);
+				await this.playAudioBuffer(loadedBuffer);
+				return;
+			}
+		}
+		
+		// Priority 4: Base greeting text
+		const greetingText = this.ivrConfig?.greeting_text || this.agentConfig?.greeting || this.config.greeting;
+		if (greetingText) {
+			logger.info('[INTENT-IVR] Playing base greeting via TTS');
+			await this.generateAndPlayTTS(greetingText, { language: currentLang });
+		}
+	}
     
     /**
      * Process user input - main intent matching logic
@@ -1483,7 +1705,16 @@ Classify:`;
         this.isGeneratingResponse = true;
         
         try {
-            logger.info('[INTENT-IVR] Processing:', transcript);
+            console.info('[INTENT-IVR] Processing:', transcript);
+			
+			// Auto-detect language on first real utterance if not set
+			if (!this.sessionLanguage && this.agentLanguages.length > 1) {
+				const detectedLang = this.detectLanguageFromText(transcript);
+				if (detectedLang !== this.defaultLanguage) {
+					this.setSessionLanguage(detectedLang);
+					console.info(`[INTENT-IVR] Auto-detected language: ${detectedLang}`);
+				}
+			}
             
             this.conversationHistory.push({
                 role: 'user',
@@ -1493,7 +1724,7 @@ Classify:`;
             
             // Check if we're in an active flow
             if (this.activeFlow) {
-                logger.info(`[INTENT-IVR] Active flow: ${this.activeFlow.flow_name}, processing step ${this.flowStepIndex + 1}`);
+                console.info(`[INTENT-IVR] Active flow: ${this.activeFlow.flow_name}, processing step ${this.flowStepIndex + 1}`);
                 await this.processFlowStep(transcript);
                 return;
             }
@@ -1502,7 +1733,7 @@ Classify:`;
             const result = await this.matchIntent(transcript);
             
             if (result.matched) {
-                logger.info('[INTENT-IVR] ✓ Matched intent:', {
+                console.info('[INTENT-IVR] ✓ Matched intent:', {
                     name: result.matched.intent.name || result.matched.intent.intent_name,
                     type: result.matched.intent.intent_type,
                     confidence: result.matched.confidence?.toFixed(2)
@@ -1510,12 +1741,12 @@ Classify:`;
                 
                 await this.handleIntent(result.matched.intent, transcript, result.matched.query_english);
             } else {
-                logger.info('[INTENT-IVR] ✗ No intent matched');
+                console.info('[INTENT-IVR] ✗ No intent matched');
                 await this.handleFallback(transcript, result.suggested);
             }
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Error processing input:', error);
+            console.error('[INTENT-IVR] Error processing input:', error);
             this.emit('error', error);
         } finally {
             this.isGeneratingResponse = false;
@@ -1573,7 +1804,7 @@ Classify:`;
             );
             
             if (isNo) {
-                logger.info('[INTENT-IVR] User declined anything else - playing closing');
+                console.info('[INTENT-IVR] User declined anything else - playing closing');
                 // Play closing and end
                 await this.playClosingMessage(flow);
                 this.activeFlow = null;
@@ -1582,7 +1813,7 @@ Classify:`;
                 this.flowAwaitingAnythingElse = false;
                 return;
             } else {
-                logger.info('[INTENT-IVR] User wants something else - resetting for new intent');
+                console.info('[INTENT-IVR] User wants something else - resetting for new intent');
                 // User wants something else - reset flow and let intent matching handle it
                 this.activeFlow = null;
                 this.flowSlots = {};
@@ -1601,7 +1832,7 @@ Classify:`;
         }
         
         const currentStep = steps[this.flowStepIndex];
-        logger.info(`[INTENT-IVR] Flow step ${this.flowStepIndex + 1}/${steps.length}: ${currentStep.step_name || currentStep.slot_name}`);
+        console.info(`[INTENT-IVR] Flow step ${this.flowStepIndex + 1}/${steps.length}: ${currentStep.step_name || currentStep.slot_name}`);
         
         // ============================================
         // Handle confirmation response if awaiting (via LLM)
@@ -1613,7 +1844,7 @@ Classify:`;
             });
             
             if (confirmResult.action === 'confirm_yes') {
-                logger.info(`[INTENT-IVR] Slot confirmed: ${this.awaitingConfirmation.slotName}`);
+                console.info(`[INTENT-IVR] Slot confirmed: ${this.awaitingConfirmation.slotName}`);
                 this.awaitingConfirmation = null;
                 // Move to next step
                 this.flowStepIndex++;
@@ -1625,7 +1856,7 @@ Classify:`;
                 await this.playStepPrompt(nextStep);
                 return;
             } else if (confirmResult.action === 'confirm_no') {
-                logger.info(`[INTENT-IVR] User rejected slot value, replaying step`);
+                console.info(`[INTENT-IVR] User rejected slot value, replaying step`);
                 const stepToReplay = this.awaitingConfirmation.step;
                 delete this.flowSlots[stepToReplay.slot_name];
                 this.awaitingConfirmation = null;
@@ -1638,7 +1869,7 @@ Classify:`;
                 return;
             } else {
                 // Unclear response, ask again
-                logger.info(`[INTENT-IVR] Unclear confirmation response (${confirmResult.action}), asking again`);
+                console.info(`[INTENT-IVR] Unclear confirmation response (${confirmResult.action}), asking again`);
                 const clarifyMessage = this.getLocalizedMessage('yes_no_clarify');
                 await this.generateAndPlayTTS(clarifyMessage, { skipCache: true });
                 return;
@@ -1658,19 +1889,19 @@ Classify:`;
             
             // Process the response
             const slotResult = await this.processSlotResponse(utterance, currentStep);
-            logger.info(`[INTENT-IVR] Slot processing result:`, slotResult);
+            console.info(`[INTENT-IVR] Slot processing result:`, slotResult);
             
             // Handle different actions
             switch (slotResult.action) {
                 case 'repeat':
                     // User wants to hear the question again
-                    logger.info('[INTENT-IVR] Replaying step prompt (user requested repeat)');
+                    console.info('[INTENT-IVR] Replaying step prompt (user requested repeat)');
                     await this.playStepPrompt(currentStep);
                     return;
                     
                 case 'wait_more':
                     // User needs more time - don't advance, wait for next input
-                    logger.info('[INTENT-IVR] Waiting for user to provide response...');
+                    console.info('[INTENT-IVR] Waiting for user to provide response...');
                     // Play acknowledgment
                     const waitMessage = this.ivrConfig?.wait_acknowledgment || this.getLocalizedMessage('wait_acknowledgment');
                     await this.generateAndPlayTTS(waitMessage, { skipCache: true });
@@ -1689,7 +1920,7 @@ Classify:`;
                     this.slotRetryCount[stepKey]++;
                     const maxRetries = currentStep.max_retries || flow.max_retries || 2;
                     
-                    logger.info(`[INTENT-IVR] Invalid response for ${currentStep.slot_name}. Retry ${this.slotRetryCount[stepKey]}/${maxRetries}`);
+                    console.info(`[INTENT-IVR] Invalid response for ${currentStep.slot_name}. Retry ${this.slotRetryCount[stepKey]}/${maxRetries}`);
                     
                     if (this.slotRetryCount[stepKey] < maxRetries) {
                         // Use LLM's error message if available (already in correct language), otherwise use step/flow default
@@ -1716,7 +1947,7 @@ Classify:`;
                         } else if (invalidAction === 'skip') {
                             // Store whatever we have and move on
                             this.flowSlots[currentStep.slot_name] = utterance;
-                            logger.info(`[INTENT-IVR] Skipping validation, stored raw: ${currentStep.slot_name} = "${utterance}"`);
+                            console.info(`[INTENT-IVR] Skipping validation, stored raw: ${currentStep.slot_name} = "${utterance}"`);
                         } else {
                             // End flow
                             await this.handleFlowError(new Error('Max invalid retries exceeded'));
@@ -1730,7 +1961,7 @@ Classify:`;
                     // Valid response - store the EXTRACTED value (not raw utterance)
                     const valueToStore = slotResult.extractedValue || utterance;
                     this.flowSlots[currentStep.slot_name] = valueToStore;
-                    logger.info(`[INTENT-IVR] Stored slot: ${currentStep.slot_name} = "${valueToStore}" (confidence: ${slotResult.confidence || 'N/A'})`);
+                    console.info(`[INTENT-IVR] Stored slot: ${currentStep.slot_name} = "${valueToStore}" (confidence: ${slotResult.confidence || 'N/A'})`);
                     // Reset retry counter
                     this.slotRetryCount[stepKey] = 0;
                     
@@ -1765,13 +1996,13 @@ Classify:`;
      * Complete the flow - execute completion action and reset
      */
     async completeFlow() {
-        logger.info(`[INTENT-IVR] Flow completed. Slots:`, this.flowSlots);
+        console.info(`[INTENT-IVR] Flow completed. Slots:`, this.flowSlots);
         
         const flow = this.activeFlow;
         
         // Execute completion function if configured
         if (flow.on_complete_action === 'function_call' && flow.on_complete_function_name) {
-            logger.info(`[INTENT-IVR] Executing flow function: ${flow.on_complete_function_name}`);
+            console.info(`[INTENT-IVR] Executing flow function: ${flow.on_complete_function_name}`);
             
             // Build function arguments with defaults from schema
             let functionArgs = { ...this.flowSlots };
@@ -1788,12 +2019,12 @@ Classify:`;
                         // Add default for single-value enum
                         if (schema.enum && schema.enum.length === 1) {
                             functionArgs[key] = schema.enum[0];
-                            logger.info(`[INTENT-IVR] Added default enum value: ${key} = ${schema.enum[0]}`);
+                            console.info(`[INTENT-IVR] Added default enum value: ${key} = ${schema.enum[0]}`);
                         }
                         // Add explicit default value if defined
                         else if (schema.default !== undefined) {
                             functionArgs[key] = schema.default;
-                            logger.info(`[INTENT-IVR] Added default value: ${key} = ${schema.default}`);
+                            console.info(`[INTENT-IVR] Added default value: ${key} = ${schema.default}`);
                         }
                     }
                 }
@@ -1830,7 +2061,7 @@ Classify:`;
             // Don't reset flow yet - wait for user response
             // The next transcript will be classified as a new intent or "no"
             this.flowAwaitingAnythingElse = true;
-            logger.info(`[INTENT-IVR] Awaiting "anything else" response`);
+            console.info(`[INTENT-IVR] Awaiting "anything else" response`);
             return;
         }
         
@@ -1844,7 +2075,7 @@ Classify:`;
         this.flowStepIndex = 0;
         this.flowAwaitingAnythingElse = false;
         
-        logger.info(`[INTENT-IVR] Flow "${flowName}" completed and reset`);
+        console.info(`[INTENT-IVR] Flow "${flowName}" completed and reset`);
     }
     
     /**
@@ -1869,7 +2100,7 @@ Classify:`;
         const flow = this.activeFlow;
         if (!flow) return;
         
-        logger.info(`[INTENT-IVR] Flow "${flow.flow_name}" cancelled by user`);
+        console.info(`[INTENT-IVR] Flow "${flow.flow_name}" cancelled by user`);
         
         // Play cancel message
         await this.playFlowAudio(flow, 'cancel', {
@@ -1905,7 +2136,7 @@ Classify:`;
      * Handle slot correction - user wants to go back and update a previous answer
      */
     async handleSlotCorrection(targetSlot, flow, steps) {
-        logger.info(`[INTENT-IVR] Handling slot correction for: ${targetSlot || 'previous step'}`);
+        console.info(`[INTENT-IVR] Handling slot correction for: ${targetSlot || 'previous step'}`);
         
         let targetStepIndex = -1;
         
@@ -1931,7 +2162,7 @@ Classify:`;
         // Clear the slot value
         if (targetStep?.slot_name) {
             delete this.flowSlots[targetStep.slot_name];
-            logger.info(`[INTENT-IVR] Cleared slot: ${targetStep.slot_name}`);
+            console.info(`[INTENT-IVR] Cleared slot: ${targetStep.slot_name}`);
         }
         
         // Clear accumulator
@@ -1959,36 +2190,70 @@ Classify:`;
         // Replay the step prompt
         await this.playStepPrompt(targetStep);
     }
-    
+
     /**
-     * Ask user to confirm the slot value
-     */
-    async askForConfirmation(step, value) {
-        const slotName = step.slot_name || '';
-        
-        // Get localized slot label
-        const slotLabel = step.slot_label || this.getSlotLabel(slotName);
-        logger.debug(`[INTENT-IVR] Confirmation label: slotName=${slotName}, final=${slotLabel}`);
-        
-        // Store confirmation state
-        this.awaitingConfirmation = {
-            step: step,
-            slotName: slotName,
-            value: value
-        };
-        
-        // Build confirmation message - prefer custom or build user-friendly one
-        const confirmationText = step.confirmation_text || 
-            this.getLocalizedMessage('confirm_value', { slotLabel, value });
-        
-        logger.info(`[INTENT-IVR] Asking for confirmation: ${confirmationText}`);
-        
-        await this.generateAndPlayTTS(confirmationText, { skipCache: true });
-        
-        // Track TTS cost
-        this.slotValidationCosts.ttsCalls++;
-        this.slotValidationCosts.ttsCharacters += confirmationText.length;
-    }
+	 * Ask user to confirm the slot value
+	 */
+	async askForConfirmation(step, value) {
+		const lang = this.getCurrentLanguage();
+		
+		// Format value based on slot type
+		const formattedValue = formatForTTS(value, 'auto', lang, {
+			slotType: step.slot_type || step.slot_name
+		});
+		
+		// Get slot label for natural language
+		const slotLabel = this.getSlotLabel(step.slot_name);
+		
+		// Resolve i18n content for confirmation template
+		const i18nContent = await this.resolveI18nContent(
+			'step',
+			step.id,
+			'confirm_template',
+			lang
+		);
+		
+		// Use i18n content if available, otherwise fall back to base
+		const contentLanguage = i18nContent?.language || lang;
+		
+		// Build confirmation prompt - priority: i18n > step template > localized default
+		let confirmText = i18nContent?.text || 
+			step.confirm_template || 
+			this.getLocalizedMessage('confirm_value', { 
+				value: formattedValue,
+				slotLabel: slotLabel
+			});
+		
+		// Substitute formatted value - handle multiple placeholder patterns
+		confirmText = confirmText
+			.replace(/\{\{value\}\}/g, formattedValue)
+			.replace(/\{\{slot_value\}\}/g, formattedValue)
+			.replace(/\{\{slot_label\}\}/g, slotLabel);
+		
+		// Also replace the actual slot name placeholder (e.g., {{invoice_no}}, {{customer_name}})
+		if (step.slot_name) {
+			confirmText = confirmText.replace(
+				new RegExp(`\\{\\{${step.slot_name}\\}\\}`, 'g'), 
+				formattedValue
+			);
+		}
+		
+		// Set awaiting confirmation state
+		this.awaitingConfirmation = {
+			step: step,
+			slotName: step.slot_name,
+			value: value,
+			formattedValue: formattedValue
+		};
+		
+		console.info(`[INTENT-IVR] Asking confirmation for ${step.slot_name}: "${formattedValue}" (${contentLanguage})`);
+		
+		await this.generateAndPlayTTS(confirmText, {
+			cacheAudio: false,
+			language: contentLanguage,
+			formatNumbers: false  // Already formatted above
+		});
+	}
     
     /**
      * Handle flow timeout with caching support
@@ -2019,7 +2284,7 @@ Classify:`;
         } else {
             // Max retries exceeded - take timeout action
             const timeoutAction = flow.on_timeout_action || 'transfer';
-            logger.info(`[INTENT-IVR] Max retries exceeded, action: ${timeoutAction}`);
+            console.info(`[INTENT-IVR] Max retries exceeded, action: ${timeoutAction}`);
             
             if (timeoutAction === 'transfer') {
                 this.emit('transfer', { queue: flow.on_error_transfer_queue || 'support' });
@@ -2042,7 +2307,7 @@ Classify:`;
         const flow = this.activeFlow;
         if (!flow) return;
         
-        logger.error(`[INTENT-IVR] Flow error: ${error?.message || error}`);
+        console.error(`[INTENT-IVR] Flow error: ${error?.message || error}`);
         
         // Play error message
         await this.playFlowAudio(flow, 'error', {
@@ -2064,69 +2329,134 @@ Classify:`;
     }
     
     /**
-     * Generic flow audio player with caching support
-     * Handles: intro, complete, cancel, timeout, error, anything_else, closing
-     * Prevents barge-in during playback
-     */
-    async playFlowAudio(flow, audioType, options) {
-        const { text, audioId, audioField, audioName } = options;
-        
-        // Prevent user speech from interrupting flow audio
-        this.preventBargeIn = true;
-        
-        try {
-            // Check if pre-recorded audio exists
-            if (audioId) {
-                let audioBuffer = this.audioCache.get(audioId);
-                if (!audioBuffer) {
-                    audioBuffer = await this.loadAudioFromAPI(audioId);
-                }
-                if (audioBuffer) {
-                    // Add to conversation history so LLM has context
-                    if (text) {
-                        this.conversationHistory.push({
-                            role: 'assistant',
-                            content: text,
-                            timestamp: Date.now()
-                        });
-                    }
-                    await this.playAudioBuffer(audioBuffer);
-                    return;
-                }
-            }
-            
-            // Generate TTS with caching (only if static text)
-            if (text) {
-                const hasDynamicVars = text.includes('{{');
-                
-                if (hasDynamicVars) {
-                    // Substitute variables and play without caching
-                    let resolvedText = text;
-                    for (const [key, value] of Object.entries(this.flowSlots || {})) {
-                        resolvedText = resolvedText.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
-                    }
-                    // Also check for function result placeholders
-                    if (this.lastFunctionResult) {
-                        resolvedText = resolvedText.replace(/\{\{result\.([^}]+)\}\}/g, (match, path) => {
-                            return this.getNestedValue(this.lastFunctionResult, path) || match;
-                        });
-                    }
-                    await this.generateAndPlayTTS(resolvedText, { cacheAudio: false });
-                } else {
-                    // Static text - cache it
-                    await this.generateAndPlayTTS(text, {
-                        cacheAudio: true,
-                        flowId: flow.id,
-                        audioName: audioName,
-                        audioField: audioField
-                    });
-                }
-            }
-        } finally {
-            // Re-enable barge-in after flow audio completes
-            this.preventBargeIn = false;
-        }
-    }
+	 * Generic flow audio player with caching support
+	 * Handles: intro, complete, cancel, timeout, error, anything_else, closing
+	 * Prevents barge-in during playback
+	 */
+	async playFlowAudio(flow, audioType, options) {
+		const { text, audioId, audioField, audioName } = options;
+		
+		// Prevent user speech from interrupting flow audio
+		this.preventBargeIn = true;
+		
+		try {
+			// Resolve i18n content first
+			const fieldName = audioField?.replace('_audio_id', '_text') || `${audioType}_text`;
+			const currentLang = this.getCurrentLanguage();
+			
+			const i18nContent = await this.resolveI18nContent(
+				'flow',
+				flow.id,
+				fieldName,
+				currentLang
+			);
+			
+			// Priority 1: i18n audio exists → play it
+			if (i18nContent?.audio_id) {
+				let audioBuffer = this.audioCache.get(i18nContent.audio_id);
+				if (!audioBuffer) {
+					audioBuffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				}
+				if (audioBuffer) {
+					logger.info(`[INTENT-IVR] Playing i18n audio (${currentLang}): ${i18nContent.audio_id}`);
+					if (i18nContent.text) {
+						this.conversationHistory.push({
+							role: 'assistant',
+							content: i18nContent.text,
+							timestamp: Date.now()
+						});
+					}
+					await this.playAudioBuffer(audioBuffer);
+					return;
+				}
+			}
+			
+			// Priority 2: i18n text exists (no audio) → generate TTS in target language
+			if (i18nContent?.text) {
+				const hasDynamicVars = i18nContent.text.includes('{{');
+				
+				if (hasDynamicVars) {
+					// Substitute variables
+					let finalText = i18nContent.text;
+					for (const [key, value] of Object.entries(this.flowSlots || {})) {
+						finalText = finalText.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+					}
+					if (this.lastFunctionResult) {
+						finalText = finalText.replace(/\{\{result\.([^}]+)\}\}/g, (match, path) => {
+							return this.getNestedValue(this.lastFunctionResult, path) || match;
+						});
+					}
+					await this.generateAndPlayTTS(finalText, { 
+						cacheAudio: false,
+						language: currentLang
+					});
+				} else {
+					// Static text - cache it
+					logger.info(`[INTENT-IVR] Generating TTS for i18n text (${currentLang})`);
+					await this.generateAndPlayTTS(i18nContent.text, {
+						cacheAudio: true,
+						flowId: flow.id,
+						audioName: audioName,
+						audioField: audioField,
+						language: currentLang
+					});
+				}
+				return;
+			}
+			
+			// Priority 3: No i18n content → use base audio if available
+			if (audioId) {
+				let audioBuffer = this.audioCache.get(audioId);
+				if (!audioBuffer) {
+					audioBuffer = await this.loadAudioFromAPI(audioId);
+				}
+				if (audioBuffer) {
+					logger.info(`[INTENT-IVR] Playing base audio (no i18n for ${currentLang}): ${audioId}`);
+					if (text) {
+						this.conversationHistory.push({
+							role: 'assistant',
+							content: text,
+							timestamp: Date.now()
+						});
+					}
+					await this.playAudioBuffer(audioBuffer);
+					return;
+				}
+			}
+			
+			// Priority 4: No audio at all → generate TTS for base text
+			if (text) {
+				const hasDynamicVars = text.includes('{{');
+				
+				if (hasDynamicVars) {
+					let finalText = text;
+					for (const [key, value] of Object.entries(this.flowSlots || {})) {
+						finalText = finalText.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+					}
+					if (this.lastFunctionResult) {
+						finalText = finalText.replace(/\{\{result\.([^}]+)\}\}/g, (match, path) => {
+							return this.getNestedValue(this.lastFunctionResult, path) || match;
+						});
+					}
+					await this.generateAndPlayTTS(finalText, { 
+						cacheAudio: false,
+						language: currentLang
+					});
+				} else {
+					await this.generateAndPlayTTS(text, {
+						cacheAudio: true,
+						flowId: flow.id,
+						audioName: audioName,
+						audioField: audioField,
+						language: currentLang
+					});
+				}
+			}
+		} finally {
+			// Re-enable barge-in after flow audio completes
+			this.preventBargeIn = false;
+		}
+	}
     
     /**
      * Get nested value from object using dot notation
@@ -2136,63 +2466,112 @@ Classify:`;
     }
     
     /**
-     * Play step prompt with caching support
-     * Prevents barge-in during playback
-     * Starts response timeout timer
-     */
-    async playStepPrompt(step) {
-        if (!step) return;
-        
-        const flow = this.activeFlow;
-        
-        // Prime audio output in case connection manager reset after speech
-        await this.primeAudioOutput();
-        
-        // Prevent user speech from interrupting step prompt
-        this.preventBargeIn = true;
-        
-        try {
-            // Check if pre-recorded audio exists
-            if (step.prompt_audio_id) {
-                let stepBuffer = this.audioCache.get(step.prompt_audio_id);
-                if (!stepBuffer) {
-                    stepBuffer = await this.loadAudioFromAPI(step.prompt_audio_id);
-                }
-                if (stepBuffer) {
-                    logger.info(`[INTENT-IVR] Playing cached step audio: ${step.prompt_audio_id}`);
-                    // Add to conversation history so LLM has context
-                    if (step.prompt_text) {
-                        this.conversationHistory.push({
-                            role: 'assistant',
-                            content: step.prompt_text,
-                            timestamp: Date.now()
-                        });
-                    }
-                    await this.playAudioBuffer(stepBuffer);
-                    // Start response timer after audio finishes
-                    this.startResponseTimer(step);
-                    return;
-                }
-            }
-            
-            // Generate TTS with caching
-            if (step.prompt_text) {
-                logger.info(`[INTENT-IVR] Generating TTS for step: ${step.step_name || step.slot_name}`);
-                await this.generateAndPlayTTS(step.prompt_text, {
-                    cacheAudio: true,
-                    stepId: step.id,
-                    flowId: flow?.id,
-                    audioName: `Step: ${step.step_name || step.slot_name}`,
-                    audioField: 'prompt_audio_id'
-                });
-                // Start response timer after TTS finishes
-                this.startResponseTimer(step);
-            }
-        } finally {
-            // Re-enable barge-in after step prompt completes
-            this.preventBargeIn = false;
-        }
-    }
+	 * Play step prompt with caching support
+	 * Prevents barge-in during playback
+	 * Starts response timeout timer
+	 * Supports multi-language content resolution
+	 */
+	async playStepPrompt(step) {
+		if (!step) return;
+		
+		const flow = this.activeFlow;
+		
+		// Prime audio output in case connection manager reset after speech
+		await this.primeAudioOutput();
+		
+		// Prevent user speech from interrupting step prompt
+		this.preventBargeIn = true;
+		
+		try {
+			const currentLang = this.getCurrentLanguage();
+			
+			// Resolve i18n content first
+			const i18nContent = await this.resolveI18nContent(
+				'step',
+				step.id,
+				'prompt_text',
+				currentLang
+			);
+			
+			// Priority 1: i18n audio exists → play it
+			if (i18nContent?.audio_id) {
+				let audioBuffer = this.audioCache.get(i18nContent.audio_id);
+				if (!audioBuffer) {
+					audioBuffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				}
+				if (audioBuffer) {
+					logger.info(`[INTENT-IVR] Playing i18n step audio (${currentLang}): ${i18nContent.audio_id}`);
+					if (i18nContent.text) {
+						this.conversationHistory.push({
+							role: 'assistant',
+							content: i18nContent.text,
+							timestamp: Date.now()
+						});
+					}
+					await this.playAudioBuffer(audioBuffer);
+					this.startResponseTimer(step);
+					return;
+				}
+			}
+			
+			// Priority 2: i18n text exists (no audio) → generate TTS
+			if (i18nContent?.text) {
+				logger.info(`[INTENT-IVR] Generating TTS for step (${currentLang}): ${step.step_name || step.slot_name}`);
+				await this.generateAndPlayTTS(i18nContent.text, {
+					cacheAudio: true,
+					stepId: step.id,
+					flowId: flow?.id,
+					audioName: `Step: ${step.step_name || step.slot_name}`,
+					audioField: 'prompt_audio_id',
+					language: currentLang,
+					slotType: step.slot_type,
+					slotName: step.slot_name
+				});
+				this.startResponseTimer(step);
+				return;
+			}
+			
+			// Priority 3: No i18n → use base audio if available
+			if (step.prompt_audio_id) {
+				let audioBuffer = this.audioCache.get(step.prompt_audio_id);
+				if (!audioBuffer) {
+					audioBuffer = await this.loadAudioFromAPI(step.prompt_audio_id);
+				}
+				if (audioBuffer) {
+					logger.info(`[INTENT-IVR] Playing base step audio (no i18n for ${currentLang}): ${step.prompt_audio_id}`);
+					if (step.prompt_text) {
+						this.conversationHistory.push({
+							role: 'assistant',
+							content: step.prompt_text,
+							timestamp: Date.now()
+						});
+					}
+					await this.playAudioBuffer(audioBuffer);
+					this.startResponseTimer(step);
+					return;
+				}
+			}
+			
+			// Priority 4: No audio → generate TTS for base text
+			if (step.prompt_text) {
+				logger.info(`[INTENT-IVR] Generating TTS for base step text (${currentLang}): ${step.step_name || step.slot_name}`);
+				await this.generateAndPlayTTS(step.prompt_text, {
+					cacheAudio: true,
+					stepId: step.id,
+					flowId: flow?.id,
+					audioName: `Step: ${step.step_name || step.slot_name}`,
+					audioField: 'prompt_audio_id',
+					language: currentLang,
+					slotType: step.slot_type,
+					slotName: step.slot_name
+				});
+				this.startResponseTimer(step);
+			}
+		} finally {
+			// Re-enable barge-in after step prompt completes
+			this.preventBargeIn = false;
+		}
+	}
     
     /**
      * Start response timeout timer for flow steps
@@ -2204,7 +2583,7 @@ Classify:`;
         // Get timeout from step, flow, or default (15 seconds)
         const timeoutMs = (step?.response_timeout || this.activeFlow?.response_timeout || 15) * 1000;
         
-        logger.info(`[INTENT-IVR] Started response timer: ${timeoutMs/1000}s`);
+        console.info(`[INTENT-IVR] Started response timer: ${timeoutMs/1000}s`);
         
         this.responseTimer = setTimeout(async () => {
             // Check if still in active flow and waiting for response
@@ -2254,11 +2633,11 @@ Classify:`;
                 }));
             
             if (intentList.length === 0) {
-                logger.info('[INTENT-IVR] No active intents configured');
+                console.info('[INTENT-IVR] No active intents configured');
                 return { matched: null, suggested: null };
             }
             
-            logger.info('[INTENT-IVR] Classifying with', intentList.length, 'intents');
+            console.info('[INTENT-IVR] Classifying with', intentList.length, 'intents');
             
             // Build recent conversation history (last 6 turns max)
             const recentHistory = this.conversationHistory.slice(-6);
@@ -2315,11 +2694,11 @@ Which intent matches best? Provide English translation in query_english field.`;
             try {
                 classification = JSON.parse(response);
             } catch (parseError) {
-                logger.error('[INTENT-IVR] Failed to parse LLM response');
+                console.error('[INTENT-IVR] Failed to parse LLM response');
                 return this.matchIntentKeyword(transcript);
             }
             
-            logger.info('[INTENT-IVR] LLM Classification:', {
+            console.info('[INTENT-IVR] LLM Classification:', {
                 matched_id: classification.matched_intent_id,
                 matched_name: classification.matched_intent_name,
                 confidence: classification.confidence,
@@ -2373,11 +2752,20 @@ Which intent matches best? Provide English translation in query_english field.`;
             };
             
         } catch (error) {
-            logger.error('[INTENT-IVR] LLM classification error:', error.message);
+            console.error('[INTENT-IVR] LLM classification error:', error.message);
             return this.matchIntentKeyword(transcript);
         }
     }
     
+	async detectLanguageWithLLM(text) {
+		const prompt = `Detect the language of this text. Reply with ONLY the ISO 639-1 code (e.g., 'en', 'ur', 'hi'):
+	Text: "${text}"`;
+		
+		// Use existing callClassifierLLM method
+		const response = await this.callClassifierLLM(prompt, null, 'You are a language detector.');
+		return response?.trim().toLowerCase().substring(0, 2);
+	}
+
     /**
      * Call LLM for intent classification
      */
@@ -2463,13 +2851,13 @@ Which intent matches best? Provide English translation in query_english field.`;
                 }
                 this.classifierCostMetrics.totalCost += callCost;
                 
-                logger.info(`[INTENT-IVR] Classifier: ${provider}/${usedModel}, tokens: ${usage.prompt_tokens}+${usage.completion_tokens}`);
+                console.info(`[INTENT-IVR] Classifier: ${provider}/${usedModel}, tokens: ${usage.prompt_tokens}+${usage.completion_tokens}`);
             }
             
             return response.data.choices?.[0]?.message?.content;
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Classifier LLM error:', error.message);
+            console.error('[INTENT-IVR] Classifier LLM error:', error.message);
             return null;
         }
     }
@@ -2557,6 +2945,55 @@ Which intent matches best? Provide English translation in query_english field.`;
         }
     }
     
+	/**
+	 * Resolve flow content with i18n support
+	 */
+	async resolveFlowContent(flow, field) {
+		const i18nContent = await this.resolveI18nContent(
+			'flow',
+			flow.id,
+			field,
+			this.getCurrentLanguage()
+		);
+		
+		// Field name mapping
+		const audioFieldMap = {
+			'intro_text': 'intro_audio_id',
+			'on_complete_response_text': 'on_complete_audio_id',
+			'on_cancel_response_text': 'on_cancel_audio_id',
+			'anything_else_text': 'anything_else_audio_id',
+			'closing_text': 'closing_audio_id',
+			'on_error_text': 'on_error_audio_id',
+			'on_timeout_text': 'on_timeout_audio_id'
+		};
+		
+		const audioField = audioFieldMap[field];
+		
+		return {
+			text: i18nContent?.text || flow[field],
+			audio_id: i18nContent?.audio_id || flow[audioField],
+			language: i18nContent?.language || this.getCurrentLanguage()
+		};
+	}
+
+	/**
+	 * Resolve step content with i18n support
+	 */
+	async resolveStepContent(flowId, step) {
+		const i18nContent = await this.resolveI18nContent(
+			'step',
+			step.id,
+			'prompt_text',
+			this.getCurrentLanguage()
+		);
+		
+		return {
+			text: i18nContent?.text || step.prompt_text,
+			audio_id: i18nContent?.audio_id || step.prompt_audio_id,
+			language: i18nContent?.language || this.getCurrentLanguage()
+		};
+	}
+
     /**
      * Handle flow intent - starts a conversation flow
      */
@@ -2569,7 +3006,7 @@ Which intent matches best? Provide English translation in query_english field.`;
             
             if (flowId) {
                 // Direct flow ID - load it
-                logger.info(`[INTENT-IVR] Loading flow by ID: ${flowId}`);
+                console.info(`[INTENT-IVR] Loading flow by ID: ${flowId}`);
                 const response = await axios.get(
                     `${this.apiBaseUrl}/api/flows/${agentId}/${flowId}`,
                     { headers: this.apiKey ? { 'x-api-key': this.apiKey } : {}, timeout: 10000 }
@@ -2577,7 +3014,7 @@ Which intent matches best? Provide English translation in query_english field.`;
                 flow = response.data.data;
             } else {
                 // No flow_id - list flows and find matching one by intent name
-                logger.info(`[INTENT-IVR] No flow_id on intent, searching by name: ${intent.name || intent.intent_name}`);
+                console.info(`[INTENT-IVR] No flow_id on intent, searching by name: ${intent.name || intent.intent_name}`);
                 const listResponse = await axios.get(
                     `${this.apiBaseUrl}/api/flows/${agentId}`,
                     { headers: this.apiKey ? { 'x-api-key': this.apiKey } : {}, timeout: 10000 }
@@ -2599,7 +3036,7 @@ Which intent matches best? Provide English translation in query_english field.`;
                 }
                 
                 if (matchedFlow) {
-                    logger.info(`[INTENT-IVR] Found flow: ${matchedFlow.flow_name} (${matchedFlow.id})`);
+                    console.info(`[INTENT-IVR] Found flow: ${matchedFlow.flow_name} (${matchedFlow.id})`);
                     // Load full flow with steps
                     const flowResponse = await axios.get(
                         `${this.apiBaseUrl}/api/flows/${agentId}/${matchedFlow.id}`,
@@ -2610,7 +3047,7 @@ Which intent matches best? Provide English translation in query_english field.`;
             }
             
             if (!flow) {
-                logger.error('[INTENT-IVR] No flow found for intent');
+                console.error('[INTENT-IVR] No flow found for intent');
                 await this.handleStaticIntent(intent);
                 return;
             }
@@ -2619,11 +3056,12 @@ Which intent matches best? Provide English translation in query_english field.`;
             this.activeFlow = flow;
             this.flowSlots = {};
             this.flowStepIndex = 0;
+			this.activeFlow._sessionLanguage = this.getCurrentLanguage();
             this.slotRetryCount = {};  // Reset retry counters
             this.clearSlotAccumulator();  // Clear any accumulated partial responses
             this.awaitingConfirmation = null;  // Clear confirmation state
             
-            logger.info(`[INTENT-IVR] Started flow: ${flow.flow_name} with ${flow.steps?.length || 0} steps`);
+            console.info(`[INTENT-IVR] Started flow: ${flow.flow_name} with ${flow.steps?.length || 0} steps`);
             
             // Play intro if available (uses caching)
             if (flow.intro_text || flow.intro_audio_id) {
@@ -2643,7 +3081,7 @@ Which intent matches best? Provide English translation in query_english field.`;
             }
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Flow error:', error.message);
+            console.error('[INTENT-IVR] Flow error:', error.message);
             await this.handleStaticIntent(intent);
         }
     }
@@ -2652,31 +3090,87 @@ Which intent matches best? Provide English translation in query_english field.`;
      * Handle static response intent
      */
     async handleStaticIntent(intent) {
-        if (intent.response_audio_id) {
-            let audioBuffer = this.audioCache.get(intent.response_audio_id);
-            
-            if (!audioBuffer) {
-                audioBuffer = await this.loadAudioFromAPI(intent.response_audio_id);
-                if (audioBuffer) {
-                    this.audioCache.set(intent.response_audio_id, audioBuffer);
-                }
-            }
-            
-            if (audioBuffer) {
-                await this.playAudioBuffer(audioBuffer);
-                this.emit('transcript.agent', { transcript: intent.response_text || '[Audio Response]' });
-                return;
-            }
-        }
-        
-        if (intent.response_text) {
-            await this.generateAndPlayTTS(intent.response_text, { 
-                cacheAudio: true, 
-                audioName: `Intent: ${intent.intent_name}`,
-                intentId: intent.id
-            });
-        }
-    }
+		const currentLang = this.getCurrentLanguage();
+		
+		// Try to resolve i18n content first
+		const i18nContent = await this.resolveI18nContent(
+			'intent', 
+			intent.id, 
+			'response_text', 
+			currentLang
+		);
+		
+		// Priority 1: i18n audio exists → play it
+		if (i18nContent?.audio_id) {
+			let audioBuffer = this.audioCache.get(i18nContent.audio_id);
+			if (!audioBuffer) {
+				audioBuffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				if (audioBuffer) {
+					this.audioCache.set(i18nContent.audio_id, audioBuffer);
+				}
+			}
+			if (audioBuffer) {
+				logger.info(`[INTENT-IVR] Playing i18n intent audio (${currentLang})`);
+				this.emit('transcript.agent', { transcript: i18nContent.text || '[Audio Response]' });
+				if (i18nContent.text) {
+					this.conversationHistory.push({
+						role: 'assistant',
+						content: i18nContent.text,
+						timestamp: Date.now()
+					});
+				}
+				await this.playAudioBuffer(audioBuffer);
+				return;
+			}
+		}
+		
+		// Priority 2: i18n text exists (no audio) → generate TTS
+		if (i18nContent?.text) {
+			logger.info(`[INTENT-IVR] Generating TTS for i18n intent (${currentLang})`);
+			await this.generateAndPlayTTS(i18nContent.text, { 
+				cacheAudio: true, 
+				audioName: `Intent: ${intent.name || intent.intent_name}`,
+				intentId: intent.id,
+				language: currentLang
+			});
+			return;
+		}
+		
+		// Priority 3: No i18n → use base audio if available
+		if (intent.response_audio_id) {
+			let audioBuffer = this.audioCache.get(intent.response_audio_id);
+			if (!audioBuffer) {
+				audioBuffer = await this.loadAudioFromAPI(intent.response_audio_id);
+				if (audioBuffer) {
+					this.audioCache.set(intent.response_audio_id, audioBuffer);
+				}
+			}
+			if (audioBuffer) {
+				logger.info(`[INTENT-IVR] Playing base intent audio (no i18n for ${currentLang})`);
+				this.emit('transcript.agent', { transcript: intent.response_text || '[Audio Response]' });
+				if (intent.response_text) {
+					this.conversationHistory.push({
+						role: 'assistant',
+						content: intent.response_text,
+						timestamp: Date.now()
+					});
+				}
+				await this.playAudioBuffer(audioBuffer);
+				return;
+			}
+		}
+		
+		// Priority 4: No audio → generate TTS for base text
+		if (intent.response_text) {
+			logger.info(`[INTENT-IVR] Generating TTS for base intent text (${currentLang})`);
+			await this.generateAndPlayTTS(intent.response_text, { 
+				cacheAudio: true, 
+				audioName: `Intent: ${intent.name || intent.intent_name}`,
+				intentId: intent.id,
+				language: currentLang
+			});
+		}
+	}
     
     /**
      * Handle KB lookup intent
@@ -2726,7 +3220,7 @@ Which intent matches best? Provide English translation in query_english field.`;
             }
             
         } catch (error) {
-            logger.error('[INTENT-IVR] KB lookup error:', error.message);
+            console.error('[INTENT-IVR] KB lookup error:', error.message);
             await this.handleStaticIntent(intent);
         }
     }
@@ -2772,7 +3266,7 @@ ${kbContext}`;
             
             return response.data.choices?.[0]?.message?.content;
         } catch (error) {
-            logger.error('[INTENT-IVR] KB response error:', error.message);
+            console.error('[INTENT-IVR] KB response error:', error.message);
             return null;
         }
     }
@@ -2804,7 +3298,7 @@ ${kbContext}`;
      */
     async sendFunctionResponse(functionName, result) {
         try {
-            logger.info(`[INTENT-IVR] Function response received: ${functionName}`, result);
+            console.info(`[INTENT-IVR] Function response received: ${functionName}`, result);
             
             // Check if result has a response to play
             if (result?.response_text || result?.message) {
@@ -2824,14 +3318,14 @@ ${kbContext}`;
             
             // If function completed a flow, reset flow state
             if (result?.complete_flow && this.activeFlow) {
-                logger.info('[INTENT-IVR] Function completed flow, resetting state');
+                console.info('[INTENT-IVR] Function completed flow, resetting state');
                 this.activeFlow = null;
                 this.flowSlots = {};
                 this.flowStepIndex = 0;
             }
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Error handling function response:', error.message);
+            console.error('[INTENT-IVR] Error handling function response:', error.message);
         }
     }
     
@@ -2849,47 +3343,103 @@ ${kbContext}`;
     }
     
     /**
-     * Handle fallback (no intent matched)
-     */
-    async handleFallback(transcript, suggested) {
-        const fallbackText = this.ivrConfig?.no_match_text || this.ivrConfig?.not_found_message ||
-            this.getLocalizedMessage('not_understood');
-        
-        if (this.ivrConfig?.no_match_audio_id) {
-            const buffer = this.audioCache.get(this.ivrConfig.no_match_audio_id);
-            if (buffer) {
-                await this.playAudioBuffer(buffer);
-                return;
-            }
-        }
-        
-        await this.generateAndPlayTTS(fallbackText);
-    }
+	 * Handle fallback (no intent matched) with i18n support
+	 */
+	async handleFallback(transcript, suggested) {
+		const currentLang = this.getCurrentLanguage();
+		const configId = this.ivrConfig?.id;
+		
+		// Try i18n no_match content
+		if (configId) {
+			const i18nContent = await this.resolveI18nContent(
+				'config',
+				configId,
+				'no_match_text',
+				currentLang
+			);
+			
+			// Priority 1: i18n audio
+			if (i18nContent?.audio_id) {
+				const buffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				if (buffer) {
+					await this.playAudioBuffer(buffer);
+					return;
+				}
+			}
+			
+			// Priority 2: i18n text
+			if (i18nContent?.text) {
+				await this.generateAndPlayTTS(i18nContent.text, { language: currentLang });
+				return;
+			}
+		}
+		
+		// Priority 3: Base no_match audio
+		if (this.ivrConfig?.no_match_audio_id) {
+			const buffer = this.audioCache.get(this.ivrConfig.no_match_audio_id);
+			if (buffer) {
+				await this.playAudioBuffer(buffer);
+				return;
+			}
+		}
+		
+		// Priority 4: Base text or localized message
+		const fallbackText = this.ivrConfig?.no_match_text || this.getLocalizedMessage('not_understood');
+		await this.generateAndPlayTTS(fallbackText, { language: currentLang });
+	}
     
     /**
-     * Play fallback response
-     */
-    async playFallbackResponse() {
-        const fallbackAudioId = this.ivrConfig?.fallback_audio_id;
-        if (fallbackAudioId) {
-            const buffer = this.audioCache.get(fallbackAudioId);
-            if (buffer) {
-                await this.playAudioBuffer(buffer);
-                return;
-            }
-        }
-        
-        const fallbackText = this.ivrConfig?.not_found_message || this.getLocalizedMessage('not_found');
-        await this.generateAndPlayTTS(fallbackText);
-    }
+	 * Play fallback response (KB not found) with i18n support
+	 */
+	async playFallbackResponse() {
+		const currentLang = this.getCurrentLanguage();
+		const configId = this.ivrConfig?.id;
+		
+		// Try i18n fallback content
+		if (configId) {
+			const i18nContent = await this.resolveI18nContent(
+				'config',
+				configId,
+				'fallback_text',
+				currentLang
+			);
+			
+			if (i18nContent?.audio_id) {
+				const buffer = await this.loadAudioFromAPI(i18nContent.audio_id);
+				if (buffer) {
+					await this.playAudioBuffer(buffer);
+					return;
+				}
+			}
+			
+			if (i18nContent?.text) {
+				await this.generateAndPlayTTS(i18nContent.text, { language: currentLang });
+				return;
+			}
+		}
+		
+		// Base fallback
+		const fallbackAudioId = this.ivrConfig?.fallback_audio_id;
+		if (fallbackAudioId) {
+			const buffer = this.audioCache.get(fallbackAudioId);
+			if (buffer) {
+				await this.playAudioBuffer(buffer);
+				return;
+			}
+		}
+		
+		const fallbackText = this.ivrConfig?.not_found_message || this.getLocalizedMessage('not_found');
+		await this.generateAndPlayTTS(fallbackText, { language: currentLang });
+	}
     
     /**
      * Load audio from API - detects format and converts to ULAW for playback
      */
     async loadAudioFromAPI(audioId) {
+		 const agentId = this.agentConfig?.agentId || this.config.agentId;
+		console.log(`${this.apiBaseUrl}/api/internal/ivr/${agentId}/audio/${audioId}/stream`)
         try {
-            const agentId = this.agentConfig?.agentId || this.config.agentId;
-            
+           
             // Fetch the audio stream
             const response = await axios.get(
                 `${this.apiBaseUrl}/api/internal/ivr/${agentId}/audio/${audioId}/stream`,
@@ -2902,7 +3452,7 @@ ${kbContext}`;
             }
             
             const audioBuffer = Buffer.from(response.data);
-            logger.info(`[INTENT-IVR] Loaded audio: ${audioId} (${audioBuffer.length} bytes)`);
+            console.info(`[INTENT-IVR] Loaded audio: ${audioId} (${audioBuffer.length} bytes)`);
             
             // Detect if it's MP3 format using magic bytes
             // MP3: ID3 tag (0x49 0x44 0x33) or MPEG sync (0xFF 0xFB/0xFA/etc)
@@ -2911,10 +3461,10 @@ ${kbContext}`;
             const isMP3 = isID3 || isMPEGSync;
             
             if (isMP3) {
-                logger.info(`[INTENT-IVR] Converting MP3 to ULAW for playback...`);
+                console.info(`[INTENT-IVR] Converting MP3 to ULAW for playback...`);
                 const mulawBuffer = await this.convertMP3ToMulaw(audioBuffer);
                 if (mulawBuffer && mulawBuffer.length > 0) {
-                    logger.info(`[INTENT-IVR] Converted to ULAW: ${mulawBuffer.length} bytes (${(mulawBuffer.length / 8000).toFixed(2)}s)`);
+                    console.info(`[INTENT-IVR] Converted to ULAW: ${mulawBuffer.length} bytes (${(mulawBuffer.length / 8000).toFixed(2)}s)`);
                     return mulawBuffer;
                 }
                 logger.warn('[INTENT-IVR] MP3 to ULAW conversion failed');
@@ -2922,11 +3472,11 @@ ${kbContext}`;
             }
             
             // Not MP3, assume it's already ULAW
-            logger.info(`[INTENT-IVR] Using raw ULAW: ${audioBuffer.length} bytes (${(audioBuffer.length / 8000).toFixed(2)}s)`);
+            console.info(`[INTENT-IVR] Using raw ULAW: ${audioBuffer.length} bytes (${(audioBuffer.length / 8000).toFixed(2)}s)`);
             return audioBuffer;
             
         } catch (error) {
-            logger.error('[INTENT-IVR] Load audio API error:', error.message);
+            console.error('[INTENT-IVR] Load audio API error:', error.message);
             return null;
         }
     }
@@ -2943,7 +3493,7 @@ ${kbContext}`;
             const chunkSize = 160; // 20ms at 8kHz
             const intervalMs = 20;
             
-            logger.info(`[INTENT-IVR] Playing pre-recorded audio: ${buffer.length} bytes (${(buffer.length / 8000).toFixed(2)}s)`);
+            console.info(`[INTENT-IVR] Playing pre-recorded audio: ${buffer.length} bytes (${(buffer.length / 8000).toFixed(2)}s)`);
             
             this.playbackInterval = setInterval(() => {
                 if (!this.isPlaying || this.playbackPosition >= buffer.length) {
@@ -2996,7 +3546,7 @@ ${kbContext}`;
      * and waits a moment for connection manager to settle
      */
     async primeAudioOutput() {
-        logger.info('[INTENT-IVR] Priming audio output...');
+        console.info('[INTENT-IVR] Priming audio output...');
         
         // Small delay to let connection manager settle after NEW SPEECH reset
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -3015,7 +3565,7 @@ ${kbContext}`;
         // Another small delay
         await new Promise(resolve => setTimeout(resolve, 100));
         
-        logger.info('[INTENT-IVR] Audio output primed');
+        console.info('[INTENT-IVR] Audio output primed');
     }
     
     /**
@@ -3025,15 +3575,28 @@ ${kbContext}`;
     async generateAndPlayTTS(text, options = {}) {
         if (!text || text.trim().length === 0) return;
         
+		let processedText = text;
+		if (options.formatNumbers !== false) {
+			const lang = options.language || this.getCurrentLanguage();
+			processedText = processTextForTTS(text, lang, {
+				slotType: options.slotType || null,
+				slotName: options.slotName || null
+			});
+			
+			if (processedText !== text) {
+				logger.debug(`[INTENT-IVR] TTS formatted: "${text.substring(0,50)}" → "${processedText.substring(0,50)}"`);
+			}
+		}
+		
         // Check memory cache for same-session reuse (step-based)
         if (options.stepId && this.ivrConfig?.enable_response_cache) {
             const memoryCached = this.getStepAudioFromMemory(options.stepId);
             if (memoryCached) {
-                logger.info('[INTENT-IVR] Playing cached step audio (memory)');
-                this.emit('transcript.agent', { transcript: text });
+                console.info('[INTENT-IVR] Playing cached step audio (memory)');
+                this.emit('transcript.agent', { transcript: processedText });
                 this.conversationHistory.push({
                     role: 'assistant',
-                    content: text,
+                    content: processedText,
                     timestamp: Date.now()
                 });
                 await this.playAudioBuffer(memoryCached);
@@ -3041,16 +3604,35 @@ ${kbContext}`;
             }
         }
         
-        logger.info('[INTENT-IVR] Generating TTS:', text.substring(0, 50) + '...');
+        console.info('[INTENT-IVR] Generating TTS:', processedText.substring(0, 50) + '...');
+		
+		// Determine TTS voice based on language
+		const contentLanguage = options.language || this.getCurrentLanguage();
+		const voiceConfig = this.languageVoiceMap[contentLanguage];
+		
+		// If we have a language-specific voice configured, use it
+		let ttsProvider = this.ivrConfig?.tts_provider || this.config.tts_provider || 'uplift';
+		let ttsVoice = this.ivrConfig?.tts_voice || this.config.custom_voice;
+		
+		if (voiceConfig) {
+			ttsVoice = voiceConfig.voice;
+			console.info(`[INTENT-IVR] Using ${contentLanguage} voice: ${voiceConfig.provider}/${ttsVoice}`);
+			
+			// Switch TTS voice if different from current
+			if (this.tts && this.tts.voice !== ttsVoice) {
+				this.tts.voice = ttsVoice;
+				console.info(`[INTENT-IVR] Switched TTS voice to: ${ttsVoice}`);
+			}
+		}
         
-        this.ttsMetrics.charactersProcessed += text.length;
+        this.ttsMetrics.charactersProcessed += processedText.length;
         this.ttsMetrics.callCount++;
         
-        this.emit('transcript.agent', { transcript: text });
+        this.emit('transcript.agent', { transcript: processedText });
         
         this.conversationHistory.push({
             role: 'assistant',
-            content: text,
+            content: processedText,
             timestamp: Date.now()
         });
         
@@ -3068,7 +3650,7 @@ ${kbContext}`;
             let mp3Listener = null;
             
             if (shouldCache) {
-                logger.info(`[INTENT-IVR] Will cache MP3 audio for ${options.stepId ? 'step' : options.intentId ? 'intent' : 'flow'}`);
+                console.info(`[INTENT-IVR] Will cache MP3 audio for ${options.stepId ? 'step' : options.intentId ? 'intent' : 'flow'}`);
                 
                 // Capture original MP3 chunks before conversion (event is 'audio.chunk')
                 mp3Listener = ({ chunk }) => {
@@ -3099,7 +3681,7 @@ ${kbContext}`;
             });
             
             try {
-                await this.tts.synthesizeStreaming(text);
+                await this.tts.synthesizeStreaming(processedText);
                 
                 // Wait for audio to finish playing
                 await audioCompletePromise;
@@ -3112,25 +3694,26 @@ ${kbContext}`;
                 // Save captured MP3 to library and link to step/intent
                 if (shouldCache && mp3Chunks.length > 0) {
                     const mp3Buffer = Buffer.concat(mp3Chunks);
-                    logger.info(`[INTENT-IVR] Captured MP3: ${mp3Buffer.length} bytes`);
+                    console.info(`[INTENT-IVR] Captured MP3: ${mp3Buffer.length} bytes`);
                     
                     this.ttsMetrics.audioSecondsGenerated += mp3Buffer.length / 4000; // Rough estimate for MP3
                     
                     // Save MP3 to file storage and update step/intent
-                    await this.saveFlowStepAudio(text, mp3Buffer, {
+                    await this.saveFlowStepAudio(processedText, mp3Buffer, {
                         stepId: options.stepId,
                         flowId: options.flowId,
                         intentId: options.intentId,
                         audioName: options.audioName,
                         audioField: options.audioField || 'prompt_audio_id',
-                        fileFormat: 'mp3'  // Save as MP3
+                        fileFormat: 'mp3',  // Save as MP3
+						language: options.language
                     });
                 }
             } catch (error) {
                 if (mp3Listener) {
                     this.tts.removeListener('audio.chunk', mp3Listener);
                 }
-                logger.error('[INTENT-IVR] TTS error:', error.message);
+                console.error('[INTENT-IVR] TTS error:', error.message);
             }
             
             this.isPlaying = false;
@@ -3171,7 +3754,7 @@ ${kbContext}`;
                 ? Math.round((audioBuffer.length / 4000) * 1000)
                 : Math.round((audioBuffer.length / 8000) * 1000);
             
-            logger.info('[INTENT-IVR] Saving TTS audio to library:', {
+            console.info('[INTENT-IVR] Saving TTS audio to library:', {
                 name,
                 size: audioBuffer.length,
                 format: format,
@@ -3198,7 +3781,8 @@ ${kbContext}`;
                         step_id: stepId || null,
                         flow_id: flowId || null,
                         intent_id: intentId || null,
-                        audio_field: audioField || 'prompt_audio_id'
+                        audio_field: audioField || 'prompt_audio_id',
+						update_i18n: true
                     },
                     { 
                         headers: this.apiKey ? { 'x-api-key': this.apiKey } : {},
@@ -3207,7 +3791,7 @@ ${kbContext}`;
                 );
                 
                 if (response.data?.success && response.data?.audio_id) {
-                    logger.info('[INTENT-IVR] Audio saved and linked:', {
+                    console.info('[INTENT-IVR] Audio saved and linked:', {
                         audioId: response.data.audio_id,
                         stepUpdated: response.data.step_updated,
                         flowUpdated: response.data.flow_updated,
@@ -3288,7 +3872,7 @@ ${kbContext}`;
             try {
                 execSync(cmd, { timeout: 10000 });
             } catch (ffmpegError) {
-                logger.error('[INTENT-IVR] FFmpeg PCM-to-ULAW error:', ffmpegError.message);
+                console.error('[INTENT-IVR] FFmpeg PCM-to-ULAW error:', ffmpegError.message);
                 // Cleanup
                 try { fs.unlinkSync(inputFile); } catch (e) {}
                 return null;
@@ -3304,7 +3888,7 @@ ${kbContext}`;
             return ulawBuffer;
             
         } catch (error) {
-            logger.error('[INTENT-IVR] PCM-to-ULAW conversion error:', error.message);
+            console.error('[INTENT-IVR] PCM-to-ULAW conversion error:', error.message);
             return null;
         }
     }
@@ -3313,7 +3897,7 @@ ${kbContext}`;
      * Disconnect and cleanup
      */
     async disconnect() {
-        logger.info('[INTENT-IVR] Disconnecting...');
+        console.info('[INTENT-IVR] Disconnecting...');
         
         this.isDisconnecting = true;
         this.stopPlayback();
@@ -3332,14 +3916,14 @@ ${kbContext}`;
         const classifierLLM = this.classifierCostMetrics;
         const tts = this.ttsMetrics;
         
-        logger.info(`[INTENT-IVR] === CALL COST SUMMARY ===`);
-        logger.info(`[INTENT-IVR] Classifier LLM: ${classifierLLM.totalInputTokens || 0}+${classifierLLM.totalOutputTokens || 0} tokens (${classifierLLM.totalCalls || 0} calls)`);
-        logger.info(`[INTENT-IVR] Slot Validation LLM: ${slotLLM.llmInputTokens || 0}+${slotLLM.llmOutputTokens || 0} tokens (${slotLLM.llmCalls || 0} calls)`);
-        logger.info(`[INTENT-IVR] TTS Generated: ${tts.charactersProcessed || 0} chars, ${(tts.audioSecondsGenerated || 0).toFixed(2)}s (${tts.callCount || 0} calls)`);
-        logger.info(`[INTENT-IVR] Slot TTS: ${slotLLM.ttsCharacters || 0} chars (${slotLLM.ttsCalls || 0} calls)`);
-        logger.info(`[INTENT-IVR] Total LLM tokens: ${(classifierLLM.totalInputTokens || 0) + (slotLLM.llmInputTokens || 0)}+${(classifierLLM.totalOutputTokens || 0) + (slotLLM.llmOutputTokens || 0)}`);
-        logger.info(`[INTENT-IVR] Total TTS chars: ${(tts.charactersProcessed || 0) + (slotLLM.ttsCharacters || 0)}`);
-        logger.info(`[INTENT-IVR] ========================`);
+        console.info(`[INTENT-IVR] === CALL COST SUMMARY ===`);
+        console.info(`[INTENT-IVR] Classifier LLM: ${classifierLLM.totalInputTokens || 0}+${classifierLLM.totalOutputTokens || 0} tokens (${classifierLLM.totalCalls || 0} calls)`);
+        console.info(`[INTENT-IVR] Slot Validation LLM: ${slotLLM.llmInputTokens || 0}+${slotLLM.llmOutputTokens || 0} tokens (${slotLLM.llmCalls || 0} calls)`);
+        console.info(`[INTENT-IVR] TTS Generated: ${tts.charactersProcessed || 0} chars, ${(tts.audioSecondsGenerated || 0).toFixed(2)}s (${tts.callCount || 0} calls)`);
+        console.info(`[INTENT-IVR] Slot TTS: ${slotLLM.ttsCharacters || 0} chars (${slotLLM.ttsCalls || 0} calls)`);
+        console.info(`[INTENT-IVR] Total LLM tokens: ${(classifierLLM.totalInputTokens || 0) + (slotLLM.llmInputTokens || 0)}+${(classifierLLM.totalOutputTokens || 0) + (slotLLM.llmOutputTokens || 0)}`);
+        console.info(`[INTENT-IVR] Total TTS chars: ${(tts.charactersProcessed || 0) + (slotLLM.ttsCharacters || 0)}`);
+        console.info(`[INTENT-IVR] ========================`);
         
         if (this.stt) {
             try {
@@ -3371,7 +3955,7 @@ ${kbContext}`;
         this.isConnected = false;
         this.isConfigured = false;
         
-        logger.info('[INTENT-IVR] Disconnected');
+        console.info('[INTENT-IVR] Disconnected');
     }
     
     /**
@@ -3426,7 +4010,7 @@ ${kbContext}`;
             (this.slotValidationCosts.ttsCharacters || 0);
         
         // Debug log
-        logger.info(`[INTENT-IVR] Cost metrics debug:`, {
+        console.info(`[INTENT-IVR] Cost metrics debug:`, {
             classifier: { input: classifierInputTokens, output: classifierOutputTokens, cost: classifierLLMCost },
             slotValidation: { input: slotInputTokens, output: slotOutputTokens, cost: slotValidationLLMCost },
             tts: { preRecorded: this.ttsMetrics.audioSecondsGenerated, slotChars: this.slotValidationCosts.ttsCharacters }

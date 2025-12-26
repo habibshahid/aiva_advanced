@@ -202,41 +202,66 @@ class LanguageService {
         return defaultLang[0] || { code: 'en', name: 'English' };
     }
     
-    /**
-     * Update agent's languages
-     */
-    static async updateAgentLanguages(agentId, languageCodes, defaultLanguage = null) {
-        // Get tenant_id for the agent
-        const [agents] = await db.query(
-            `SELECT tenant_id FROM yovo_tbl_aiva_agents WHERE id = ?`,
-            [agentId]
-        );
-        
-        if (agents.length === 0) {
-            throw new Error('Agent not found');
-        }
-        
-        // Delete existing languages
-        await db.query(
-            `DELETE FROM yovo_tbl_aiva_agent_languages WHERE agent_id = ?`,
-            [agentId]
-        );
-        
-        // Insert new languages
-        if (languageCodes && languageCodes.length > 0) {
-            const defaultLang = defaultLanguage || languageCodes[0];
-            
-            for (const code of languageCodes) {
-                await db.query(`
-                    INSERT INTO yovo_tbl_aiva_agent_languages 
-                    (agent_id, language_code, is_default)
-                    VALUES (?, ?, ?)
-                `, [agentId, code, code === defaultLang ? 1 : 0]);
-            }
-        }
-        
-        return this.getAgentLanguages(agentId);
-    }
+	/**
+	 * Update agent's languages (supports voice config - backwards compatible)
+	 * @param {string} agentId
+	 * @param {Array} languages - Array of codes ['en','ur'] OR objects [{language_code:'ur', is_default:true, tts_provider:'uplift', tts_voice:'v_meklc281'}]
+	 * @param {string} defaultLanguage - Optional default language code (fallback if not in objects)
+	 */
+	static async updateAgentLanguages(agentId, languages, defaultLanguage = null) {
+		// Get tenant_id for the agent
+		const [agents] = await db.query(
+			`SELECT tenant_id FROM yovo_tbl_aiva_agents WHERE id = ?`,
+			[agentId]
+		);
+		
+		if (agents.length === 0) {
+			throw new Error('Agent not found');
+		}
+		
+		// Delete existing languages
+		await db.query(
+			`DELETE FROM yovo_tbl_aiva_agent_languages WHERE agent_id = ?`,
+			[agentId]
+		);
+		
+		// Insert new languages
+		if (languages && languages.length > 0) {
+			// Normalize: support both string codes and objects (backwards compatible)
+			const normalizedLangs = languages.map(lang => {
+				if (typeof lang === 'string') {
+					return { language_code: lang };
+				}
+				return lang;
+			});
+			
+			// Determine default language (priority: explicit param > is_default in objects > first language)
+			let defaultLang = defaultLanguage;
+			if (!defaultLang) {
+				const defaultFromObjects = normalizedLangs.find(l => l.is_default === true);
+				defaultLang = defaultFromObjects?.language_code || normalizedLangs[0].language_code;
+			}
+			
+			for (const lang of normalizedLangs) {
+				const code = lang.language_code;
+				const isDefault = (lang.is_default === true) || (code === defaultLang);
+				
+				await db.query(`
+					INSERT INTO yovo_tbl_aiva_agent_languages 
+					(agent_id, language_code, is_default, tts_provider, tts_voice_id)
+					VALUES (?, ?, ?, ?, ?)
+				`, [
+					agentId, 
+					code, 
+					isDefault ? 1 : 0,
+					lang.tts_provider || null,
+					lang.tts_voice || lang.tts_voice_id || null
+				]);
+			}
+		}
+		
+		return this.getAgentLanguages(agentId);
+	}
     
     /**
      * Add a language to an agent
