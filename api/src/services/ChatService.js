@@ -2493,7 +2493,7 @@ Respond in valid JSON format.`
 						kbId: agent.kb_id,
 						query: searchQuery,
 						image: null,
-						topK: 10,
+						topK: 5,
 						searchType: 'text',
 						filters: {
 							include_products: true
