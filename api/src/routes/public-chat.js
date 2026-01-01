@@ -13,7 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const path = require('path');
 const AudioService = require('../services/AudioService');
-
+const db = require('../config/database');
 // Configure multer for audio uploads
 const audioUpload = multer({
     storage: multer.memoryStorage(),
@@ -679,6 +679,109 @@ router.post('/feedback/message', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to submit feedback'
+    });
+  }
+});
+
+/**
+ * @route GET /api/public/chat/document/:documentId/download
+ * @desc Download a document from knowledge base (public access for sources)
+ * @access Public
+ */
+router.get('/document/:documentId/download', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    
+    // Get document info
+    const [docs] = await db.query(
+      `SELECT d.*, k.tenant_id 
+       FROM yovo_tbl_aiva_documents d
+       JOIN yovo_tbl_aiva_knowledge_bases k ON d.kb_id = k.id
+       WHERE d.id = ?`,
+      [documentId]
+    );
+    
+    if (docs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Document not found'
+      });
+    }
+    
+    const doc = docs[0];
+    
+    // Check if it's a web scrape (no file to download)
+    const metadata = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata) : doc.metadata;
+    if (metadata?.source_type === 'web_scrape' || metadata?.source_type === 'sitemap_scrape') {
+      // Redirect to source URL if available
+      const sourceUrl = metadata?.source_url;
+      if (sourceUrl) {
+        return res.redirect(sourceUrl);
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'This is a web-scraped document with no downloadable file'
+      });
+    }
+    
+    // Get file path
+    let filePath = doc.storage_url;
+    if (!filePath.startsWith('/etc/aiva-oai')) {
+      filePath = `/etc/aiva-oai/${filePath}`;
+    }
+    
+    // Check if file exists
+    const fs = require('fs');
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Document file not found'
+      });
+    }
+    
+    // Determine content type
+    const path = require('path');
+    const ext = path.extname(doc.original_filename || doc.filename).toLowerCase();
+    const contentTypes = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.html': 'text/html',
+      '.md': 'text/markdown'
+    };
+    
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+    
+    // Set headers for download
+    res.set({
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(doc.original_filename || doc.filename)}"`,
+      'Cache-Control': 'public, max-age=3600'
+    });
+    
+    // Stream file
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.on('error', (error) => {
+      console.error('Stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Error streaming file' });
+      }
+    });
+    
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Document download error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to download document'
     });
   }
 });

@@ -490,6 +490,21 @@ async def scrape_url(request: ScrapeUrlRequest):
                 'title': page['title'],
                 'chunks': result.processing_results.total_chunks
             })
+            
+            if processed_documents:
+                from app.services.document_job_processor import get_document_job_processor
+                job_processor = get_document_job_processor()
+                await job_processor._update_kb_stats(request.kb_id)
+            
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{settings.NODE_API_URL}/api/kb/{request.kb_id}/refresh-stats",
+                    headers={"x-api-key": settings.NODE_API_KEY}
+                )
+        except Exception as e:
+            logger.warning(f"Failed to refresh KB stats: {e}")
         
         return {
             'total_pages_scraped': scrape_result['total_pages'],
@@ -558,6 +573,11 @@ async def scrape_sitemap(request: ScrapeSitemapRequest):
                         'title': page_data['title']
                     })
                     
+                    if processed_documents:
+                        from app.services.document_job_processor import get_document_job_processor
+                        job_processor = get_document_job_processor()
+                        await job_processor._update_kb_stats(request.kb_id)
+                        
                 except Exception as e:
                     logger.error(f"Error processing URL {url}: {e}")
                     continue

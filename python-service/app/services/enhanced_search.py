@@ -454,12 +454,28 @@ class EnhancedSearchService:
         # ============================================================
         if do_threshold:
             original_count = len(all_results)
-            all_results = [
+            filtered_results = [
                 r for r in all_results 
                 if r.get("score", 0) >= self.min_relevance
             ]
-            features_applied.append("threshold")
-            logger.debug(f"Threshold filtered: {original_count} -> {len(all_results)}")
+            
+            # ✅ FIX: Always keep at least min(top_k, 3) results
+            min_required = min(top_k, 3)
+            
+            if len(filtered_results) >= min_required:
+                # Enough results pass threshold
+                all_results = filtered_results
+                features_applied.append("threshold")
+                logger.debug(f"Threshold filtered: {original_count} -> {len(all_results)}")
+            else:
+                # Not enough results pass threshold - keep top results anyway
+                all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+                kept_count = max(min_required, len(filtered_results))
+                all_results = all_results[:kept_count]
+                logger.warning(
+                    f"Threshold too strict ({self.min_relevance}): only {len(filtered_results)} passed, "
+                    f"keeping top {len(all_results)} results"
+                )
         
         # ============================================================
         # Step 7: MMR Diversity (if enabled)

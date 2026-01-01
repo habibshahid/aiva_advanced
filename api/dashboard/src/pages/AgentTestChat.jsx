@@ -129,9 +129,9 @@ const AgentTestChat = () => {
       const result = response.data.data;
       
       // Update session ID if new session created
-      if (!sessionId && result.session_id) {
-        setSessionId(result.session_id);
-      }
+      if (result.session_id && (!sessionId || result.new_session_created)) {
+		setSessionId(result.session_id);
+	  }
 
       // Add assistant message
       const assistantMessage = {

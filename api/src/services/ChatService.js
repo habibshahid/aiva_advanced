@@ -2493,7 +2493,7 @@ Respond in valid JSON format.`
 						kbId: agent.kb_id,
 						query: searchQuery,
 						image: null,
-						topK: 5,
+						topK: 10,
 						searchType: 'text',
 						filters: {
 							include_products: true
@@ -2744,7 +2744,7 @@ Respond in valid JSON format.`
                     kbId: agent.kb_id,
                     query: searchQuery,
                     image: null,
-                    topK: 5,
+                    topK: 10,
                     searchType: 'text',
                     filters: {
                         include_products: false
@@ -2789,12 +2789,20 @@ Query: "${searchQuery}"
 ${contextChunks}
 
 --------------------------------------------------------------------
+CRITICAL INSTRUCTIONS FOR ANSWERING:
+1. EXTRACT SPECIFIC FACTS: Quote exact numbers, names, prices, features from the results
+2. BE PRECISE: If results mention "Free Version, Trial Version, Personal" - count them and say "there are 3 versions"
+3. USE THE DATA: Don't say "not specified" if the information IS in the results, even partially
+4. COMBINE INFORMATION: If data is spread across multiple sources, combine it into one answer
+5. LIST WHAT YOU FOUND: If asked "how many packages", list each one you see in the results
+6. CONFIDENCE: If you see specific data in results, state it confidently without hedging
 
-CRITICAL: Use the above search results to answer the user's question.
-- Provide a direct answer based on the search results
-- DO NOT say "I need to search" - you already have the results
-- DO NOT set knowledge_search_needed=true again
-- Answer naturally without mentioning "search results"
+WRONG: "The exact number is not specified in the available information"
+RIGHT: "Based on the information, there are 4 packages: Free Version, Trial Version (14 days), Personal (Rs. 2,100/month), and Enterprise"
+
+Answer the user's question using ONLY the search results above.
+DO NOT say "I need to search" - you already have the results.
+DO NOT set knowledge_search_needed=true again.
 
 Your response MUST be in JSON format with knowledge_search_needed=false.
 --------------------------------------------------------------------`

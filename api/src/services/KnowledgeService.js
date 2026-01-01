@@ -755,9 +755,13 @@ async listDocumentsWithStatus(kbId, options = {}) {
     }
 
     // Delete file from storage
+    const filename = doc.storage_url.startsWith('/etc/aiva-oai') 
+      ? doc.storage_url 
+      : process.env.APP_BASE_URL + doc.storage_url;
     try {
-	  const filename = doc.storage_url.startsWith('/etc/aiva-oai') ? doc.storage_url : process.env.APP_BASE_URL + doc.storage_url
-      await fs.unlink(filename);
+	  if(doc.file_type !== 'text/html'){
+		await fs.unlink(filename);
+	  }
     } catch (error) {
       console.error(`Failed to delete file ${filename}:`, error);
     }
@@ -1185,8 +1189,8 @@ async listDocumentsWithStatus(kbId, options = {}) {
     await db.query('DELETE FROM yovo_tbl_aiva_images WHERE id = ?', [imageId]);
 
     // Update KB stats
-    await this.updateKBStats(doc.kb_id);
-	await this.updateKBMetadata(doc.kb_id);
+    await this.updateKBStats(image.kb_id);
+	await this.updateKBMetadata(image.kb_id);
   }
 
   /**
@@ -1219,6 +1223,18 @@ async listDocumentsWithStatus(kbId, options = {}) {
 		  [kbId]
 		);
 
+		// Count chunks
+		const [chunkCount] = await db.query(
+		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_document_chunks WHERE kb_id = ?',
+		  [kbId]
+		);
+
+		// Count images
+		const [imageCount] = await db.query(
+		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_images WHERE kb_id = ?',
+		  [kbId]
+		);
+
 		// Count products
 		const [productCount] = await db.query(
 		  'SELECT COUNT(*) as count FROM yovo_tbl_aiva_products WHERE kb_id = ?',
@@ -1226,15 +1242,26 @@ async listDocumentsWithStatus(kbId, options = {}) {
 		);
 
 		const documentCount = docCount[0].count;
+		const chunkCounts = chunkCount[0].count;
+		const imageCounts = imageCount[0].count;
 		const productCounts = productCount[0].count;
 
-		// Update KB metadata
+		// ✅ Build stats JSON (this is what the frontend reads!)
+		const stats = JSON.stringify({
+		  document_count: documentCount,
+		  chunk_count: chunkCounts,
+		  image_count: imageCounts,
+		  product_count: productCounts
+		});
+
+		// Update KB metadata AND stats JSON
 		await db.query(
 		  `UPDATE yovo_tbl_aiva_knowledge_bases 
 		   SET has_documents = ?,
 			   has_products = ?,
 			   document_count = ?,
 			   product_count = ?,
+			   stats = ?,
 			   content_updated_at = NOW()
 		   WHERE id = ?`,
 		  [
@@ -1242,16 +1269,19 @@ async listDocumentsWithStatus(kbId, options = {}) {
 			productCounts > 0,
 			documentCount,
 			productCounts,
+			stats,  // ✅ ADD: Update stats JSON
 			kbId
 		  ]
 		);
 
-		console.log(`KB metadata updated: docs=${documentCount}, products=${productCounts}`);
+		console.log(`KB metadata updated: docs=${documentCount}, chunks=${chunkCounts}, images=${imageCounts}, products=${productCounts}`);
 
 		return {
 		  has_documents: documentCount > 0,
 		  has_products: productCounts > 0,
 		  document_count: documentCount,
+		  chunk_count: chunkCounts,
+		  image_count: imageCounts,
 		  product_count: productCounts
 		};
 

@@ -345,8 +345,11 @@ class ContentAwareChunker:
         preserve_structure: bool
     ) -> List[str]:
         """Chunk using LangChain splitters."""
+        # Pre-process to protect semantic boundaries
+        text = self._preprocess_for_semantic_boundaries(text)
+
         splitter = self.splitters.get(content_type, self.splitters[ContentType.GENERAL])
-        
+            
         # For documentation with markdown, use header splitting first
         if preserve_structure and content_type == ContentType.DOCUMENTATION and self.markdown_header_splitter:
             try:
@@ -531,6 +534,40 @@ class ContentAwareChunker:
             "child_chunks": child_chunks
         }
 
+    def _preprocess_for_semantic_boundaries(self, text: str) -> str:
+        """
+        Add special markers before chunking to prevent splitting mid-list or mid-section.
+        This is a generic approach that works for any content.
+        """
+        lines = text.split('\n')
+        processed_lines = []
+        in_list = False
+        list_start_idx = -1
+        
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            
+            # Detect list items (bullet or numbered)
+            is_list_item = bool(re.match(r'^[\*\-•]\s+|^\d+[\.\)]\s+|^[a-z][\.\)]\s+', stripped, re.IGNORECASE))
+            
+            # Detect section headers (markdown style)
+            is_header = stripped.startswith('#') or (stripped and stripped == stripped.upper() and len(stripped) > 3 and not is_list_item)
+            
+            if is_header and not in_list:
+                # Add double newline before headers to ensure they become split points
+                processed_lines.append('\n\n' + line)
+            elif is_list_item:
+                if not in_list:
+                    in_list = True
+                    list_start_idx = len(processed_lines)
+                processed_lines.append(line)
+            else:
+                if in_list and stripped == '':
+                    # End of list - don't add extra break yet
+                    in_list = False
+                processed_lines.append(line)
+        
+        return '\n'.join(processed_lines)
 
 # Singleton instance
 _content_aware_chunker: Optional[ContentAwareChunker] = None

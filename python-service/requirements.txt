@@ -44,4 +44,5 @@ beautifulsoup4==4.12.3
 
 # Logging and Monitoring
 python-json-logger==2.0.7
-pdfplumber==0.11.8
+pdfplumber=0.11.8
+html2text>=2020.1.16

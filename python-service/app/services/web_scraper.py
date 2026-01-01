@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 import random
+import html2text
 
 from app.config import settings
 
@@ -27,10 +28,12 @@ class WebScraper:
         
         # User agents for rotation
         self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ]
     
     async def scrape_url(
@@ -161,10 +164,10 @@ class WebScraper:
     
     def _extract_content(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """
-        Extract meaningful content from HTML
+        Extract meaningful content from HTML using html2text for structure preservation
         """
         # Remove unwanted elements
-        for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe']):
+        for element in soup(['script', 'style', 'nav', 'iframe', 'noscript']):
             element.decompose()
         
         # Extract title
@@ -174,39 +177,35 @@ class WebScraper:
         elif soup.find('h1'):
             title = soup.find('h1').get_text()
         
-        # Extract main content
+        # Use html2text for structure-preserving conversion
+        h = html2text.HTML2Text()
+        h.ignore_links = False
+        h.ignore_images = True
+        h.ignore_emphasis = False
+        h.body_width = 0  # Don't wrap lines
+        h.unicode_snob = True
+        h.skip_internal_links = True
+        
+        # Get main content area
         main_content = soup.find('main') or soup.find('article') or soup.find('body')
         
         if main_content:
-            text = main_content.get_text(separator='\n', strip=True)
+            text = h.handle(str(main_content))
         else:
-            text = soup.get_text(separator='\n', strip=True)
+            text = h.handle(str(soup))
         
         # Clean text
         text = self._clean_text(text)
         
         # Extract metadata
         metadata = {}
-        
-        # Meta description
         meta_desc = soup.find('meta', attrs={'name': 'description'})
         if meta_desc and meta_desc.get('content'):
             metadata['description'] = meta_desc.get('content')
         
-        # Meta keywords
         meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
         if meta_keywords and meta_keywords.get('content'):
             metadata['keywords'] = meta_keywords.get('content')
-        
-        # Author
-        meta_author = soup.find('meta', attrs={'name': 'author'})
-        if meta_author and meta_author.get('content'):
-            metadata['author'] = meta_author.get('content')
-        
-        # OpenGraph data
-        og_title = soup.find('meta', property='og:title')
-        if og_title:
-            metadata['og_title'] = og_title.get('content')
         
         og_desc = soup.find('meta', property='og:description')
         if og_desc:
@@ -319,13 +318,29 @@ class WebScraper:
             'error': None
         }
         
+        # ✅ ADD: Use proper browser headers
+        headers = {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, timeout=10) as response:
+                async with session.get(url, headers=headers, timeout=10, allow_redirects=True) as response:
                     result['accessible'] = response.status == 200
                     result['status_code'] = response.status
                     result['content_type'] = response.headers.get('Content-Type')
+            except asyncio.TimeoutError:
+                result['error'] = 'Connection timed out'
+            except aiohttp.ClientError as e:
+                result['error'] = f'Connection error: {str(e)}'
             except Exception as e:
                 result['error'] = str(e)
+        
+        return result
         
         return result

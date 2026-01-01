@@ -555,9 +555,8 @@ const ChatPage = () => {
 		const data = response.data.data;
 		
 		// Save session if new
-		if (!sessionId && data.session_id) {
+		if (data.session_id && (!sessionId || data.new_session_created)) {
 		  setSessionId(data.session_id);
-		  // ✅ FIX: Added missing parentheses
 		  localStorage.setItem(`aiva_chat_${agentId}`, data.session_id);
 		}
 		

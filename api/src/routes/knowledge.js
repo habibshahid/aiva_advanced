@@ -848,7 +848,8 @@ router.post('/:kbId/scrape-url', authenticate, async (req, res) => {
         }
       );
     }
-    
+	
+    await KnowledgeService.updateKBMetadata(kbId);
     res.json(rb.success(pythonResponse.data));
     
   } catch (error) {
@@ -922,7 +923,7 @@ router.post('/:kbId/scrape-sitemap', authenticate, async (req, res) => {
         }
       );
     }
-    
+    await KnowledgeService.updateKBMetadata(kbId);
     res.json(rb.success(pythonResponse.data));
     
   } catch (error) {
