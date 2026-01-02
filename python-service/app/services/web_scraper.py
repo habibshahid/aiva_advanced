@@ -129,7 +129,7 @@ class WebScraper:
         
         try:
             async with session.get(url, headers=headers, timeout=self.timeout) as response:
-                if response.status != 200:
+                if not (200 <= response.status < 300):
                     logger.warning(f"Non-200 status for {url}: {response.status}")
                     return None
                 
@@ -331,7 +331,7 @@ class WebScraper:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, headers=headers, timeout=10, allow_redirects=True) as response:
-                    result['accessible'] = response.status == 200
+                    result['accessible'] = 200 <= response.status < 300
                     result['status_code'] = response.status
                     result['content_type'] = response.headers.get('Content-Type')
             except asyncio.TimeoutError:
