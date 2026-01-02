@@ -286,7 +286,7 @@ class WebScraper:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(sitemap_url, timeout=self.timeout) as response:
-                    if response.status != 200:
+                    if not (200 <= response.status < 300):
                         logger.error(f"Failed to fetch sitemap: {response.status}")
                         return urls
                     
