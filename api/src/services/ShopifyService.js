@@ -1240,6 +1240,13 @@ class ShopifyService {
         status_description: statusInfo.description,
         financial_status: order.financial_status,
         fulfillment_status: order.fulfillment_status || 'unfulfilled',
+		customer_first_name: order.customer?.first_name || order.shipping_address?.first_name || null,
+		customer_last_name: order.customer?.last_name || order.shipping_address?.last_name || null,
+		customer_name: order.customer?.first_name 
+        ? (order.customer.last_name 
+            ? `${order.customer.first_name} ${order.customer.last_name}` 
+            : order.customer.first_name)
+        : (order.shipping_address?.first_name || null),
         created_at: order.created_at,
 		shipped_at: shippedAt,
         delivered_at: deliveredAt,
@@ -1679,6 +1686,14 @@ class ShopifyService {
       customer_email: order.email,
       customer_phone: order.phone,
       
+	  customer_first_name: order.customer?.first_name || order.shipping_address?.first_name || null,
+      customer_last_name: order.customer?.last_name || order.shipping_address?.last_name || null,
+      customer_name: order.customer?.first_name 
+        ? (order.customer.last_name 
+            ? `${order.customer.first_name} ${order.customer.last_name}` 
+            : order.customer.first_name)
+        : (order.shipping_address?.first_name || null),
+		
       // Cancellation info
       is_cancelled: !!order.cancelled_at,
       cancel_reason: order.cancel_reason,

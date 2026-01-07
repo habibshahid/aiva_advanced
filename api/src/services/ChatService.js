@@ -821,7 +821,7 @@ class ChatService {
 				} else {
 					// Agent has NO products - don't offer product search
 					clarificationResponse = agent.sessionContext?.channel === 'whatsapp'
-						? `📷 Mujhe aapki image mil gayi!\n\nIs image ke baare mein aap kya jaanna chahte hain? Kripya thodi detail share karein.`
+						? `📷 Mujhe aapki image mil gayi!\n\nIs image ke baare mein aap kya jaanna chahte hain? Kindly thodi details share karein.`
 						: `📷 I received your image! Could you please tell me what you'd like to know about it or how I can help?`;
 				}
 				
@@ -3153,7 +3153,60 @@ FOR ANY QUESTION OR REQUEST NOT COVERED IN YOUR INSTRUCTIONS OR KNOWLEDGE BASE:
 - If no fallback is defined, politely acknowledge the request and offer to forward it to the appropriate team
 ============================================================
 `;
+		
+		const fallbackEnforcementInstructions = `
+============================================================
+⚠️ CRITICAL: FALLBACK BEHAVIOR FOR UNCOVERED REQUESTS
+============================================================
 
+WHEN A REQUEST IS NOT EXPLICITLY COVERED IN YOUR BASE INSTRUCTIONS:
+
+1. DO NOT say "I cannot help", "I'm unable to", "I cannot update", etc.
+2. DO NOT redirect to website for requests that need human attention
+3. DO NOT refuse or decline the request
+
+INSTEAD, YOU MUST:
+1. Acknowledge the request politely
+2. Say you have noted it and forwarded to the team
+3. Set agent_transfer = true in your JSON response
+
+MANDATORY RESPONSE FORMAT FOR UNCOVERED REQUESTS:
+
+English:
+{
+  "response": "I have noted down your request and forwarded it to our customer service team. Our team will get back to you shortly.",
+  "agent_transfer": true,
+  "conversation_complete": false,
+  "user_wants_to_end": false
+}
+
+Urdu:
+{
+  "response": "Aapki request note kar li gayi hai aur humari customer service team ko forward kar di gayi hai. Humari team jald aap se contact karegi.",
+  "agent_transfer": true,
+  "conversation_complete": false,
+  "user_wants_to_end": false
+}
+
+EXAMPLES OF REQUESTS THAT NEED FALLBACK:
+- Change contact number/address on order
+- Order modification requests
+- Payment issues not in instructions
+- Account-related queries
+- Refund requests outside normal policy
+- Any request requiring manual intervention
+
+FORBIDDEN RESPONSES:
+❌ "I cannot help with this"
+❌ "I'm unable to update..."
+❌ "Please contact customer support through our website"
+❌ "This is outside my scope"
+❌ Any refusal or decline
+
+✅ ALWAYS acknowledge + forward + set agent_transfer = true
+
+============================================================
+`;
 
 		// ============================================
 		// 📱 CHANNEL CONTEXT INJECTION
@@ -3220,6 +3273,7 @@ FOR ANY QUESTION OR REQUEST NOT COVERED IN YOUR INSTRUCTIONS OR KNOWLEDGE BASE:
 		
 		systemPrompt += channelContextPrompt;
 		systemPrompt += stayInRoleInstructions;
+		systemPrompt += fallbackEnforcementInstructions;
 		systemPrompt += this._getDateValidationInstructions();
 		
 		const searchMode = agent?.knowledge_search_mode || 'auto';
@@ -5147,9 +5201,13 @@ Adapt based on context and user behavior.
                     // Basic Info
 					created_at: order.created_at,
                     order_number: order.order_number,
+					
                     status: order.status,
                     status_description: order.status_description,
                     
+					customer_name: order.customer_name || null,
+                    customer_first_name: order.customer_first_name || null,
+					
                     // Order Details
                     items: formattedItems,
                     item_count: order.item_count,
@@ -5200,6 +5258,25 @@ Adapt based on context and user behavior.
                 // Formatting instructions for LLM
                 // Formatting instructions for LLM
 response_format_hint: `
+====================================================================
+🎉 PERSONALIZED GREETING (MUST INCLUDE IF CUSTOMER NAME AVAILABLE)
+====================================================================
+
+IF customer_name or customer_first_name is available, START your response with a personalized thank you:
+
+ENGLISH:
+"Thank you [customer_first_name] for placing the order with us! Here are your order details:"
+
+URDU/Roman Urdu:
+"[customer_first_name], Calza se order karne ka shukriya! Yeh hain aapke order ki details:"
+
+RULES:
+- Use the customer's first name and Last Name naturally
+- If customer_name is NULL or empty, skip the personalized greeting and go straight to order details
+- This greeting goes BEFORE the order details, not after
+- Keep it friendly and warm
+
+====================================================================
 FORMAT YOUR RESPONSE BASED ON ORDER STATUS:
 
 ⚠️ CRITICAL: RESPOND IN THE SAME LANGUAGE AS THE CUSTOMER'S LAST MESSAGE
