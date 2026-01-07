@@ -954,6 +954,14 @@ class ChatService {
 									status: 'success'
 								});
 								
+								await db.query(
+									`UPDATE yovo_tbl_aiva_chat_sessions 
+									 SET last_function_executed_at = NOW() 
+									 WHERE id = ?`,
+									[sessionId]
+								);
+								console.log('📍 Marked function execution time');
+
 								// ============================================
 								// 🔄 CALL LLM AGAIN WITH FUNCTION RESULT
 								// ============================================
@@ -1061,6 +1069,15 @@ Respond in valid JSON format.`
 									error: funcError.message,
 									status: 'error'
 								});
+								
+								await db.query(
+									`UPDATE yovo_tbl_aiva_chat_sessions 
+									 SET last_function_executed_at = NOW() 
+									 WHERE id = ?`,
+									[sessionId]
+								);
+								console.log('📍 Marked function execution time');
+
 								
 								llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again.";
 							}
@@ -2211,6 +2228,14 @@ Respond in valid JSON format.`
 							status: 'success'
 						});
 						
+						await db.query(
+							`UPDATE yovo_tbl_aiva_chat_sessions 
+							 SET last_function_executed_at = NOW() 
+							 WHERE id = ?`,
+							[sessionId]
+						);
+						console.log('📍 Marked function execution time');
+
 						// Make second LLM call with function result
 						console.log('🔄 Calling LLM again with function result...');
 						
@@ -2295,7 +2320,16 @@ Respond in valid JSON format.`
 							result: { error: functionError.message },
 							status: 'error'
 						});
-						
+					
+						await db.query(
+							`UPDATE yovo_tbl_aiva_chat_sessions 
+							 SET last_function_executed_at = NOW() 
+							 WHERE id = ?`,
+							[sessionId]
+						);
+						console.log('📍 Marked function execution time');
+
+
 						// Update response to indicate failure
 						llmDecision.response = "I apologize, but I encountered an issue while processing your request. Please try again or let me know how else I can help.";
 					}
@@ -3108,26 +3142,15 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 ============================================================
 🎯 CRITICAL: ONLY ANSWER FROM YOUR INSTRUCTIONS & KNOWLEDGE BASE
 ============================================================
-
 You are a specialized agent. You can ONLY help with topics covered in:
 1. Your base instructions (above)
 2. Your knowledge base (if available)
 
 FOR ANY QUESTION OR REQUEST NOT COVERED IN YOUR INSTRUCTIONS OR KNOWLEDGE BASE:
 - Do NOT attempt to answer from your general knowledge
-- Do NOT explain why you can't help
-- Do NOT engage with the topic at all
-- Simply redirect to what you CAN help with
-
-RESPONSE FORMAT FOR OUT-OF-SCOPE REQUESTS:
-"I'm here to help you with [your domain]. Is there something I can assist you with?"
-
-RULES:
-- If it's not in your instructions → Don't answer it
-- If it's not in your knowledge base → Don't answer it
-- No exceptions, even for "simple" or "harmless" questions
-- Stay focused on your designated purpose only
-
+- Do NOT make up information
+- Follow the fallback/escalation instructions defined in your base instructions above
+- If no fallback is defined, politely acknowledge the request and offer to forward it to the appropriate team
 ============================================================
 `;
 
@@ -4644,35 +4667,69 @@ Adapt based on context and user behavior.
     }
 
     /**
-     * Get conversation history
-     * @param {string} sessionId - Session ID
-     * @param {number} limit - Number of messages
-     * @returns {Promise<Array>} Messages
-     */
-    async getConversationHistory(sessionId, limit = 20) {
-        const [messages] = await db.query(
-            `SELECT * FROM yovo_tbl_aiva_chat_messages 
-       WHERE session_id = ? 
-       ORDER BY created_at DESC 
-       LIMIT ?`,
-            [sessionId, limit]
-        );
+	 * Get conversation history with context-aware limiting
+	 * @param {string} sessionId - Session ID
+	 * @param {number} limit - Number of messages
+	 * @param {Object} session - Session object (optional, for optimization)
+	 * @returns {Promise<Array>} Messages
+	 */
+	async getConversationHistory(sessionId, limit = 20, session = null) {
+		// ============================================
+		// 📍 CONTEXT-AWARE HISTORY LIMITING
+		// ============================================
+		// After function execution, limit history to prevent
+		// LLM confusion with resolved contexts (e.g., complaints)
+		
+		let effectiveLimit = limit;
+		
+		try {
+			// Get session if not provided
+			if (!session) {
+				const [sessions] = await db.query(
+					`SELECT last_function_executed_at FROM yovo_tbl_aiva_chat_sessions WHERE id = ?`,
+					[sessionId]
+				);
+				session = sessions[0];
+			}
+			
+			if (session?.last_function_executed_at) {
+				const timeSinceFunction = Date.now() - new Date(session.last_function_executed_at).getTime();
+				const minutesSinceFunction = timeSinceFunction / 60000;
+				
+				// If function was executed in last 5 minutes, limit history
+				if (minutesSinceFunction < 5) {
+					effectiveLimit = Math.min(limit, 4);
+					console.log(`📍 Limiting history to ${effectiveLimit} - function executed ${Math.round(minutesSinceFunction)} min ago`);
+				}
+			}
+		} catch (e) {
+			// On error, use default limit
+			console.warn('Could not check function execution time:', e.message);
+		}
+		
+		const [messages] = await db.query(
+			`SELECT * FROM yovo_tbl_aiva_chat_messages 
+			 WHERE session_id = ? 
+			 ORDER BY created_at DESC 
+			 LIMIT ?`,
+			[sessionId, effectiveLimit]
+		);
 
-        return messages.reverse().map(msg => ({
-            id: msg.id,
-            role: msg.role,
-            content: msg.content,
-            content_html: msg.content_html,
-            content_markdown: msg.content_markdown,
-            sources: msg.sources ? msg.sources : [],
-            images: msg.images ? msg.images : [],
-            products: msg.products ? msg.products : [],
-            function_calls: msg.function_calls ? msg.function_calls : [],
-            cost: msg.cost,
-            agent_transfer_requested: msg.agent_transfer_requested,
-            created_at: msg.created_at
-        }));
-    }
+		return messages.reverse().map(msg => ({
+			id: msg.id,
+			role: msg.role,
+			content: msg.content,
+			content_html: msg.content_html,
+			content_markdown: msg.content_markdown,
+			sources: msg.sources ? msg.sources : [],
+			images: msg.images ? msg.images : [],
+			products: msg.products ? msg.products : [],
+			function_calls: msg.function_calls ? msg.function_calls : [],
+			cost: msg.cost,
+			agent_transfer_requested: msg.agent_transfer_requested,
+			created_at: msg.created_at
+		}));
+	}
 
     /**
      * Get full message with all details
