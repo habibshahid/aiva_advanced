@@ -43,6 +43,9 @@ class ChatService {
                 apiKey: process.env.ANTHROPIC_API_KEY
             });
         }
+		
+		this.sessionLocks = new Map(); // Track processing sessions
+		this.sessionLockTimeout = 10000; // 10 second max lock time
     }
 	
 	/**
@@ -62,7 +65,7 @@ class ChatService {
 		// For vision requests, ensure we use a vision-capable model
 		let effectiveModel = model;
 		if (hasVision) {
-			const visionModels = ['gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
+			const visionModels = ['gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
 			const modelLower = model.toLowerCase();
 			
 			// Check if current model supports vision
@@ -441,6 +444,48 @@ class ChatService {
 			channelInfo
 		)
 		
+		const lockKey = `${agentId}-${channelInfo?.channelUserId || sessionId}`;
+		const existingLock = this.sessionLocks.get(lockKey);
+
+		if (existingLock && (Date.now() - existingLock.startTime) < this.sessionLockTimeout) {
+			console.log(`🔒 Session locked - waiting for previous message to complete for ${lockKey}`);
+			
+			// Wait for lock to release (check every 500ms, max 15 seconds)
+			const maxWaitTime = 15000; // 15 seconds
+			const checkInterval = 500;
+			let waited = 0;
+			
+			while (waited < maxWaitTime) {
+				await new Promise(resolve => setTimeout(resolve, checkInterval));
+				waited += checkInterval;
+				
+				const currentLock = this.sessionLocks.get(lockKey);
+				if (!currentLock) {
+					console.log(`🔓 Lock released after ${waited}ms - proceeding with message`);
+					break;
+				}
+			}
+			
+			// If still locked after max wait, force release (stale lock)
+			if (this.sessionLocks.get(lockKey)) {
+				console.log(`⚠️ Force releasing stale lock after ${maxWaitTime}ms`);
+				this.sessionLocks.delete(lockKey);
+			}
+		}
+
+		// Acquire fresh lock and proceed normally
+		this.sessionLocks.set(lockKey, {
+			startTime: Date.now(),
+			messageCount: 1,
+			messages: [{ message, image, timestamp: Date.now() }]
+		});
+
+		// Ensure lock is released at the end
+		const releaseLock = () => {
+			this.sessionLocks.delete(lockKey);
+			console.log(`🔓 Session lock released for ${lockKey}`);
+		};
+		
         let session;
 		let agent;
 		
@@ -584,6 +629,8 @@ class ChatService {
 					
 					await this._updateSessionStats(sessionId, 0);
 					
+					releaseLock();
+					
 					return {
 						session_id: sessionId,
 						message_id: assistantMessageId,
@@ -617,6 +664,8 @@ class ChatService {
 						cost: 0
 					});
 					
+					releaseLock();
+					
 					return {
 						session_id: sessionId,
 						message_id: assistantMessageId,
@@ -639,6 +688,8 @@ class ChatService {
 					content: formattedResponse.text,
 					cost: 0
 				});
+				
+				releaseLock();
 				
 				return {
 					session_id: sessionId,
@@ -693,9 +744,653 @@ class ChatService {
             console.log('🖼️ IMAGE DETECTED - Using automatic search path (no LLM decision needed)');
 
 			// Classify image intent: complaint evidence vs product search
-			const imageIntent = await this._classifyImageIntent(session, history, message);
+			const imageIntent = await this._classifyImageIntent(session, history, message, image);
 			
 			console.log(`📷 Image Intent: ${imageIntent.intent} (confidence: ${imageIntent.confidence}, source: ${imageIntent.source})`);
+			
+			// ============================================
+			// 📷 BATCH IMAGE HANDLING - Silent collection
+			// ============================================
+			if (imageIntent.intent === 'batch_image_skip') {
+				console.log(`📷 Batch image #${imageIntent.images_count} - collecting silently (no response)`);
+				
+				// ✅ IMPORTANT: Save the image to complaint state before returning!
+				const complaintState = session.complaint_state || {};
+				complaintState.images_collected = complaintState.images_collected || [];
+				complaintState.images_collected.push({
+					url: image,
+					added_at: new Date().toISOString(),
+					message: message || null
+				});
+				await this._updateSessionComplaintState(sessionId, complaintState);
+				console.log(`📷 Image saved to complaint state. Total images: ${complaintState.images_collected.length}`);
+				
+				releaseLock();
+				
+				return {
+					session_id: sessionId,
+					message_id: userMessageId,
+					agent_transfer: false,
+					interaction_closed: false,
+					skip_response: true,  // 🔑 Tell PHP to not send to WhatsApp
+					response: {
+						text: '',
+						html: '',
+						markdown: ''
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: [],
+					llm_decision: {
+						batch_image_collected: true,
+						images_count: complaintState.images_collected.length,
+						awaiting: imageIntent.awaiting
+					},
+					cost: 0,
+					cost_breakdown: { final_cost: 0 }
+				};
+			}
+			
+			// ============================================
+			// 📷 BATCH IMAGE WITH ORDER REMINDER
+			// ============================================
+			if (imageIntent.intent === 'batch_image_reminder') {
+				console.log(`📷 Image #${imageIntent.images_count} received - sending order reminder`);
+				
+				// ✅ IMPORTANT: Save the image to complaint state before returning!
+				const complaintState = session.complaint_state || {};
+				complaintState.images_collected = complaintState.images_collected || [];
+				complaintState.images_collected.push({
+					url: image,
+					added_at: new Date().toISOString(),
+					message: message || null
+				});
+				await this._updateSessionComplaintState(sessionId, complaintState);
+				console.log(`📷 Image saved to complaint state. Total images: ${complaintState.images_collected.length}`);
+				
+				const customerLang = this._detectCustomerLanguage(history, message);
+				const isUrdu = customerLang === 'urdu';
+				
+				const reminderResponse = isUrdu
+					? `📷 Image mil gayi (${complaintState.images_collected.length} images collected). Ab please apna order number share karein taake main ticket create kar sakoon.`
+					: `📷 Image received (${complaintState.images_collected.length} images collected). Please share your order number so I can create the ticket.`;
+				
+				const formattedResponse = markdown.formatResponse(reminderResponse);
+				
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					contentHtml: formattedResponse.html,
+					contentMarkdown: formattedResponse.markdown,
+					cost: 0
+				});
+				
+				releaseLock();
+				
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					agent_transfer: false,
+					interaction_closed: false,
+					response: {
+						text: formattedResponse.text,
+						html: formattedResponse.html,
+						markdown: formattedResponse.markdown
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: [],
+					llm_decision: {
+						image_collected: true,
+						images_count: complaintState.images_collected.length,
+						awaiting_order_info: true
+					},
+					cost: 0,
+					cost_breakdown: { final_cost: 0 }
+				};
+			}
+			
+			// ============================================
+			// 🛡️ POST-TICKET IMAGE - Late image after ticket created
+			// ============================================
+			if (imageIntent.intent === 'post_ticket_image') {
+				console.log(`📷 Late image received after ticket creation - acknowledging gracefully`);
+				
+				const customerLang = this._detectCustomerLanguage(history, message);
+				const isUrdu = customerLang === 'urdu';
+				
+				// Acknowledge the image without starting a new complaint
+				const acknowledgment = isUrdu
+					? `📷 Aapki image mil gayi. Aapka ticket pehle se create ho chuka hai aur hamari team jald aap se contact karegi.`
+					: `📷 Thank you for sharing the image. Your ticket has already been created and our team will contact you shortly.`;
+				
+				const formattedResponse = markdown.formatResponse(acknowledgment);
+				
+				const assistantMessageId = await this._saveMessage({
+					sessionId,
+					role: 'assistant',
+					content: formattedResponse.text,
+					contentHtml: formattedResponse.html,
+					contentMarkdown: formattedResponse.markdown,
+					cost: 0
+				});
+				
+				releaseLock();
+				
+				return {
+					session_id: sessionId,
+					message_id: assistantMessageId,
+					agent_transfer: false,
+					interaction_closed: false,
+					response: {
+						text: formattedResponse.text,
+						html: formattedResponse.html,
+						markdown: formattedResponse.markdown
+					},
+					sources: [],
+					images: [],
+					products: [],
+					function_calls: [],
+					llm_decision: {
+						post_ticket_image: true,
+						ticket_already_created: true
+					},
+					cost: 0,
+					cost_breakdown: { final_cost: 0 }
+				};
+			}
+			
+			// ============================================
+			// 📋 ORDER SCREENSHOT PATH
+			// ============================================
+			if (imageIntent.intent === 'order_screenshot') {
+				console.log('📋 Processing image as ORDER SCREENSHOT');
+				
+				// Check if agent has order lookup capability
+				const hasShopify = agent.shopify_store_url && agent.shopify_access_token;
+				const hasKbWithShopify = agent.kb_id; // KB might have Shopify connected
+				
+				if (!hasShopify && !hasKbWithShopify) {
+					console.log('⚠️ Agent has no order lookup capability');
+					
+					// Graceful fallback - acknowledge and ask for manual input
+					const fallbackResponse = `I can see this is an order-related screenshot. However, I'm not able to look up order details automatically. Could you please provide your order number, and I'll help you from there?`;
+					
+					const formattedResponse = markdown.formatResponse(fallbackResponse);
+					
+					const assistantMessageId = await this._saveMessage({
+						sessionId,
+						role: 'assistant',
+						content: formattedResponse.text,
+						contentHtml: formattedResponse.html,
+						contentMarkdown: formattedResponse.markdown,
+						sources: [],
+						images: [],
+						products: [],
+						functionCalls: [],
+						cost: 0,
+						metadata: { 
+							image_provided: true, 
+							image_intent: 'order_screenshot',
+							no_shopify_capability: true
+						}
+					});
+					
+					await this._updateSessionStats(sessionId, 0);
+				
+					releaseLock();
+					
+					return {
+						session_id: sessionId,
+						message_id: assistantMessageId,
+						response: {
+							text: formattedResponse.text,
+							html: formattedResponse.html,
+							markdown: formattedResponse.markdown
+						},
+						sources: [],
+						images: [],
+						products: [],
+						cost: 0
+					};
+				}
+				
+				// Extract order information from screenshot
+				const orderExtraction = await this._extractOrderFromScreenshot(image, message, agent);
+				
+				let totalCost = orderExtraction.extraction_cost || 0;
+				
+				// Handle low confidence extractions
+				if (orderExtraction.confidence === 'low' && orderExtraction.success) {
+					console.log(`⚠️ Low confidence extraction: ${orderExtraction.order_number}`);
+					
+					// Ask for confirmation
+					const confirmResponse = `I can see an order in your screenshot, but the image quality makes it a bit hard to read. I found what looks like order number **${orderExtraction.order_number}**. Is that correct? Or would you like to type it directly?`;
+					
+					const formattedResponse = markdown.formatResponse(confirmResponse);
+					
+					const assistantMessageId = await this._saveMessage({
+						sessionId,
+						role: 'assistant',
+						content: formattedResponse.text,
+						contentHtml: formattedResponse.html,
+						contentMarkdown: formattedResponse.markdown,
+						sources: [],
+						images: [],
+						products: [],
+						functionCalls: [],
+						cost: totalCost,
+						metadata: { 
+							image_provided: true, 
+							image_intent: 'order_screenshot',
+							extracted_order: orderExtraction.order_number,
+							confidence: 'low',
+							awaiting_confirmation: true
+						}
+					});
+					
+					await this._updateSessionStats(sessionId, totalCost);
+					
+					releaseLock();
+					
+					return {
+						session_id: sessionId,
+						message_id: assistantMessageId,
+						response: {
+							text: formattedResponse.text,
+							html: formattedResponse.html,
+							markdown: formattedResponse.markdown
+						},
+						sources: [],
+						images: [],
+						products: [],
+						cost: totalCost,
+						extracted_order_number: orderExtraction.order_number,
+						confidence: 'low'
+					};
+				}
+				
+				if (orderExtraction.success && orderExtraction.order_number) {
+					console.log(`✅ Extracted order number: ${orderExtraction.order_number} (confidence: ${orderExtraction.confidence})`);
+					
+					// Look up order status using the extracted order number
+					const orderResult = await this._handleOrderStatusCheck(agent, {
+						order_number: orderExtraction.order_number
+					});
+					
+					// Add order lookup cost if any
+					if (orderResult.cost) {
+						totalCost += orderResult.cost;
+					}
+					
+					if (orderResult.success && orderResult.found) {
+						const order = orderResult.order;
+						
+						// Detect language from recent messages
+						const recentMessages = history.slice(-3).map(m => m.content || '').join(' ');
+						const isUrdu = /[\u0600-\u06FF]/.test(recentMessages) || 
+							/\b(kya|hai|mera|order|status|batao|chahiye|dekhna|dikhao)\b/i.test(recentMessages);
+						
+						// Build personalized response
+						let responseText;
+						const customerName = order.customer_first_name || orderExtraction.customer_name?.split(' ')[0];
+						
+						if (isUrdu) {
+							responseText = customerName 
+								? `${customerName}, Calza se order karne ka shukriya! `
+								: '';
+							responseText += `Maine aapke screenshot se order details nikal liye hain:\n\n`;
+							responseText += `📦 **Order Details:**\n`;
+							responseText += `• Order Number: ${order.order_number}\n`;
+							responseText += `• Order Date: ${order.order_date}\n`;
+							responseText += `• Status: ${order.status_description}\n`;
+							if (order.delivery_date) {
+								responseText += `• Delivered: ${order.delivery_date}\n`;
+							} else if (order.shipped_date) {
+								responseText += `• Shipped: ${order.shipped_date}\n`;
+							}
+							if (order.tracking?.number) {
+								responseText += `• Tracking: ${order.tracking.number}\n`;
+							}
+							responseText += `\nKya aur koi madad chahiye?`;
+						} else {
+							responseText = customerName 
+								? `Thank you ${customerName} for your order with us! `
+								: '';
+							responseText += `I've extracted the order details from your screenshot:\n\n`;
+							responseText += `📦 **Order Details:**\n`;
+							responseText += `• Order Number: ${order.order_number}\n`;
+							responseText += `• Order Date: ${order.order_date}\n`;
+							responseText += `• Status: ${order.status_description}\n`;
+							if (order.delivery_date) {
+								responseText += `• Delivered: ${order.delivery_date}\n`;
+							} else if (order.shipped_date) {
+								responseText += `• Shipped: ${order.shipped_date}\n`;
+							}
+							if (order.tracking?.number) {
+								responseText += `• Tracking: ${order.tracking.number}\n`;
+							}
+							responseText += `\nIs there anything else I can help you with?`;
+						}
+						
+						const formattedResponse = markdown.formatResponse(responseText);
+						
+						const assistantMessageId = await this._saveMessage({
+							sessionId,
+							role: 'assistant',
+							content: formattedResponse.text,
+							contentHtml: formattedResponse.html,
+							contentMarkdown: formattedResponse.markdown,
+							sources: [],
+							images: [],
+							products: [],
+							functionCalls: [{
+								name: 'check_order_status',
+								arguments: { order_number: orderExtraction.order_number },
+								result: { success: true, found: true }
+							}],
+							cost: totalCost,
+							metadata: { 
+								image_provided: true,
+								image_intent: 'order_screenshot',
+								extracted_order: orderExtraction.order_number,
+								order_found: true,
+								extraction_confidence: orderExtraction.confidence,
+								source_type: orderExtraction.source_type
+							}
+						});
+						
+						await this._updateSessionStats(sessionId, totalCost);
+						
+						releaseLock();
+						
+						return {
+							session_id: sessionId,
+							message_id: assistantMessageId,
+							response: {
+								text: formattedResponse.text,
+								html: formattedResponse.html,
+								markdown: formattedResponse.markdown
+							},
+							sources: [],
+							images: [],
+							products: [],
+							function_calls: [{
+								name: 'check_order_status',
+								result: { success: true, found: true }
+							}],
+							cost: totalCost,
+							extracted_order_number: orderExtraction.order_number,
+							order_found: true,
+							order_details: {
+								order_number: order.order_number,
+								status: order.status,
+								status_description: order.status_description,
+								order_date: order.order_date,
+								delivery_date: order.delivery_date
+							}
+						};
+						
+					} else {
+						// Order not found - ask for verification
+						console.log(`⚠️ Order not found: ${orderExtraction.order_number}`);
+						
+						const notFoundResponse = orderResult.searched_variants 
+							? `I extracted order number **${orderExtraction.order_number}** from your screenshot, but couldn't find it. I also tried: ${orderResult.searched_variants.join(', ')}.\n\nCould you please verify the order number or provide the email/phone used for the order?`
+							: `I extracted order number **${orderExtraction.order_number}** from your screenshot, but couldn't find it in our system.\n\nCould you please verify the order number or provide the email/phone used for the order?`;
+						
+						const formattedResponse = markdown.formatResponse(notFoundResponse);
+						
+						const assistantMessageId = await this._saveMessage({
+							sessionId,
+							role: 'assistant',
+							content: formattedResponse.text,
+							contentHtml: formattedResponse.html,
+							contentMarkdown: formattedResponse.markdown,
+							sources: [],
+							images: [],
+							products: [],
+							functionCalls: [{
+								name: 'check_order_status',
+								arguments: { order_number: orderExtraction.order_number },
+								result: { success: false, found: false }
+							}],
+							cost: totalCost,
+							metadata: { 
+								image_provided: true,
+								image_intent: 'order_screenshot',
+								extracted_order: orderExtraction.order_number,
+								order_found: false
+							}
+						});
+						
+						await this._updateSessionStats(sessionId, totalCost);
+						
+						releaseLock();
+						
+						return {
+							session_id: sessionId,
+							message_id: assistantMessageId,
+							response: {
+								text: formattedResponse.text,
+								html: formattedResponse.html,
+								markdown: formattedResponse.markdown
+							},
+							sources: [],
+							images: [],
+							products: [],
+							cost: totalCost,
+							extracted_order_number: orderExtraction.order_number,
+							order_found: false
+						};
+					}
+					
+				} else if (orderExtraction.email || orderExtraction.phone) {
+					// ============================================
+					// 📧 NO ORDER NUMBER, BUT HAVE EMAIL/PHONE
+					// ============================================
+					// Try to look up order using email or phone
+					console.log(`📧 No order number found, trying lookup by email: ${orderExtraction.email}, phone: ${orderExtraction.phone}`);
+					
+					const orderResult = await this._handleOrderStatusCheck(agent, {
+						email: orderExtraction.email,
+						phone: orderExtraction.phone
+					});
+					
+					if (orderResult.cost) {
+						totalCost += orderResult.cost;
+					}
+					
+					if (orderResult.success && orderResult.found) {
+						const order = orderResult.order;
+						
+						// Detect language from recent messages
+						const recentMessages = history.slice(-3).map(m => m.content || '').join(' ');
+						const isUrdu = /[\u0600-\u06FF]/.test(recentMessages) || 
+							/\b(kya|hai|mera|order|status|batao|chahiye|dekhna|dikhao)\b/i.test(recentMessages);
+						
+						// Build personalized response
+						let responseText;
+						const customerName = order.customer_first_name || orderExtraction.customer_name?.split(' ')[0];
+						const searchedBy = orderExtraction.email ? 'email' : 'phone number';
+						
+						if (isUrdu) {
+							responseText = customerName 
+								? `${customerName}, maine aapki ${searchedBy} se order dhundh liya!\n\n`
+								: `Maine aapki ${searchedBy} se order dhundh liya!\n\n`;
+							responseText += `📦 **Order Details:**\n`;
+							responseText += `• Order Number: ${order.order_number}\n`;
+							responseText += `• Order Date: ${order.order_date}\n`;
+							responseText += `• Status: ${order.status_description}\n`;
+							if (order.delivery_date) {
+								responseText += `• Delivery Date: ${order.delivery_date}\n`;
+							}
+							responseText += `\n📍 Shipping to: ${order.shipping_address || order.shipping_city || 'N/A'}`;
+						} else {
+							responseText = customerName 
+								? `${customerName}, I found your order using the ${searchedBy} from your screenshot!\n\n`
+								: `I found your order using the ${searchedBy} from your screenshot!\n\n`;
+							responseText += `📦 **Order Details:**\n`;
+							responseText += `• Order Number: ${order.order_number}\n`;
+							responseText += `• Order Date: ${order.order_date}\n`;
+							responseText += `• Status: ${order.status_description}\n`;
+							if (order.delivery_date) {
+								responseText += `• Delivery Date: ${order.delivery_date}\n`;
+							}
+							responseText += `\n📍 Shipping to: ${order.shipping_address || order.shipping_city || 'N/A'}`;
+						}
+						
+						// Add items if available
+						if (order.items && order.items.length > 0) {
+							responseText += `\n\n🛍️ **Items:**\n`;
+							order.items.forEach(item => {
+								responseText += `• ${item.name}${item.variant ? ` (${item.variant})` : ''} × ${item.quantity}\n`;
+							});
+						}
+						
+						responseText += `\n\nIs there anything else I can help you with?`;
+						
+						const formattedResponse = markdown.formatResponse(responseText);
+						
+						const assistantMessageId = await this._saveMessage({
+							sessionId,
+							role: 'assistant',
+							content: formattedResponse.text,
+							contentHtml: formattedResponse.html,
+							contentMarkdown: formattedResponse.markdown,
+							sources: [],
+							images: [],
+							products: [],
+							functionCalls: [{
+								function_id: uuidv4(),
+								function_name: 'check_order_status',
+								arguments: { email: orderExtraction.email, phone: orderExtraction.phone },
+								result: orderResult,
+								status: 'success'
+							}],
+							cost: totalCost,
+							metadata: { 
+								image_provided: true, 
+								image_intent: 'order_screenshot',
+								searched_by: searchedBy,
+								order_found: true
+							}
+						});
+						
+						await this._updateSessionStats(sessionId, totalCost);
+						
+						releaseLock();
+						
+						return {
+							session_id: sessionId,
+							message_id: assistantMessageId,
+							response: {
+								text: formattedResponse.text,
+								html: formattedResponse.html,
+								markdown: formattedResponse.markdown
+							},
+							sources: [],
+							images: [],
+							products: [],
+							cost: totalCost,
+							order_found: true,
+							searched_by: searchedBy
+						};
+					} else {
+						// Email/phone found but no order matched
+						console.log(`❌ Order lookup by email/phone failed`);
+						
+						const notFoundResponse = `I can see the ${orderExtraction.email ? 'email' : 'phone number'} in your screenshot, but I couldn't find a matching order. This could happen if:\n\n• The order was placed with different contact details\n• The order is from a different store\n\nCould you please provide your order number directly? (e.g., CZ-123456)`;
+						
+						const formattedResponse = markdown.formatResponse(notFoundResponse);
+						
+						const assistantMessageId = await this._saveMessage({
+							sessionId,
+							role: 'assistant',
+							content: formattedResponse.text,
+							contentHtml: formattedResponse.html,
+							contentMarkdown: formattedResponse.markdown,
+							cost: totalCost,
+							metadata: { 
+								image_provided: true,
+								image_intent: 'order_screenshot',
+								searched_by: orderExtraction.email ? 'email' : 'phone',
+								order_found: false
+							}
+						});
+						
+						await this._updateSessionStats(sessionId, totalCost);
+						
+						releaseLock();
+						
+						return {
+							session_id: sessionId,
+							message_id: assistantMessageId,
+							response: {
+								text: formattedResponse.text,
+								html: formattedResponse.html,
+								markdown: formattedResponse.markdown
+							},
+							sources: [],
+							images: [],
+							products: [],
+							cost: totalCost,
+							order_found: false
+						};
+					}
+					
+				} else {
+					// Couldn't extract order number, email, or phone
+					console.log(`❌ Failed to extract any identifiable information from screenshot`);
+					
+					const extractionFailedResponse = orderExtraction.error 
+						? `I can see this appears to be an order-related screenshot, but I had trouble reading it (${orderExtraction.error}). Could you please type your order number directly? (e.g., CZ-123456)`
+						: `I can see this is an order-related screenshot, but I couldn't clearly read the order number, email, or phone number. Could you please type your order number directly? (e.g., CZ-123456)\n\nAlternatively, you can provide the email or phone number used for the order.`;
+					
+					const formattedResponse = markdown.formatResponse(extractionFailedResponse);
+					
+					const assistantMessageId = await this._saveMessage({
+						sessionId,
+						role: 'assistant',
+						content: formattedResponse.text,
+						contentHtml: formattedResponse.html,
+						contentMarkdown: formattedResponse.markdown,
+						sources: [],
+						images: [],
+						products: [],
+						functionCalls: [],
+						cost: totalCost,
+						metadata: { 
+							image_provided: true,
+							image_intent: 'order_screenshot',
+							extraction_failed: true,
+							extraction_error: orderExtraction.error
+						}
+					});
+					
+					await this._updateSessionStats(sessionId, totalCost);
+					
+					releaseLock();
+					
+					return {
+						session_id: sessionId,
+						message_id: assistantMessageId,
+						response: {
+							text: formattedResponse.text,
+							html: formattedResponse.html,
+							markdown: formattedResponse.markdown
+						},
+						sources: [],
+						images: [],
+						products: [],
+						cost: totalCost,
+						extraction_failed: true
+					};
+				}
+			}
 			
 			// ============================================
 			// 🤖 LLM ANALYSIS PATH (Non-product agents)
@@ -776,6 +1471,8 @@ class ChatService {
 				
 				await this._updateSessionStats(sessionId, llmCost.final_cost);
 				
+				releaseLock();
+				
 				return {
 					session_id: sessionId,
 					message_id: assistantMessageId,
@@ -853,6 +1550,8 @@ class ChatService {
 				
 				// Update session stats
 				await this._updateSessionStats(sessionId, 0);
+				
+				releaseLock();
 				
 				return {
 					session_id: sessionId,
@@ -1037,6 +1736,14 @@ Respond in valid JSON format.`
 											llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
 										}
 										
+										const customerLanguage = this._detectCustomerLanguage(history, message);
+										llmDecision.response = this._sanitizeTicketResponse(
+											llmDecision.response,
+											functionResult,
+											llmDecision.function_name,
+											customerLanguage
+										);
+
 										console.log('✅ Final response after function call generated');
 									} catch (parseError) {
 										console.error('❌ Failed to parse followup response:', parseError.message);
@@ -1047,6 +1754,37 @@ Respond in valid JSON format.`
 												llmDecision.response = responseMatch[1];
 											}
 										}
+									}
+									
+									// ============================================
+									// 🎫 SANITIZE RESPONSE - Inject/Clean ticket numbers
+									// ============================================
+									const customerLanguage = this._detectCustomerLanguage(history, message);
+									llmDecision.response = this._sanitizeTicketResponse(
+										llmDecision.response,
+										functionResult,
+										llmDecision.function_name,
+										customerLanguage
+									)
+								}
+								else {
+									// Function returned success: false (API error, not exception)
+									console.log(`⚠️ Function ${llmDecision.function_name} returned success: false`);
+									
+									const customerLanguage = this._detectCustomerLanguage(history, message);
+									const isUrdu = customerLanguage === 'urdu';
+									
+									// Provide safe fallback response without any placeholders
+									llmDecision.response = isUrdu
+										? "Maaf karein, aapki request process karte waqt masla aaya. Humari team jald aap se contact karegi. Aapka concern note kar liya gaya hai."
+										: "We apologize, there was an issue processing your request. Our team will contact you shortly. Your concern has been noted.";
+									
+									llmDecision.agent_transfer = true; // Flag for human follow-up
+									
+									// Update function call status
+									if (executedFunctionCalls.length > 0) {
+										executedFunctionCalls[executedFunctionCalls.length - 1].status = 'api_error';
+										executedFunctionCalls[executedFunctionCalls.length - 1].result = functionResult;
 									}
 								}
 								
@@ -1123,6 +1861,8 @@ Respond in valid JSON format.`
 				
 				// Update session stats
 				await this._updateSessionStats(sessionId, totalCost.final_cost);
+				
+				releaseLock();
 				
 				// Return complaint evidence response
 				return {
@@ -1308,6 +2048,9 @@ Respond in valid JSON format.`
                             // ✅ FIX 1: ATTACH scores to ALL products BEFORE sorting
                             products = products.map(product => {
                                 const score = productScores[product.id] || 0;
+								
+								releaseLock();
+								
                                 return {
                                     ...product,
                                     similarity_score: score,
@@ -1362,6 +2105,8 @@ Respond in valid JSON format.`
                                         p.shopify_metadata;
                                     handle = metadata.handle;
                                 }
+								
+								releaseLock();
 
                                 return {
                                     id: p.id,
@@ -1459,6 +2204,8 @@ Respond in valid JSON format.`
                                         handle = metadata.handle;
                                     }
 
+									releaseLock();
+									
                                     return {
                                         id: p.id,
                                         shopify_product_id: p.shopify_product_id,
@@ -1841,6 +2588,8 @@ Respond in valid JSON format.`
                 });
             }
 
+			releaseLock();
+			
             return {
                 session_id: sessionId,
                 message_id: assistantMessageId,
@@ -1930,10 +2679,169 @@ Respond in valid JSON format.`
         }
 
         // ============================================
-        // 📝 NO IMAGE - USE ORIGINAL TWO-PASS FLOW
+        // 📝 NO IMAGE - SMART MODEL ROUTING FLOW
         // ============================================
 
-        console.log('📝 No image detected - Using original LLM decision flow');
+        console.log('📝 No image detected - Using smart model routing');
+
+		// ============================================
+		// 🎯 STEP 1: CLASSIFY MESSAGE (Always cheap model)
+		// ============================================
+		let classification = null;
+		let classificationCost = 0;
+		const useSmartRouting = this._isSmartRoutingEnabled(agent);
+		
+		if (useSmartRouting) {
+			classification = await this._classifyMessageComplexity(
+				message,
+				session,
+				false,  // no image
+				history
+			);
+			classificationCost = classification.classification_cost || 0;
+		} else {
+			// Default classification when smart routing is disabled
+			classification = {
+				intent: 'COMPLEX',
+				complexity: 'COMPLEX',
+				reason: 'Smart routing disabled - using full flow',
+				detected_language: 'en'
+			};
+			console.log('🤖 Smart routing disabled - using agent default model');
+		}
+
+		// ============================================
+		// 🤖 STEP 2: SELECT MODEL (Based on complexity + active complaint)
+		// ============================================
+		const selectedModel = this._selectModelForMessage(classification, agent, session);
+
+		// ============================================
+		// 🚨 PRE-LLM COMPLAINT DETECTION (For weaker models like 4o-mini)
+		// ============================================
+		// Detect complaint keywords in user message and initialize complaint state
+		// This ensures complaint flow works even if LLM doesn't set complaint_context
+		const isEcommerceAgent = agent.shopify_store_url && agent.shopify_access_token;
+		
+		// Check if ticket was recently created (within last 5 minutes)
+		const recentAssistantMsgs = history.filter(m => m.role === 'assistant').slice(-3);
+		const ticketJustCreated = recentAssistantMsgs.some(m => 
+			m.content?.includes('ticket number') || 
+			m.content?.includes('Ticket Number') ||
+			m.content?.includes('ticket_number') ||
+			m.content?.includes('CZ-373') ||  // Ticket ID pattern
+			m.content?.includes('concern note kar') ||
+			m.content?.includes('concern has been noted') ||
+			m.content?.includes('complaint has been registered') ||
+			m.content?.includes('team will contact')
+		);
+		
+		// Check if this is a follow-up question, not a new complaint
+		const msgLower = message.toLowerCase();
+		const isFollowUpQuestion = (
+			msgLower.includes('kab tak') ||  // How long
+			msgLower.includes('kitna time') ||  // How much time
+			msgLower.includes('when will') ||
+			msgLower.includes('how long') ||
+			msgLower.includes('theek hai') ||  // Ok (acknowledgment)
+			msgLower.includes('acha') ||
+			msgLower.includes('jaldi') ||  // Quickly
+			/^(theek|ok|okay|acha|alright|fine|thanks|thank)\s*$/i.test(msgLower.trim())  // Just acknowledgment
+		);
+		
+		// ============================================
+		// 🛡️ CLEANUP: Clear stale UNKNOWN complaints from race conditions
+		// ============================================
+		// When user sends batch images, sometimes the second image arrives after ticket
+		// was created, creating a new UNKNOWN complaint. Clear it if:
+		// 1. Ticket was just created AND
+		// 2. User sends acknowledgment OR complaint type is UNKNOWN
+		if (isEcommerceAgent && session.complaint_state?.active) {
+			const isUnknownComplaint = session.complaint_state.type === 'UNKNOWN';
+			const isSimpleAck = /^(ok|okay|thanks|thank you|alright|shukriya|theek hai|theek)\s*$/i.test(msgLower.trim());
+			
+			if (ticketJustCreated && (isUnknownComplaint || isSimpleAck)) {
+				console.log(`🧹 Clearing stale complaint state: type=${session.complaint_state.type}, ticketJustCreated=true, isSimpleAck=${isSimpleAck}`);
+				await this._clearComplaintState(session.id);
+				session.complaint_state = null;
+			}
+		}
+		
+		if (isEcommerceAgent && !session.complaint_state?.active) {
+			const complaintTriggers = [
+				'complaint', 'problem', 'issue', 'wrong', 'damaged', 'broken', 'defective',
+				'not working', 'bad quality', 'poor quality', 'torn', 'missing',
+				'wrong color', 'wrong size', 'different', 'not what i ordered',
+				'galat', 'kharab', 'toot', 'masla', 'shikayat', 'problem hai',
+				// NEW: Color mismatch patterns
+				'received a different', 'got a different', 'sent wrong',
+				'ordered blue', 'ordered red', 'ordered black', 'ordered white', 'ordered gray', 'ordered grey',
+				'received blue', 'received red', 'received black', 'received white', 'received gray', 'received grey',
+				'but i received', 'but i got', 'but they sent',
+				// NEW: Size mismatch patterns  
+				'ordered size', 'received size', 'wrong fit', 'doesn\'t fit', 'too small', 'too big', 'too large'
+			];
+			
+			let hasComplaintKeyword = complaintTriggers.some(trigger => msgLower.includes(trigger));
+			
+			// NEW: Detect "ordered X but received Y" pattern (color mismatch)
+			const colorMismatchPattern = /ordered\s+(?:a\s+)?(\w+)\s+.*(?:received|got)\s+(?:a\s+)?(\w+)/i;
+			const colorMismatchMatch = msgLower.match(colorMismatchPattern);
+			if (colorMismatchMatch && colorMismatchMatch[1] !== colorMismatchMatch[2]) {
+				hasComplaintKeyword = true;
+				console.log(`🎨 Color mismatch detected: ordered ${colorMismatchMatch[1]}, received ${colorMismatchMatch[2]}`);
+			}
+			
+			// ============================================
+			// 🛡️ SAFEGUARD: Don't re-trigger if ticket just created
+			// ============================================
+			if (hasComplaintKeyword && ticketJustCreated) {
+				console.log(`🛡️ PRE-LLM: Complaint keyword detected but ticket just created - skipping re-initialization`);
+				// Don't initialize new complaint - user is likely asking follow-up
+			} else if (hasComplaintKeyword && isFollowUpQuestion) {
+				console.log(`🛡️ PRE-LLM: Complaint keyword in follow-up question - skipping re-initialization`);
+				// Don't initialize - this is a follow-up like "kab tak masla hal ho ga"
+			} else if (hasComplaintKeyword) {
+				console.log(`🚨 PRE-LLM: Complaint detected in message - initializing complaint state`);
+				
+				// Detect complaint type
+				let complaintType = 'UNKNOWN';
+				
+				// Color complaints - check for color words or mismatch pattern
+				const colorWords = ['color', 'colour', 'blue', 'red', 'black', 'white', 'gray', 'grey', 'brown', 'green', 'pink', 'yellow'];
+				const hasColorWord = colorWords.some(c => msgLower.includes(c));
+				if (msgLower.includes('wrong color') || msgLower.includes('galat color') || 
+					colorMismatchMatch || hasColorWord) {
+					complaintType = 'COLOR_ISSUE';
+				} else if (msgLower.includes('wrong size') || msgLower.includes('size') || 
+						   msgLower.includes('doesn\'t fit') || msgLower.includes('too small') || 
+						   msgLower.includes('too big')) {
+					complaintType = 'WRONG_SIZE';
+				} else if (msgLower.includes('damaged') || msgLower.includes('broken') || msgLower.includes('toot')) {
+					complaintType = 'DAMAGED';
+				} else if (msgLower.includes('defective') || msgLower.includes('quality') || msgLower.includes('kharab')) {
+					complaintType = 'QUALITY_ISSUE';
+				} else if (msgLower.includes('missing') || msgLower.includes('not in package')) {
+					complaintType = 'MISSING_ITEM';
+				} else if (msgLower.includes('different') || msgLower.includes('not what i ordered')) {
+					complaintType = 'WRONG_ITEM';
+				}
+				
+				// Initialize complaint state
+				const newComplaintState = {
+					active: true,
+					type: complaintType,
+					order_number: null,
+					awaiting_images: complaintType !== 'MISSING_ITEM',  // No images needed for missing item
+					images_collected: [],
+					initiated_at: new Date().toISOString()
+				};
+				
+				await this._updateSessionComplaintState(session.id, newComplaintState);
+				session.complaint_state = newComplaintState;  // Update local reference
+				
+				console.log(`📝 Complaint state initialized: ${complaintType}`);
+			}
+		}
 
         // Build enhanced system prompt with strategy
         const systemPrompt = this._buildSystemPromptWithStrategy(
@@ -1963,13 +2871,97 @@ Respond in valid JSON format.`
             }
         ];
 
+		// ============================================
+		// 📷 INJECT COMPLAINT STATE CONTEXT (E-commerce only)
+		// ============================================
+		// Only for Shopify-connected agents with active complaints
+		const isEcommerceForContext = agent.shopify_store_url && agent.shopify_access_token;
+		
+		if (isEcommerceForContext && session.complaint_state?.active) {
+			const imgCount = session.complaint_state.images_collected?.length || 0;
+			let orderNum = session.complaint_state.order_number;
+			const complaintType = session.complaint_state.type || 'Unknown';
+			
+			// Also check if user's current message looks like an order number
+			const orderPattern = /\b(\d{5,8}|CZ-?\d{5,8})\b/i;
+			const orderMatch = message.match(orderPattern);
+			if (!orderNum && orderMatch) {
+				orderNum = orderMatch[1];
+				console.log(`📋 Detected order number in message: ${orderNum}`);
+				
+				// Update complaint state with order number
+				session.complaint_state.order_number = orderNum;
+				await this._updateSessionComplaintState(session.id, session.complaint_state);
+			}
+			
+			let complaintContext;
+			
+			if (imgCount === 0) {
+				// No images yet - guide LLM to ask for images
+				complaintContext = `
+[SYSTEM NOTE - ACTIVE COMPLAINT]:
+- Complaint type: ${complaintType}
+- Status: Waiting for evidence images
+
+⚠️ CRITICAL INSTRUCTIONS:
+1. Customer has filed a complaint about: ${complaintType}
+2. You MUST ask customer to share pictures/photos of the issue
+3. DO NOT ask for email or phone number - we already have that
+4. DO NOT create ticket yet - we need images first
+5. Keep response short and focused on getting images
+
+Example response: "I understand you received the wrong color. Please share pictures of the product you received so we can process your complaint."`;
+			} else if (!orderNum) {
+				// Have images, need order number
+				complaintContext = `
+[SYSTEM NOTE - COMPLAINT STATE]:
+- Active complaint: ${complaintType}
+- Images already collected: ${imgCount} image(s) ✅
+- Order number: Not provided yet
+
+⚠️ CRITICAL INSTRUCTIONS:
+1. Customer has ALREADY shared ${imgCount} image(s)
+2. DO NOT ask for images again
+3. DO NOT ask for email or phone - we already have that
+4. Ask for Order Number/ID only
+5. Keep response short
+
+Example response: "Thank you for the pictures. Please share your order number so I can create a complaint ticket."`;
+			} else {
+				// Have both images and order - ready for ticket
+				complaintContext = `
+[SYSTEM NOTE - COMPLAINT STATE]:
+- Active complaint: ${complaintType}
+- Images already collected: ${imgCount} image(s) ✅
+- Order number: ${orderNum} ✅
+
+⚠️ CRITICAL: Customer has already shared ${imgCount} image(s) AND order number ${orderNum}.
+DO NOT ask for images, order number, email, or phone again. 
+You MUST proceed to create the ticket now using create_ticket function with:
+- order_no: "${orderNum.replace(/^CZ-?/i, '')}"
+- ticket_type: "Product"
+- ticket_sub_type: "${complaintType}"`;
+			}
+
+			// Insert complaint context as a system message before user's message
+			messages.splice(messages.length - 1, 0, {
+				role: 'system',
+				content: complaintContext
+			});
+			
+			console.log(`📷 Injected complaint context: ${imgCount} images, order: ${orderNum || 'pending'}`);
+		}
+
 		//console.log(systemPrompt)
 		//console.log(messages);
 		
-        const model = agent.chat_model || 'gpt-4o-mini';
+		// ============================================
+		// 🤖 STEP 4: CALL LLM (With selected model)
+		// ============================================
+		console.log(`🚀 Calling LLM: ${selectedModel} (${classification.intent}/${classification.complexity})`);
 
 		const completion = await this._callLLM(messages, {
-			model: model,
+			model: selectedModel,
 			temperature: parseFloat(agent.temperature) || 0.7,
 			max_tokens: agent.max_tokens || 4096,
 			json_mode: true
@@ -1977,8 +2969,13 @@ Respond in valid JSON format.`
 
 		const aiMessage = { content: completion.content };
 
-		// Cost already calculated by LLMService
+		// Cost already calculated by LLMService - add classification cost
 		let llmCost = completion.cost;
+		if (classificationCost > 0) {
+			llmCost.final_cost = (llmCost.final_cost || 0) + classificationCost;
+			llmCost.classification_cost = classificationCost;
+			console.log(`💰 Added classification cost: $${classificationCost.toFixed(6)}`);
+		}
 
 		let llmDecision;
 
@@ -2027,6 +3024,100 @@ Respond in valid JSON format.`
 					was_corrected: true,
 					original_values: dateValidation.llm_values
 				};
+			}
+
+			// ============================================
+			// 📷 OVERRIDE: E-commerce complaint flow safeguard
+			// ============================================
+			// Only apply to e-commerce agents (Shopify connected)
+			const isEcommerceAgent = agent.shopify_store_url && agent.shopify_access_token;
+			
+			// ============================================
+			// 🚨 CRITICAL: Prevent repeated order status checks during complaints
+			// ============================================
+			// If user is complaining AND LLM wants to call check_order_status AGAIN,
+			// override to create_ticket instead
+			if (isEcommerceAgent && 
+				['COMPLAINT_NEW', 'COMPLAINT_CONTINUE'].includes(classification?.intent) &&
+				llmDecision.function_call_needed && 
+				llmDecision.function_name === 'check_order_status') {
+				
+				// Check if we recently showed order status (in last 3 assistant messages)
+				const recentAssistantMsgs = history.filter(m => m.role === 'assistant').slice(-3);
+				const recentlyShowedOrder = recentAssistantMsgs.some(m => 
+					m.content?.includes('Order Number') || 
+					m.content?.includes('CZ-') ||
+					m.content?.includes('Tracking') ||
+					m.content?.includes('shipped')
+				);
+				
+				// Extract order number from history
+				const historyText = history.map(h => h.content || '').join(' ');
+				const orderMatch = historyText.match(/CZ-?(\d{5,8})/i);
+				const orderNumber = orderMatch ? orderMatch[1] : null;
+				
+				if (recentlyShowedOrder && orderNumber) {
+					console.log(`🚨 OVERRIDE: User complaining after seeing order ${orderNumber} - switching from check_order_status to create_ticket`);
+					
+					// Override to create ticket instead of checking order again
+					llmDecision.function_name = 'create_ticket';
+					llmDecision.function_arguments = {
+						event: 'create_ticket',
+						order_no: orderNumber,
+						ticket_type: 'Product',
+						ticket_sub_type: 'Courier Related',  // Default for "not received"
+						customer_phone: channelInfo?.channelUserId || llmDecision.function_arguments?.phone || null,
+						customer_name: channelInfo?.channelUserName || null
+					};
+					llmDecision.response = "I understand you haven't received your order. Let me create a complaint ticket for you so our team can investigate this.";
+					
+					console.log(`📋 New function: create_ticket with order ${orderNumber}`);
+				}
+			}
+			
+			if (isEcommerceAgent && session.complaint_state?.active) {
+				const hasImages = session.complaint_state?.images_collected?.length > 0;
+				
+				// Get order number from state OR detect from current message
+				let detectedOrderNum = session.complaint_state?.order_number;
+				if (!detectedOrderNum && hasImages) {
+					const orderPattern = /\b(\d{5,8}|CZ-?\d{5,8})\b/i;
+					const orderMatch = message.match(orderPattern);
+					if (orderMatch) {
+						detectedOrderNum = orderMatch[1];
+					}
+				}
+				
+				// Use LLM's structured output instead of keyword parsing
+				const complaintContext = llmDecision.complaint_context || {};
+				const isLLMAskingForImages = complaintContext.awaiting_more_images === true ||
+											 complaintContext.ready_for_ticket === false && !complaintContext.order_number;
+				
+				// If we have both images AND order, but LLM still not triggering ticket creation
+				if (hasImages && detectedOrderNum && !llmDecision.function_call_needed) {
+					// Check if LLM didn't realize we have everything needed
+					const shouldCreateTicket = isLLMAskingForImages || 
+											   (complaintContext.ready_for_ticket === false && hasImages);
+					
+					if (shouldCreateTicket) {
+						console.log(`⚠️ E-commerce override: Have ${session.complaint_state.images_collected.length} images + order ${detectedOrderNum}`);
+						console.log(`🔄 Triggering create_ticket function`);
+						
+						// Override to create ticket
+						llmDecision.function_call_needed = true;
+						llmDecision.function_name = 'create_ticket';
+						llmDecision.function_arguments = {
+							event: 'create_ticket',
+							order_no: detectedOrderNum.replace(/^CZ-?/i, ''),
+							ticket_type: 'Product',
+							ticket_sub_type: session.complaint_state.type || 'Unknown',
+							image_urls: session.complaint_state.images_collected.map(img => img.url),
+							customer_phone: channelInfo?.channelUserId || null,
+							customer_name: channelInfo?.channelUserName || null
+						};
+						llmDecision.response = "We apologize for the inconvenience. Your concern has been noted. Here is your ticket number: [Ticket Number]. Our team will contact you shortly.";
+					}
+				}
 			}
 
 			// ============================================
@@ -2139,6 +3230,42 @@ Respond in valid JSON format.`
 					llmDecision.knowledge_search_needed = false;
 				}
 			}
+			
+			// ============================================
+			// 🔍 FORCE KB SEARCH FOR KNOWLEDGE_QUERY INTENT
+			// ============================================
+			// If classifier determined this is a knowledge query, force KB search
+			if (classification?.intent === 'KNOWLEDGE_QUERY' && 
+				agent.kb_id && 
+				!llmDecision.knowledge_search_needed &&
+				searchMode !== 'never') {
+				
+				console.log('🔍 [OVERRIDE] KNOWLEDGE_QUERY intent detected → Forcing KB search');
+				llmDecision.knowledge_search_needed = true;
+				llmDecision.knowledge_search_query = llmDecision.knowledge_search_query || message;
+				
+				// Also prevent premature agent transfer
+				if (llmDecision.agent_transfer && !llmDecision.knowledge_search_needed) {
+					console.log('🚫 [OVERRIDE] Preventing agent_transfer before KB search');
+					llmDecision.agent_transfer = false;
+				}
+			}
+			
+			// ============================================
+			// 🚫 PREVENT AGENT TRANSFER WITHOUT SEARCHING FIRST
+			// ============================================
+			// If LLM wants to transfer but hasn't searched KB yet, force search first
+			if (llmDecision.agent_transfer && 
+				agent.kb_id && 
+				!llmDecision.knowledge_search_needed &&
+				searchMode !== 'never' &&
+				!isTrivialMsg) {
+				
+				console.log('🔍 [OVERRIDE] Preventing agent_transfer - forcing KB search first');
+				llmDecision.agent_transfer = false;
+				llmDecision.knowledge_search_needed = true;
+				llmDecision.knowledge_search_query = llmDecision.knowledge_search_query || message;
+			}
 		} catch (parseError) {
 			console.error('❌ Failed to parse LLM response as JSON:', parseError.message);
 			console.error('📄 Raw response:', aiMessage.content?.substring(0, 500));
@@ -2176,6 +3303,54 @@ Respond in valid JSON format.`
 		}
 
 		// ============================================
+		// 🚨 HALLUCINATION PREVENTION: Force check_order_status
+		// ============================================
+		// If user provided an order number and LLM responded with order details
+		// but DIDN'T call check_order_status, the LLM is hallucinating!
+		const hasShopifyForHallCheck = agent.shopify_store_url && agent.shopify_access_token;
+		
+		if (hasShopifyForHallCheck && 
+			classification?.intent === 'ORDER_STATUS' && 
+			!llmDecision.function_call_needed) {
+			
+			// Check if user message looks like an order number
+			const orderNumberMatch = message.match(/\b(\d{5,8}|CZ-?\d{5,8})\b/i);
+			
+			// Check if LLM response contains order details (likely hallucinated)
+			const responseHasOrderDetails = llmDecision.response && (
+				llmDecision.response.includes('Order Number:') ||
+				llmDecision.response.includes('CZ-') ||
+				llmDecision.response.includes('Tracking ID:') ||
+				llmDecision.response.includes('Shipped') ||
+				llmDecision.response.includes('Delivered') ||
+				llmDecision.response.match(/LE\d{10}/i)  // Leopards tracking pattern
+			);
+			
+			if (orderNumberMatch && responseHasOrderDetails) {
+				console.log(`🚨 HALLUCINATION DETECTED: LLM provided order details without calling check_order_status!`);
+				console.log(`📋 Forcing check_order_status for order: ${orderNumberMatch[1]}`);
+				
+				// Override to force function call
+				llmDecision.function_call_needed = true;
+				llmDecision.function_name = 'check_order_status';
+				llmDecision.function_arguments = {
+					order_number: orderNumberMatch[1].replace(/^CZ-?/i, '')
+				};
+				llmDecision.response = "Let me check your order status...";
+			} else if (orderNumberMatch && !llmDecision.function_call_needed) {
+				// User provided order number but LLM didn't call function
+				console.log(`📋 Order number detected but function not called - triggering check_order_status`);
+				
+				llmDecision.function_call_needed = true;
+				llmDecision.function_name = 'check_order_status';
+				llmDecision.function_arguments = {
+					order_number: orderNumberMatch[1].replace(/^CZ-?/i, '')
+				};
+				llmDecision.response = "Let me look up your order...";
+			}
+		}
+
+		// ============================================
 		// 🔧 HANDLE FUNCTION CALLS (from JSON decision)
 		// ============================================
 		let executedFunctionCalls = [];
@@ -2183,6 +3358,77 @@ Respond in valid JSON format.`
 		if (llmDecision && llmDecision.function_call_needed && llmDecision.function_name) {
 			console.log(`🔧 Function call requested: ${llmDecision.function_name}`);
 			console.log(`📋 Arguments:`, llmDecision.function_arguments);
+			
+			// ============================================
+			// 🔄 AUTO-INJECT STATIC/DERIVABLE PARAMETERS
+			// ============================================
+			if (!llmDecision.function_arguments) {
+				llmDecision.function_arguments = {};
+			}
+			
+			// Auto-inject for create_ticket function
+			if (llmDecision.function_name === 'create_ticket') {
+				const args = llmDecision.function_arguments;
+				
+				// 1. Static: event is always "create_ticket"
+				if (!args.event) {
+					args.event = 'create_ticket';
+					console.log('📝 Auto-injected: event = "create_ticket"');
+				}
+				
+				// 2. Derive ticket_type from context (default to "Product" for product issues)
+				if (!args.ticket_type) {
+					args.ticket_type = 'Product';  // Default - most complaints are product-related
+					console.log('📝 Auto-injected: ticket_type = "Product"');
+				}
+				
+				// 3. Derive ticket_sub_type from context/complaint keywords
+				if (!args.ticket_sub_type) {
+					const msgLower = message.toLowerCase();
+					const historyText = history.slice(-5).map(h => h.content || '').join(' ').toLowerCase();
+					const context = msgLower + ' ' + historyText;
+					
+					if (context.includes('not received') || context.includes('nahi mila') || context.includes('haven\'t received') || context.includes('didn\'t receive') || context.includes('delivery')) {
+						args.ticket_sub_type = 'Courier Related';
+					} else if (context.includes('damaged') || context.includes('broken') || context.includes('toot')) {
+						args.ticket_sub_type = 'Damaged Article';
+					} else if (context.includes('wrong color') || context.includes('color') || context.includes('galat color')) {
+						args.ticket_sub_type = 'Color Issue';
+					} else if (context.includes('missing') || context.includes('incomplete')) {
+						args.ticket_sub_type = 'Missing Article';
+					} else if (context.includes('courier') || context.includes('delivery') || context.includes('leopard')) {
+						args.ticket_sub_type = 'Courier Related';
+					} else if (context.includes('store') || context.includes('staff') || context.includes('service')) {
+						args.ticket_sub_type = 'Store Related';
+					} else {
+						args.ticket_sub_type = 'Courier Related';  // Default for "not received" type issues
+					}
+					console.log(`📝 Auto-derived: ticket_sub_type = "${args.ticket_sub_type}"`);
+				}
+				
+				// 4. Auto-inject order_no from recent context if available
+				if (!args.order_no) {
+					// Check history for order numbers mentioned
+					const historyText = history.slice(-5).map(h => h.content || '').join(' ');
+					const orderMatch = historyText.match(/CZ-?(\d{5,8})/i) || historyText.match(/Order Number:?\s*CZ-?(\d{5,8})/i);
+					if (orderMatch) {
+						args.order_no = orderMatch[1];
+						console.log(`📝 Auto-injected from context: order_no = "${args.order_no}"`);
+					}
+				}
+				
+				// 5. Auto-inject customer info from channelInfo if not provided
+				if (!args.customer_phone && channelInfo?.channelUserId) {
+					args.customer_phone = channelInfo.channelUserId;
+					console.log(`📝 Auto-injected from channel: customer_phone = "${args.customer_phone}"`);
+				}
+				if (!args.customer_name && channelInfo?.channelUserName) {
+					args.customer_name = channelInfo.channelUserName;
+					console.log(`📝 Auto-injected from channel: customer_name = "${args.customer_name}"`);
+				}
+				
+				console.log(`📋 Final create_ticket arguments:`, args);
+			}
 			
 			// ============================================
 			// 🛡️ GUARD: Don't call function if required arguments are missing
@@ -2228,6 +3474,22 @@ Respond in valid JSON format.`
 							status: 'success'
 						});
 						
+						// ============================================
+						// 🎫 CLEAR COMPLAINT STATE AFTER TICKET CREATION
+						// ============================================
+						if (llmDecision.function_name === 'create_ticket' && functionResult.success) {
+							const ticketNumber = functionResult.result?.ticketNumber || 
+											   functionResult.result?.id || 
+											   functionResult.ticket_number ||
+											   functionResult.data?.ticket_number;
+							
+							if (ticketNumber) {
+								console.log(`🎫 Ticket created successfully: ${ticketNumber} - clearing complaint state`);
+								await this._clearComplaintState(sessionId);
+								session.complaint_state = null;  // Clear local reference too
+							}
+						}
+						
 						await db.query(
 							`UPDATE yovo_tbl_aiva_chat_sessions 
 							 SET last_function_executed_at = NOW() 
@@ -2235,7 +3497,31 @@ Respond in valid JSON format.`
 							[sessionId]
 						);
 						console.log('📍 Marked function execution time');
-
+						// ============================================
+						// 📝 SAVE ORDER INFO TO COMPLAINT STATE
+						// ============================================
+						// If we're in an active complaint and just looked up an order,
+						// save the order details to complaint state for later use
+						if (llmDecision.function_name === 'check_order_status' && 
+							session.complaint_state?.active && 
+							functionResult.success && 
+							functionResult.found && 
+							functionResult.order?.order_number) {
+							
+							const updatedComplaintState = {
+								...session.complaint_state,
+								order_number: functionResult.order.order_number,
+								delivery_date: functionResult.order.delivery_date || null,
+								customer_name: functionResult.order.customer_name || null,
+								customer_email: functionResult.order.customer_email || null,
+								customer_phone: functionResult.order.customer_phone || null
+							};
+							await this._updateSessionComplaintState(sessionId, updatedComplaintState);
+							console.log(`📝 Saved order ${functionResult.order.order_number} to complaint state`);
+							
+							// Also update the local session object for this request
+							session.complaint_state = updatedComplaintState;
+						}
 						// Make second LLM call with function result
 						console.log('🔄 Calling LLM again with function result...');
 						
@@ -2271,7 +3557,7 @@ Respond in valid JSON format.`
 						];
 						
 						const functionFollowupCompletion = await this._callLLM(messagesWithFunctionResult, {
-							model: model,
+							model: selectedModel,
 							temperature: parseFloat(agent.temperature) || 0.7,
 							max_tokens: agent.max_tokens || 4096,
 							json_mode: true
@@ -2302,6 +3588,14 @@ Respond in valid JSON format.`
 							if (finalDecision.user_wants_to_end !== undefined) {
 								llmDecision.user_wants_to_end = finalDecision.user_wants_to_end;
 							}
+							
+							const customerLanguage = this._detectCustomerLanguage(history, message);
+							llmDecision.response = this._sanitizeTicketResponse(
+								llmDecision.response,
+								functionResult,
+								llmDecision.function_name,
+								customerLanguage
+							);
 							
 						} catch (parseError) {
 							console.error('❌ Failed to parse function followup response:', parseError.message);
@@ -2704,7 +3998,7 @@ Respond in valid JSON format.`
 				// Call LLM again with product context
 				try {
 					const finalCompletion = await this._callLLM(messagesWithContext, {
-						model: model,
+						model: selectedModel,
 						temperature: parseFloat(agent.temperature) || 0.7,
 						max_tokens: 2048,
 						json_mode: true
@@ -2855,7 +4149,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
                     // Call LLM again with product context
 					try {
 						const finalCompletion = await this._callLLM(messagesWithContext, {
-							model: model,
+							model: selectedModel,
 							temperature: parseFloat(agent.temperature) || 0.7,
 							max_tokens: 4096,
 							json_mode: true
@@ -3063,7 +4357,9 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
         }
 
         const formattedSources = await this._formatKnowledgeSources(knowledgeResults);
-
+		
+		releaseLock();
+		
         return {
             session_id: sessionId,
             message_id: assistantMessageId,
@@ -3100,7 +4396,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
                 agent_id: agent.id,
                 agent_name: agent.name,
                 provider: 'openai',
-                model: model,
+                model: selectedModel,
                 temperature: agent.temperature || 0.7
             },
             cost: totalCost.final_cost,
@@ -3116,6 +4412,41 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 	_buildSystemPromptWithStrategy(baseInstructions, conversationStrategy, greeting = null, isFirstMessage = false, kbMetadata = {}, agent = null) {
 		// Start with base instructions
 		let systemPrompt = baseInstructions || '';
+
+		const languageEnforcement = `
+		⚠️ CRITICAL LANGUAGE RULES (CHECK BEFORE EVERY RESPONSE):
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+		BANNED HINDI WORDS - NEVER USE THESE:
+		❌ kripya → ✅ please / meherbani se
+		❌ dhanyavaad → ✅ shukriya / thank you
+		❌ namaste → ✅ Assalam-o-Alaikum / Hello
+		❌ swagat → ✅ khush aamdeed / welcome
+		❌ sahayata → ✅ madad / help
+		❌ uplabdh → ✅ available / dastiyab
+		❌ jankari → ✅ maloomat / information
+		❌ vishesh → ✅ khaas / special
+		❌ sampark → ✅ rabta / contact
+
+		LANGUAGE MATCHING:
+		- Customer writes in English → Reply 100% in English
+		- Customer writes in Urdu/Roman Urdu → Reply in Roman Urdu (Pakistani)
+		
+		BEFORE GENERATING ANY RESPONSE, CHECK THE CUSTOMER'S LANGUAGE:
+
+		1. Customer's message is in ENGLISH → Your ENTIRE response MUST be in ENGLISH
+		2. Customer's message is in URDU/Roman Urdu → Your ENTIRE response MUST be in Roman Urdu
+		3. If mixed → Use the DOMINANT language
+
+		⚠️ The examples in these instructions show responses in ONE language for illustration.
+		   YOU MUST TRANSLATE the example response to match the customer's language!
+
+		SELF-CHECK:
+		- What language did customer use? → [detect]
+		- Is my response in that same language? → [verify]
+		- If NO → REWRITE in correct language before responding
+		━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+		`;
 
 		// ============================================
 		// 📅 INJECT CURRENT DATE AT TOP (CRITICAL FOR DATE CALCULATIONS)
@@ -3136,7 +4467,7 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 
 	`;
 		
-		systemPrompt = dateHeader + systemPrompt;
+		systemPrompt = dateHeader + languageEnforcement + systemPrompt;
 		
 		const stayInRoleInstructions = `
 ============================================================
@@ -4038,34 +5369,6 @@ FORBIDDEN RESPONSES:
 
 		// Anti-hallucination instructions
 		systemPrompt += this._getAntiHallucinationInstructions(hasDocuments, hasProducts);
-
-				// ============================================
-		// 🌐 FINAL LANGUAGE ENFORCEMENT (CRITICAL)
-		// ============================================
-		const languageEnforcement = `
-
-		============================================================
-		🚨 CRITICAL: LANGUAGE MATCHING - FINAL CHECK
-		============================================================
-
-		BEFORE GENERATING ANY RESPONSE, CHECK THE CUSTOMER'S LANGUAGE:
-
-		1. Customer's message is in ENGLISH → Your ENTIRE response MUST be in ENGLISH
-		2. Customer's message is in URDU/Roman Urdu → Your ENTIRE response MUST be in Roman Urdu
-		3. If mixed → Use the DOMINANT language
-
-		⚠️ The examples in these instructions show responses in ONE language for illustration.
-		   YOU MUST TRANSLATE the example response to match the customer's language!
-
-		SELF-CHECK:
-		- What language did customer use? → [detect]
-		- Is my response in that same language? → [verify]
-		- If NO → REWRITE in correct language before responding
-
-		============================================================
-		`;
-
-		systemPrompt += languageEnforcement;
 
 		return systemPrompt;
 	}
@@ -5029,6 +6332,445 @@ Adapt based on context and user behavior.
         );
     }
 
+	// ============================================
+	// 🎯 SMART MODEL ROUTING SYSTEM
+	// ============================================
+
+	/**
+	 * Classify message complexity and intent using lightweight LLM call
+	 * This determines which model and prompt to use for the main response
+	 * 
+	 * @param {string} message - User's message
+	 * @param {Object} sessionState - Current session state
+	 * @param {boolean} hasImage - Whether message includes an image
+	 * @param {Array} recentHistory - Last few messages for context
+	 * @returns {Promise<Object>} Classification result
+	 */
+	async _classifyMessageComplexity(message, sessionState, hasImage, recentHistory = []) {
+		console.log('🎯 Running lightweight message classification...');
+		
+		// Build minimal context from recent history
+		const historyContext = recentHistory.slice(-3).map(m => 
+			`${m.role}: ${(m.content || '').substring(0, 100)}`
+		).join('\n');
+		
+		// Check if we recently discussed an order (for complaint detection)
+		const recentAssistantMsg = recentHistory.filter(m => m.role === 'assistant').slice(-1)[0]?.content || '';
+		const discussedOrder = recentAssistantMsg.includes('Order Number') || 
+							   recentAssistantMsg.includes('order') ||
+							   recentAssistantMsg.includes('CZ-');
+		
+		// Check if bot ASKED for order status info (not complaint)
+		const askedForOrderInfo = recentAssistantMsg.toLowerCase().includes('order id') ||
+								  recentAssistantMsg.toLowerCase().includes('order number') ||
+								  recentAssistantMsg.toLowerCase().includes('check your order') ||
+								  recentAssistantMsg.toLowerCase().includes('order status');
+		
+		// Check if ticket was just created
+		const recentAssistantMsgs = recentHistory.filter(m => m.role === 'assistant').slice(-3);
+		const ticketJustCreated = recentAssistantMsgs.some(m => 
+			m.content?.toLowerCase().includes('ticket number') || 
+			m.content?.includes('ticket_number') ||
+			m.content?.includes('CZ-373') ||
+			m.content?.toLowerCase().includes('concern note kar') ||
+			m.content?.toLowerCase().includes('concern has been noted') ||
+			m.content?.toLowerCase().includes('complaint has been registered') ||
+			m.content?.toLowerCase().includes('team will contact')
+		);
+		
+		// Check if user's recent message asked for order status (not complaint)
+		const recentUserMsgs = recentHistory.filter(m => m.role === 'user').slice(-3);
+		const userAskedOrderStatus = recentUserMsgs.some(m => 
+			m.content?.toLowerCase().includes('order status') ||
+			m.content?.toLowerCase().includes('where is my order') ||
+			m.content?.toLowerCase().includes('track my order') ||
+			m.content?.toLowerCase().includes('check order')
+		);
+		
+		// Detect complaint keywords in current message
+		const msgLower = message.toLowerCase();
+		const complaintKeywords = ['not received', 'haven\'t received', 'didn\'t receive', 'wrong', 'damaged', 
+								   'broken', 'problem', 'issue', 'complaint', 'missing', 'nahi mila', 'nahi aya'];
+		const hasComplaintKeyword = complaintKeywords.some(k => msgLower.includes(k));
+		
+		// Detect if current message is just a number (order number / phone)
+		const isJustNumber = /^\d{5,12}$/.test(message.trim());
+		
+		// Detect if this is a follow-up question (not a new complaint)
+		const isFollowUpQuestion = (
+			msgLower.includes('kab tak') ||  // How long
+			msgLower.includes('kitna time') ||  // How much time
+			msgLower.includes('kitni der') ||  // How long
+			msgLower.includes('when will') ||
+			msgLower.includes('how long') ||
+			msgLower.includes('how much time')
+		);
+		
+		const classifierPrompt = `Classify this customer service message for routing.
+
+CONTEXT:
+- Has image: ${hasImage ? 'yes' : 'no'}
+- Active complaint: ${sessionState?.complaint_state?.active ? 'yes' : 'no'}
+- Images collected: ${sessionState?.complaint_state?.images_collected?.length || 0}
+- Order number known: ${sessionState?.complaint_state?.order_number ? 'yes' : 'no'}
+- Just discussed order: ${discussedOrder ? 'yes' : 'no'}
+- Bot asked for order info: ${askedForOrderInfo ? 'yes' : 'no'}
+- User asked for order status recently: ${userAskedOrderStatus ? 'yes' : 'no'}
+- Contains complaint words: ${hasComplaintKeyword ? 'yes' : 'no'}
+- Message is just a number: ${isJustNumber ? 'yes' : 'no'}
+- Ticket was just created: ${ticketJustCreated ? 'yes' : 'no'}
+- Is asking about time/duration: ${isFollowUpQuestion ? 'yes' : 'no'}
+${historyContext ? `\nRecent conversation:\n${historyContext}` : ''}
+
+MESSAGE: "${message}"
+
+CRITICAL RULES:
+1. If user says "not received", "haven't received", "didn't get" AFTER order status was shown → COMPLAINT_NEW
+2. If user asked "order status" recently and now provides a number → ORDER_STATUS (not COMPLAINT_CONTINUE)
+3. If bot asked for order number FOR ORDER STATUS and user provides number → ORDER_STATUS
+4. Only use COMPLAINT_CONTINUE if user is clearly continuing a complaint conversation
+5. "ok thanks" or "thanks" = SIMPLE_REPLY, NOT a complaint continuation
+6. If ticket was just created and user asks "kab tak" / "how long" → KNOWLEDGE_QUERY (asking about resolution time)
+7. If ticket just created and message has "masla" but is a QUESTION about timing → KNOWLEDGE_QUERY, not a new complaint
+
+Classify as ONE of these intents:
+- GREETING: Hi, hello, thanks, bye, pleasantries
+- ORDER_STATUS: Check order, where is my order, track order, order number provided FOR STATUS CHECK
+- PRODUCT_INQUIRY: Price, availability, show products, product questions
+- COMPLAINT_NEW: Starting a NEW complaint (not received, damaged, wrong item, problem, issue, missing)
+- COMPLAINT_CONTINUE: Continuing existing complaint ONLY IF currently discussing complaint details
+- KNOWLEDGE_QUERY: FAQ question, policy question, general information, resolution time questions
+- SIMPLE_REPLY: Yes, no, ok, thanks, acknowledgments
+- COMPLEX: Multi-part question, ambiguous, needs careful handling
+
+And classify complexity:
+- SIMPLE: Greetings, yes/no, single clear intent
+- MEDIUM: Order lookup, product search, knowledge query
+- COMPLEX: Complaints, multi-step flows, policy decisions, escalations
+
+Reply ONLY with JSON:
+{"intent": "...", "complexity": "SIMPLE|MEDIUM|COMPLEX", "reason": "brief explanation", "detected_language": "en|ur"}`;
+
+		try {
+			const startTime = Date.now();
+			
+			const completion = await this._callLLM(
+				[{ role: 'user', content: classifierPrompt }],
+				{
+					model: 'gpt-4o-mini',  // Always use cheapest model for classification
+					max_tokens: 80,
+					temperature: 0.1,
+					json_mode: true
+				}
+			);
+			
+			let result = JSON.parse(completion.content);
+			const classificationTime = Date.now() - startTime;
+			
+			// POST-CLASSIFICATION OVERRIDE: Complaint keywords after order discussion = COMPLAINT
+			if (hasComplaintKeyword && discussedOrder && result.intent === 'ORDER_STATUS') {
+				console.log('🔄 Override: Complaint keywords detected after order discussion → COMPLAINT_NEW');
+				result.intent = 'COMPLAINT_NEW';
+				result.complexity = 'COMPLEX';
+				result.reason = 'User reporting issue after order status shown';
+			}
+			
+			// POST-CLASSIFICATION OVERRIDE: If user asked for order status and provides number, it's ORDER_STATUS
+			// BUT ONLY if there's no active complaint
+			if (userAskedOrderStatus && isJustNumber && result.intent === 'COMPLAINT_CONTINUE' && 
+				!sessionState?.complaint_state?.active) {
+				console.log('🔄 Override: User asked for order status then provided number → ORDER_STATUS');
+				result.intent = 'ORDER_STATUS';
+				result.complexity = 'MEDIUM';
+				result.reason = 'User providing order number for status check';
+			}
+			
+			// POST-CLASSIFICATION OVERRIDE: Maintain COMPLAINT_CONTINUE when active complaint
+			// If there's an active complaint and user provides order number, keep it as complaint
+			if (sessionState?.complaint_state?.active && 
+				isJustNumber && 
+				result.intent === 'ORDER_STATUS') {
+				console.log(`🔄 Override: Active complaint (${sessionState.complaint_state.type}) + order number → COMPLAINT_CONTINUE`);
+				result.intent = 'COMPLAINT_CONTINUE';
+				result.complexity = 'COMPLEX';
+				result.reason = `User providing order number for active ${sessionState.complaint_state.type} complaint`;
+			}
+			
+			// POST-CLASSIFICATION OVERRIDE: Follow-up question after ticket creation
+			if (ticketJustCreated && isFollowUpQuestion) {
+				if (result.intent === 'COMPLAINT_NEW' || result.intent === 'COMPLAINT_CONTINUE' || result.intent === 'ORDER_STATUS') {
+					console.log('🔄 Override: Follow-up question after ticket creation → KNOWLEDGE_QUERY');
+					result.intent = 'KNOWLEDGE_QUERY';
+					result.complexity = 'SIMPLE';
+					result.reason = 'User asking follow-up question about ticket resolution time';
+				}
+			}
+			
+			// POST-CLASSIFICATION OVERRIDE: "ok thanks" should be SIMPLE_REPLY
+			if (/^(ok|okay|thanks|thank you|alright|shukriya|theek hai)\s*$/i.test(msgLower.trim())) {
+				if (result.intent !== 'SIMPLE_REPLY' && result.intent !== 'GREETING') {
+					console.log('🔄 Override: Simple acknowledgment → SIMPLE_REPLY');
+					result.intent = 'SIMPLE_REPLY';
+					result.complexity = 'SIMPLE';
+					result.reason = 'Simple acknowledgment message';
+				}
+			}
+			
+			// POST-CLASSIFICATION OVERRIDE: Don't classify as complaint if ticket just created
+			if (ticketJustCreated && (result.intent === 'COMPLAINT_NEW' || result.intent === 'COMPLAINT_CONTINUE')) {
+				console.log('🔄 Override: Ticket just created - treating as follow-up question → KNOWLEDGE_QUERY');
+				result.intent = 'KNOWLEDGE_QUERY';
+				result.complexity = 'SIMPLE';
+				result.reason = 'Post-ticket follow-up question';
+			}
+			
+			console.log(`🎯 Classification: ${result.intent} (${result.complexity}) - ${classificationTime}ms - $${completion.cost?.final_cost?.toFixed(6) || '0'}`);
+			console.log(`   Reason: ${result.reason}`);
+			
+			return {
+				intent: result.intent || 'COMPLEX',
+				complexity: result.complexity || 'COMPLEX',
+				reason: result.reason,
+				detected_language: result.detected_language || 'en',
+				classification_cost: completion.cost?.final_cost || 0,
+				classification_time: classificationTime
+			};
+			
+		} catch (error) {
+			console.error('❌ Classification failed, defaulting to COMPLEX:', error.message);
+			return {
+				intent: 'COMPLEX',
+				complexity: 'COMPLEX',
+				reason: 'Classification failed - using safe default',
+				detected_language: 'en',
+				classification_cost: 0,
+				classification_time: 0,
+				error: error.message
+			};
+		}
+	}
+
+	/**
+	 * Select the appropriate model based on classification and agent config
+	 * 
+	 * @param {Object} classification - Result from _classifyMessageComplexity
+	 * @param {Object} agent - Agent configuration
+	 * @returns {string} Model identifier to use
+	 */
+	_selectModelForMessage(classification, agent, session = null) {
+		const { intent, complexity } = classification;
+		
+		// Get the agent's default model (or sensible fallback)
+		const defaultModel = agent.chat_model || 'gpt-4o-mini';
+		
+		// Model tiers from agent config
+		// If tier-specific models not set, use agent's default model
+		const models = {
+			simple: agent.model_simple || defaultModel,
+			medium: agent.model_medium || defaultModel,
+			complex: agent.model_complex || defaultModel  // Use agent's default, NOT gpt-4o
+		};
+		
+		// Override: If agent only has one model configured, use it for everything
+		if (!agent.model_simple && !agent.model_medium && !agent.model_complex) {
+			console.log(`🤖 Using agent's default model for all: ${defaultModel}`);
+			return defaultModel;
+		}
+		
+		// ============================================
+		// 🚨 ACTIVE COMPLAINT OVERRIDE (highest priority)
+		// ============================================
+		// If there's an active complaint, ALWAYS use complex model
+		// This ensures complaint instructions are followed properly
+		if (session?.complaint_state?.active) {
+			console.log(`🤖 Selected model: ${models.complex} (ACTIVE COMPLAINT: ${session.complaint_state.type} → forced COMPLEX)`);
+			return models.complex;
+		}
+		
+		// ============================================
+		// INTENT-BASED OVERRIDES (highest priority)
+		// ============================================
+		// Complaints ALWAYS use complex model regardless of complexity classification
+		const alwaysComplexIntents = ['COMPLAINT_NEW', 'COMPLAINT_CONTINUE', 'COMPLEX'];
+		if (alwaysComplexIntents.includes(intent)) {
+			console.log(`🤖 Selected model: ${models.complex} (intent: ${intent} → forced COMPLEX)`);
+			return models.complex;
+		}
+		
+		// Simple intents always use simple model
+		const alwaysSimpleIntents = ['GREETING', 'SIMPLE_REPLY'];
+		if (alwaysSimpleIntents.includes(intent)) {
+			console.log(`🤖 Selected model: ${models.simple} (intent: ${intent} → forced SIMPLE)`);
+			return models.simple;
+		}
+		
+		// ============================================
+		// COMPLEXITY-BASED SELECTION (for other intents)
+		// ============================================
+		let selectedModel;
+		
+		switch (complexity) {
+			case 'SIMPLE':
+				selectedModel = models.simple;
+				break;
+			case 'COMPLEX':
+				selectedModel = models.complex;
+				break;
+			default:
+				selectedModel = models.medium;
+		}
+		
+		console.log(`🤖 Selected model: ${selectedModel} (intent: ${intent}, complexity: ${complexity})`);
+		return selectedModel;
+	}
+
+	/**
+	 * Build optimized prompt based on classification
+	 * Returns smaller, focused prompts for simple intents
+	 * 
+	 * @param {Object} classification - Result from _classifyMessageComplexity
+	 * @param {Object} agent - Agent configuration
+	 * @param {Object} session - Current session
+	 * @param {boolean} isFirstMessage - Whether this is the first message
+	 * @returns {Object} Prompt configuration
+	 */
+	_buildOptimizedPrompt(classification, agent, session, isFirstMessage) {
+		const { intent, complexity, detected_language } = classification;
+		
+		// Base context every prompt needs
+		const baseContext = `You are ${agent.name || 'an AI assistant'}.
+Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+Language: Respond in ${detected_language === 'ur' ? 'Roman Urdu (Pakistani Urdu, NOT Hindi)' : 'English'}`;
+
+		// SIMPLE intents - minimal prompt
+		if (complexity === 'SIMPLE' && ['GREETING', 'SIMPLE_REPLY'].includes(intent)) {
+			return {
+				type: 'minimal',
+				systemPrompt: `${baseContext}
+
+${isFirstMessage && agent.greeting ? `Greeting: ${agent.greeting}` : 'Be friendly and helpful. Keep responses brief.'}
+
+Respond naturally and briefly.`,
+				includeHistory: false,  // Don't need history for "Hi"
+				includeFunctions: false,
+				includeJsonFormat: false  // Simple text response is fine
+			};
+		}
+		
+		// ORDER_STATUS - focused prompt
+		if (intent === 'ORDER_STATUS') {
+			return {
+				type: 'order_focused',
+				systemPrompt: `${baseContext}
+
+TASK: Help customer check their order status.
+
+RULES:
+1. If customer provides order number, email, or phone - call check_order_status function
+2. If customer just asks "where is my order" on WhatsApp - use their phone number (channelUserId) to search
+3. Present order status clearly with: Order Number, Date, Status, Expected Delivery
+4. If tracking available, include tracking link
+
+${agent.order_instructions || ''}
+
+Respond in JSON format:
+{
+  "response": "your response text",
+  "function_call_needed": true/false,
+  "function_name": "check_order_status",
+  "function_arguments": {"order_number": "...", "phone": "...", "email": "..."}
+}`,
+				includeHistory: true,
+				includeFunctions: ['check_order_status'],
+				includeJsonFormat: true
+			};
+		}
+		
+		// PRODUCT_INQUIRY - focused prompt
+		if (intent === 'PRODUCT_INQUIRY') {
+			return {
+				type: 'product_focused',
+				systemPrompt: `${baseContext}
+
+TASK: Help customer find products.
+
+RULES:
+1. Search for products based on customer's request
+2. Show relevant products with: Name, Price, Available Sizes
+3. Include product images when available
+4. Provide purchase links
+
+${agent.product_instructions || ''}
+
+Respond in JSON format:
+{
+  "response": "your response text",
+  "product_search_needed": true/false,
+  "product_search_query": "search terms",
+  "product_search_type": "multi"
+}`,
+				includeHistory: true,
+				includeFunctions: false,
+				includeJsonFormat: true
+			};
+		}
+		
+		// KNOWLEDGE_QUERY - focused prompt
+		if (intent === 'KNOWLEDGE_QUERY') {
+			return {
+				type: 'knowledge_focused',
+				systemPrompt: `${baseContext}
+
+TASK: Answer customer's question from your knowledge base.
+
+${agent.core_instructions || agent.instructions || ''}
+
+If you cannot answer from your knowledge, say so and offer to help differently.
+
+Respond in JSON format:
+{
+  "response": "your response text",
+  "knowledge_search_needed": true/false,
+  "knowledge_search_query": "search terms if needed"
+}`,
+				includeHistory: true,
+				includeFunctions: false,
+				includeJsonFormat: true
+			};
+		}
+		
+		// COMPLAINT_NEW, COMPLAINT_CONTINUE, COMPLEX - full prompt
+		// These need the complete agent instructions
+		return {
+			type: 'full',
+			systemPrompt: null,  // Signal to use full _buildSystemPromptWithStrategy
+			includeHistory: true,
+			includeFunctions: true,
+			includeJsonFormat: true,
+			useFullPromptBuilder: true
+		};
+	}
+
+	/**
+	 * Check if smart routing is enabled for this agent
+	 * 
+	 * @param {Object} agent - Agent configuration
+	 * @returns {boolean} Whether to use smart routing
+	 */
+	_isSmartRoutingEnabled(agent) {
+		// Smart routing is enabled if:
+		// 1. Agent explicitly enables it, OR
+		// 2. Agent has different models configured for different tiers
+		
+		if (agent.smart_routing_enabled === true) return true;
+		if (agent.smart_routing_enabled === false) return false;
+		
+		// Auto-detect: if agent has tier-specific models, enable routing
+		const hasTieredModels = agent.model_simple || agent.model_medium || agent.model_complex;
+		
+		return hasTieredModels;
+	}
+
     /**
      * Execute agent function
      * @private
@@ -5813,7 +7555,7 @@ GENERAL RULES:
 	 * @param {string} message - Current user message
 	 * @returns {Promise<Object>} Classification result
 	 */
-	async _classifyImageIntent(session, history, message) {
+	async _classifyImageIntent(session, history, message, image) {
 		console.log('📷 Classifying image intent...');
 		
 		// Get agent to check capabilities
@@ -5821,6 +7563,45 @@ GENERAL RULES:
 		const hasShopify = agent?.shopify_store_url && agent?.shopify_access_token;
 		const hasProducts = agent?.kb_metadata?.has_products || false;
 		const canSearchProducts = hasShopify || hasProducts;
+		
+		// ============================================
+		// 🛡️ CHECK IF TICKET WAS JUST CREATED (handle race conditions)
+		// ============================================
+		const recentAssistantMsgs = history.filter(m => m.role === 'assistant').slice(-3);
+		const ticketJustCreated = recentAssistantMsgs.some(m => 
+			m.content?.includes('ticket number') || 
+			m.content?.includes('Ticket Number') ||
+			m.content?.includes('ticket_number') ||
+			m.content?.includes('concern note kar') ||
+			m.content?.includes('concern has been noted') ||
+			m.content?.includes('complaint has been registered') ||
+			m.content?.includes('team will contact') ||
+			m.content?.includes('Our team will contact')
+		);
+		
+		if (ticketJustCreated) {
+			console.log('📷 Ticket just created - image is likely extra/late batch image');
+			return {
+				intent: 'post_ticket_image',
+				confidence: 'high',
+				source: 'ticket_just_created',
+				reason: 'Ticket was recently created, ignoring late image'
+			};
+		}
+		
+		const orderScreenshotKeywords = [
+			// Order-related terms
+			'order number', 'order #', 'order status', 'order confirmation',
+			'tracking', 'shipment', 'delivery', 'delivered', 'dispatched',
+			'invoice', 'receipt', 'confirmation', 'booking',
+			// Screenshot context
+			'screenshot', 'screen shot', 'ss', 'pic of order', 'order pic',
+			'here is my order', 'my order', 'yeh mera order', 'mera order',
+			// Email/notification context  
+			'got this email', 'received this', 'ye email aayi', 'notification',
+			// Status inquiry with image
+			'check this', 'is order ka status', 'order ki detail', 'kahan hai mera order'
+		];
 		
 		// ============================================
 		// TIER 0: Agent Capability Check
@@ -5840,17 +7621,55 @@ GENERAL RULES:
 		// ============================================
 		const complaintState = session.complaint_state;
 		
-		if (complaintState && complaintState.active && complaintState.awaiting_images) {
-			console.log('📷 Intent: COMPLAINT_EVIDENCE (from session state)');
-			return { 
-				intent: 'complaint_evidence', 
+		if (complaintState && complaintState.active) {
+			const imageCount = complaintState.images_collected?.length || 0;
+			
+			// Check if we recently saved an image (within 30 seconds) - indicates batch upload
+			const lastImageTime = complaintState.images_collected?.[imageCount - 1]?.added_at;
+			const timeSinceLastImage = lastImageTime ? 
+				(Date.now() - new Date(lastImageTime).getTime()) : Infinity;
+			const isBatchUpload = timeSinceLastImage < 30000; // 30 seconds
+			
+			// Use state flags instead of keyword parsing (language-agnostic)
+			const awaitingImages = complaintState.awaiting_images === true;
+			const awaitingOrder = imageCount > 0 && !complaintState.order_number;
+			
+			// If this looks like a batch upload (multiple images within 30s)
+			// and we've already asked for something, return special intent for silent collection
+			if (isBatchUpload && imageCount > 0) {
+				console.log(`📷 Batch image detected (#${imageCount + 1}) - will collect silently`);
+				return {
+					intent: 'batch_image_skip',
+					confidence: 'high',
+					source: 'batch_detection',
+					images_count: imageCount + 1,
+					awaiting: awaitingOrder ? 'order_info' : (awaitingImages ? 'more_images' : 'unknown')
+				};
+			}
+			
+			// If we have images but no order number, and user sends another image
+			// Send a reminder about order info
+			if (awaitingOrder && imageCount > 0) {
+				console.log(`📷 Image received but still waiting for order info`);
+				return {
+					intent: 'batch_image_reminder',
+					confidence: 'high',
+					source: 'awaiting_order_info',
+					images_count: imageCount + 1,
+					awaiting_order_info: true
+				};
+			}
+			
+			// ✅ FIX: If complaint is active, ANY image is complaint evidence
+			// This catches the first image or images sent when not in batch mode
+			console.log(`📷 Active complaint detected - treating image as complaint evidence`);
+			return {
+				intent: 'complaint_evidence',
 				confidence: 'high',
-				source: 'session_state',
-				complaint_type: complaintState.type,
-				order_number: complaintState.order_number,
-				delivery_date: complaintState.delivery_date,
-				customer_email: complaintState.customer_email,
-				customer_phone: complaintState.customer_phone
+				source: 'active_complaint_state',
+				complaint_type: complaintState.type || 'UNKNOWN',
+				images_count: imageCount,
+				order_number: complaintState.order_number
 			};
 		}
 		
@@ -5919,6 +7738,15 @@ GENERAL RULES:
 		// Score keywords
 		const complaintScore = complaintKeywords.filter(k => fullContext.includes(k)).length;
 		const productScore = productKeywords.filter(k => fullContext.includes(k)).length;
+		const orderScreenshotScore = orderScreenshotKeywords.filter(k => fullContext.includes(k)).length;
+		
+		console.log(`📊 Keyword scores - Complaint: ${complaintScore}, Product: ${productScore}, OrderScreenshot: ${orderScreenshotScore}`);
+		
+		// Order screenshot has highest priority if keywords match
+		if (orderScreenshotScore >= 1 && complaintScore === 0) {
+			console.log('📷 Intent: ORDER_SCREENSHOT (from keywords)');
+			return { intent: 'order_screenshot', confidence: 'medium', source: 'keywords' };
+		}
 		
 		console.log(`📊 Keyword scores - Complaint: ${complaintScore}, Product: ${productScore}`);
 		
@@ -5934,76 +7762,290 @@ GENERAL RULES:
 			return { intent: 'product_search', confidence: 'medium', source: 'keywords' };
 		}
 		
-		// No clear context - check if we should ask
+		// No clear context - check if we should use vision LLM
 		const hasMessage = message && message.trim().length > 5;  // More than just "hi" or "yes"
 		const isAmbiguous = this._isAmbiguousImageMessage(message);
 
-		if (complaintScore === 0 && productScore === 0 && (!hasMessage || isAmbiguous)) {
-			// No text, no keywords, or ambiguous question - ASK THE USER
-			console.log('📷 Intent: UNKNOWN (no clear context or ambiguous - will ask user)');
-			return { intent: 'unknown', confidence: 'low', source: 'no_context' };
-		}
-
-		// Has some text but no complaint keywords - probably product search
-		if (complaintScore === 0) {
+		// If no keywords matched but we have an image, use vision to classify
+		if (complaintScore === 0 && productScore === 0 && orderScreenshotScore === 0) {
+			// Don't return unknown - fall through to vision-based classification
+			console.log('📷 No keyword context - will use vision LLM to classify image');
+		} else if (complaintScore === 0 && productScore === 0) {
+			// Has some text but no complaint/product keywords - check for product search
 			console.log('📷 Intent: PRODUCT_SEARCH (no complaint context found)');
 			return { intent: 'product_search', confidence: 'medium', source: 'default' };
 		}
 		
 		// ============================================
-		// TIER 3: Minimal LLM Check (CHEAP - only when ambiguous)
+		// TIER 3: Vision LLM Classification (when no clear keyword context)
 		// ============================================
-		console.log('🤔 Ambiguous context - using minimal LLM classification');
+		console.log('🔍 Using vision LLM to classify image content');
 		
 		// Build minimal context (only last 3 messages)
 		const minimalHistory = recentMessages.slice(-3).map(m => 
 			`${m.role.toUpperCase()}: ${(m.content || '').substring(0, 200)}`
 		).join('\n');
 		
-		const intentPrompt = `Classify user intent for an e-commerce shoe store chat.
+		const intentPrompt = `Classify user intent for an e-commerce customer service chat.
 
-	Recent conversation:
-	${minimalHistory}
+Recent conversation:
+${minimalHistory}
 
-	User just sent an IMAGE with message: "${message || '[no text, just image]'}"
+User just sent an IMAGE with message: "${message || '[no text, just image]'}"
 
-	Is this image for:
-	A) complaint_evidence - User reporting a problem (damaged shoe, defective, quality issue, wrong item)
-	B) product_search - User wants to find/buy similar products
+Analyze the IMAGE content and classify as ONE of:
+A) order_screenshot - Screenshot of order confirmation, invoice, receipt, tracking page, or delivery notification. Look for:
+   - Order numbers (e.g., "CZ-123456", "#123456", "Order #")
+   - Dates, amounts, tracking info
+   - Email confirmations or app screenshots showing order details
+   - "Thank you for your purchase" or similar confirmation text
+   
+B) complaint_evidence - User reporting a problem with a RECEIVED product:
+   - Damaged/defective product photo
+   - Wrong item received
+   - Quality issues visible in image
+   
+C) product_search - User wants to find or buy products:
+   - Product photo they want to find similar items
+   - Style inspiration image
+   - "Find me this" type requests
 
-	Reply ONLY with JSON: {"intent": "complaint_evidence" or "product_search", "reason": "one line"}`;
+CLASSIFICATION RULES:
+- If image contains ANY order-related text (Order #, Invoice, Tracking, Confirmation, "Thank you for your purchase") → order_screenshot
+- If image shows a DAMAGED/DEFECTIVE physical product → complaint_evidence
+- If image shows a product the user wants to BUY/FIND → product_search
+- Screenshots of websites/apps showing order info → order_screenshot (NOT product_search)
+- When uncertain between order_screenshot and product_search, prefer order_screenshot if any order text visible
+
+Reply ONLY with JSON: {"intent": "order_screenshot" or "complaint_evidence" or "product_search", "reason": "brief explanation"}`;
 
 		try {
+			// Use vision-capable model with actual image
 			const completion = await this._callLLM(
-				[{ role: 'user', content: intentPrompt }],
+				[{ 
+					role: 'user', 
+					content: [
+						{ type: 'text', text: intentPrompt },
+						{ 
+							type: 'image_url', 
+							image_url: { 
+								url: image.startsWith('data:') ? image : `data:image/jpeg;base64,${image}`,
+								detail: 'low'  // Low detail for classification (cheaper)
+							} 
+						}
+					]
+				}],
 				{
-					model: 'gpt-4o-mini',  // Always use cheap model for classification
-					max_tokens: 80,
+					model: 'gpt-4o-mini',  // Vision-capable and cheap
+					max_tokens: 100,
 					temperature: 0.1,
-					json_mode: true
+					json_mode: true,
+					hasVision: true
 				}
 			);
 			
 			const result = JSON.parse(completion.content);
 			
-			console.log(`📷 Intent: ${result.intent.toUpperCase()} (from LLM: ${result.reason})`);
-			console.log(`💰 Intent classification cost: $${completion.cost.final_cost.toFixed(6)}`);
+			console.log(`📷 Vision Intent: ${result.intent.toUpperCase()} (reason: ${result.reason})`);
+			console.log(`💰 Vision classification cost: $${completion.cost.final_cost.toFixed(6)}`);
 			
 			return {
 				intent: result.intent,
 				confidence: 'high',
-				source: 'llm',
+				source: 'vision_llm',
 				reason: result.reason,
 				llm_cost: completion.cost.final_cost
 			};
 			
 		} catch (error) {
-			console.error('❌ Intent classification LLM failed:', error.message);
-			// Default to product search if LLM fails
-			return { intent: 'product_search', confidence: 'low', source: 'fallback_error' };
+			console.error('❌ Vision intent classification failed:', error.message);
+			// Return unknown only if vision fails
+			return { intent: 'unknown', confidence: 'low', source: 'vision_error', error: error.message };
 		}
 	}
 
+	/**
+	 * Extract order information from an order screenshot using vision
+	 * 
+	 * @param {string} image - Base64 or URL of the image
+	 * @param {string} message - User's accompanying message
+	 * @param {Object} agent - Agent configuration
+	 * @returns {Promise<Object>} Extracted order info
+	 */
+	async _extractOrderFromScreenshot(image, message, agent) {
+		console.log('🔍 Extracting order information from screenshot...');
+		
+		const extractionPrompt = `You are an OCR specialist for e-commerce order screenshots.
+
+Analyze this image which appears to be a screenshot of an order confirmation, invoice, receipt, tracking page, or delivery notification.
+
+Extract the following information if visible:
+
+1. ORDER NUMBER - Look for patterns like:
+   - "CZ-123456" or "CZ123456" (Calza format with CZ prefix)
+   - "#123456" or "Order #123456" or "Order Number: 123456"
+   - "ORD-123456" or similar prefixed formats
+   - Any prominent alphanumeric order identifier
+   - If you see just digits like "236126", note it (may need CZ- prefix added)
+
+2. EMAIL ADDRESS - Customer email if visible (e.g., "customer@gmail.com")
+
+3. PHONE NUMBER - Customer phone if visible (with or without country code)
+
+4. ORDER DATE - When the order was placed
+
+5. CUSTOMER NAME - If visible on the order
+
+6. ORDER STATUS - (Confirmed, Processing, Shipped, Delivered, etc.)
+
+7. TRACKING NUMBER - Courier tracking number if visible
+
+8. TOTAL AMOUNT - Order total with currency if visible
+
+9. SOURCE TYPE - What kind of screenshot is this:
+   - email_confirmation (order confirmation email)
+   - app_screenshot (mobile app order screen)
+   - website_screenshot (browser order page)
+   - tracking_page (courier/delivery tracking)
+   - sms_notification (text message)
+   - invoice (formal invoice document)
+   - order_details (order detail page)
+   - other
+
+IMPORTANT RULES:
+- Extract the EXACT order number as displayed (preserve any prefix like "CZ-")
+- If you see "Order #123456", extract as "123456" (without the #)
+- If multiple order numbers visible, extract the most prominent one
+- For phone numbers, include country code if visible (e.g., "+92" or "03xx")
+- Set confidence to "high" if key info (order number OR email OR phone) is clearly visible
+- Set confidence to "medium" if partially visible or unclear
+- Set confidence to "low" if you're guessing or image is blurry
+- Return null for any field that is not visible or unclear
+
+Reply ONLY with valid JSON:
+{
+  "order_number": "extracted order number or null",
+  "order_number_raw": "exactly as shown in image or null",
+  "email": "customer email or null",
+  "phone": "customer phone or null",
+  "order_date": "date string or null",
+  "customer_name": "name or null",
+  "order_status": "status or null",
+  "tracking_number": "tracking number or null",
+  "total_amount": "amount with currency or null",
+  "confidence": "high/medium/low",
+  "source_type": "email_confirmation/app_screenshot/website_screenshot/tracking_page/sms_notification/invoice/order_details/other",
+  "notes": "any relevant observations"
+}`;
+
+		try {
+			const completion = await this._callLLM(
+				[
+					{ role: 'system', content: extractionPrompt },
+					{
+						role: 'user',
+						content: [
+							{ 
+								type: 'text', 
+								text: message 
+									? `User message: "${message}"\n\nExtract order information from the attached screenshot.`
+									: 'Extract order information from this order screenshot.'
+							},
+							{ 
+								type: 'image_url', 
+								image_url: { url: image, detail: 'high' } 
+							}
+						]
+					}
+				],
+				{
+					model: 'gpt-4o-mini',
+					max_tokens: 400,
+					temperature: 0.1,
+					json_mode: true,
+					hasVision: true
+				}
+			);
+			
+			let result;
+			try {
+				result = JSON.parse(completion.content);
+			} catch (parseError) {
+				console.error('❌ Failed to parse extraction result:', completion.content);
+				return {
+					order_number: null,
+					email: null,
+					phone: null,
+					confidence: 'failed',
+					success: false,
+					error: 'Failed to parse extraction result',
+					extraction_cost: completion.cost?.final_cost || 0
+				};
+			}
+			
+			// Normalize order number format
+			let normalizedOrderNumber = result.order_number;
+			if (normalizedOrderNumber) {
+				// Remove common prefixes that aren't part of the actual order number
+				normalizedOrderNumber = normalizedOrderNumber
+					.replace(/^(Order\s*)?#?\s*/i, '')
+					.replace(/^(ORD[-_]?)/i, '')
+					.trim();
+				
+				// For Calza-style orders, ensure CZ- prefix
+				if (/^\d{5,7}$/.test(normalizedOrderNumber)) {
+					// Pure digits - likely needs CZ- prefix for Calza
+					normalizedOrderNumber = `CZ-${normalizedOrderNumber}`;
+					console.log(`📋 Added CZ- prefix: ${normalizedOrderNumber}`);
+				} else if (/^CZ[-_]?\d+/i.test(normalizedOrderNumber)) {
+					// Already has CZ prefix, normalize format
+					normalizedOrderNumber = normalizedOrderNumber
+						.toUpperCase()
+						.replace(/^CZ[-_]?/, 'CZ-');
+				}
+			}
+			
+			console.log(`📋 Extracted order info:`, {
+				raw: result.order_number_raw,
+				normalized: normalizedOrderNumber,
+				email: result.email,
+				phone: result.phone,
+				confidence: result.confidence,
+				source: result.source_type
+			});
+			console.log(`💰 Extraction cost: $${completion.cost?.final_cost?.toFixed(6) || '0.000000'}`);
+			
+			return {
+				order_number: normalizedOrderNumber,
+				order_number_raw: result.order_number_raw || result.order_number,
+				email: result.email || null,
+				phone: result.phone || null,
+				order_date: result.order_date,
+				customer_name: result.customer_name,
+				order_status: result.order_status,
+				tracking_number: result.tracking_number,
+				total_amount: result.total_amount,
+				confidence: result.confidence || 'medium',
+				source_type: result.source_type || 'other',
+				notes: result.notes,
+				extraction_cost: completion.cost?.final_cost || 0,
+				success: !!(normalizedOrderNumber || result.email || result.phone)
+			};
+			
+		} catch (error) {
+			console.error('❌ Order extraction failed:', error.message);
+			return {
+				order_number: null,
+				email: null,
+				phone: null,
+				confidence: 'failed',
+				success: false,
+				error: error.message,
+				extraction_cost: 0
+			};
+		}
+	}
+	
 	/**
 	 * Handle image submitted as complaint evidence
 	 * Collects image, updates state, and continues complaint flow
@@ -6105,18 +8147,45 @@ GENERAL RULES:
 			// Auto-inject complaint data for ticket/complaint-related functions
 			const funcNameLower = llmDecision.function_name.toLowerCase();
 			if (funcNameLower.includes('ticket') || funcNameLower.includes('complaint')) {
+				// Inject collected images into function arguments
 				if (complaintState.images_collected?.length > 0 && !llmDecision.function_arguments.image_urls) {
 					llmDecision.function_arguments.image_urls = complaintState.images_collected.map(img => img.url);
+					console.log(`📷 Auto-injected ${complaintState.images_collected.length} images into function args`);
 				}
+				
+				// Inject order number if available
 				if (complaintState.order_number && !llmDecision.function_arguments.order_no) {
-					llmDecision.function_arguments.order_no = complaintState.order_number;
+					llmDecision.function_arguments.order_no = complaintState.order_number.replace(/^CZ-?/i, '');
+					console.log(`📋 Auto-injected order number: ${complaintState.order_number}`);
+				}
+				
+				// Inject complaint type
+				if (complaintState.type && !llmDecision.function_arguments.ticket_sub_type) {
+					llmDecision.function_arguments.ticket_sub_type = complaintState.type;
 				}
 			}
 			
-			// Update complaint state
+			// Update complaint state - mark function requested
+			// Note: Actual function execution and result handling happens in sendMessage
 			complaintState.awaiting_images = false;
 			complaintState.function_requested = llmDecision.function_name;
 			await this._updateSessionComplaintState(sessionId, complaintState);
+		} else {
+			// No function called - but we've processed an image
+			// Use LLM's structured output instead of keyword parsing (language-agnostic)
+			const complaintContext = llmDecision.complaint_context || {};
+			
+			// LLM tells us directly if it wants more images or is ready for ticket
+			const askingForMoreImages = complaintContext.awaiting_more_images === true;
+			const readyForTicket = complaintContext.ready_for_ticket === true;
+			const hasOrderNumber = !!complaintContext.order_number || !!complaintState.order_number;
+			
+			// If we have images and LLM is NOT asking for more images, stop waiting
+			if (complaintState.images_collected?.length > 0 && !askingForMoreImages) {
+				console.log(`📷 Images collected (${complaintState.images_collected.length}), awaiting_images = false`);
+				complaintState.awaiting_images = false;
+				await this._updateSessionComplaintState(sessionId, complaintState);
+			}
 		}
 		
 		// Calculate cost
@@ -6557,6 +8626,104 @@ GENERAL RULES:
 		}
 		
 		return { skip: false };
+	}
+	
+	/**
+	 * Sanitize response after ticket/complaint function execution
+	 * - If ticket_number exists in result: inject it into response
+	 * - If ticket_number missing but response has placeholder: use fallback response
+	 * @private
+	 */
+	_sanitizeTicketResponse(response, functionResult, functionName, customerLanguage = 'english') {
+		if (!response) return response;
+		
+		// Extract ticket number from various possible locations in function result
+		const ticketNumber = functionResult?.ticket_number || 
+							 functionResult?.data?.ticket_number || 
+							 functionResult?.ticketNumber ||
+							 functionResult?.data?.ticketNumber ||
+							 functionResult?.reference_number ||
+							 functionResult?.data?.reference_number ||
+							 functionResult?.id ||
+							 functionResult?.data?.id;
+		
+		// Placeholder patterns to look for
+		const placeholderPatterns = [
+			/\[Ticket Number\]/gi,
+			/\[NUMBER\]/gi,
+			/\[ticket_number\]/gi,
+			/\{ticket_number\}/gi,
+			/\{Ticket Number\}/gi,
+			/\[TICKET\]/gi,
+			/\[Reference Number\]/gi,
+			/\[ID\]/gi
+		];
+		
+		// Check if response contains any placeholders
+		const hasPlaceholder = placeholderPatterns.some(pattern => pattern.test(response));
+		
+		// Case 1: We have actual ticket number - inject it
+		if (ticketNumber) {
+			let sanitizedResponse = response;
+			placeholderPatterns.forEach(pattern => {
+				sanitizedResponse = sanitizedResponse.replace(pattern, ticketNumber);
+			});
+			console.log(`🎫 Injected ticket number: ${ticketNumber} into response`);
+			return sanitizedResponse;
+		}
+		
+		// Case 2: No ticket number but response has placeholder - use fallback
+		if (hasPlaceholder) {
+			console.log(`⚠️ Response has placeholder but no ticket number - using fallback`);
+			
+			// Check if function actually failed
+			const functionFailed = !functionResult?.success;
+			
+			if (functionFailed) {
+				// Function failed - apologize and offer escalation
+				const isUrdu = customerLanguage === 'urdu' || /urdu|roman/i.test(customerLanguage);
+				return isUrdu 
+					? "Maaf karein, aapki request process karte waqt kuch masla aa gaya. Humari team se koi jald aap se contact karega."
+					: "We apologize, there was an issue processing your request. Our team will contact you shortly to assist.";
+			} else {
+				// Function succeeded but no ticket number in response - remove placeholder mention
+				let cleanResponse = response;
+				placeholderPatterns.forEach(pattern => {
+					cleanResponse = cleanResponse.replace(pattern, '');
+				});
+				// Clean up any "ticket number: " or similar prefixes left orphaned
+				cleanResponse = cleanResponse
+					.replace(/ticket number:\s*\./gi, '')
+					.replace(/aapka ticket number\s*hai\./gi, 'aapki request note kar li gayi hai.')
+					.replace(/your ticket number is\s*\./gi, 'your request has been noted.')
+					.replace(/\s{2,}/g, ' ')
+					.trim();
+				return cleanResponse;
+			}
+		}
+		
+		// Case 3: No placeholder in response - return as-is
+		return response;
+	}
+
+	/**
+	 * Detect customer language from message history
+	 * @private
+	 */
+	_detectCustomerLanguage(history, currentMessage) {
+		const recentText = [
+			currentMessage || '',
+			...(history || []).slice(-3).map(m => m.content || '')
+		].join(' ').toLowerCase();
+		
+		// Urdu/Roman Urdu indicators
+		const urduPatterns = /\b(kya|hai|mera|aap|hum|yeh|nahi|kaise|chahiye|shukriya|please|order|parcel|aaya|gaya|wala|wali|karein|dijiye|batao|bhejo)\b/i;
+		
+		if (urduPatterns.test(recentText)) {
+			return 'urdu';
+		}
+		
+		return 'english';
 	}
 }
 

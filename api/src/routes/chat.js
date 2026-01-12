@@ -490,22 +490,6 @@ router.post('/message', authenticate, audioUpload.single('audio'), async (req, r
       language
     } = req.body;
 
-	console.log('###############', session_id, 
-      agent_id, 
-      image,
-      // New channel fields
-      channel,
-      channel_user_id,
-      channel_user_name,
-      channel_metadata,
-      context_data,
-      llm_context_hints,
-      // Audio options
-      voice,
-      generate_audio_response,
-      stt_provider,
-      language)
-
     // ✅ FIX: Use let for message since we may override it
     let message = req.body.message;
     

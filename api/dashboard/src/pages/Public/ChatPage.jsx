@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon, X, Camera, ThumbsUp, ThumbsDown, Mic, MicOff, Volume2, Square } from 'lucide-react';
+import { Send, Loader, ShoppingBag, ChevronDown, ChevronRight, FileText, Image as ImageIcon, X, Camera, ThumbsUp, ThumbsDown, Mic, MicOff, Volume2, Square, ExternalLink, Download } from 'lucide-react';
 import axios from 'axios';
 
 /**
@@ -95,14 +95,11 @@ const AudioPlayer = ({ audioUrl, label, isPlaying, onTogglePlay, variant = 'defa
 
 /**
  * Collapsible Sources Component
- * Shows sources and images in an expandable panel
- */
-/**
- * Collapsible Sources Component
- * Shows sources and images in an expandable panel
+ * Shows sources and images in an expandable panel with download/open links
  */
 const CollapsibleSources = ({ sources = [], images = [] }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [expandedSources, setExpandedSources] = useState({});
   
   // Don't render if no sources or images
   if ((!sources || sources.length === 0) && (!images || images.length === 0)) {
@@ -111,6 +108,51 @@ const CollapsibleSources = ({ sources = [], images = [] }) => {
   
   const sourceCount = sources?.length || 0;
   const imageCount = images?.length || 0;
+  
+  // Toggle individual source content
+  const toggleSourceContent = (idx) => {
+    setExpandedSources(prev => ({
+      ...prev,
+      [idx]: !prev[idx]
+    }));
+  };
+  
+  // Check if source is a web page
+  const isWebSource = (source) => {
+    const sourceUrl = source.url || 
+                      source.source?.metadata?.source_url || 
+                      source.metadata?.source_url ||
+                      source.source_url;
+    return sourceUrl && (sourceUrl.startsWith('http://') || sourceUrl.startsWith('https://'));
+  };
+  
+  // Get source URL for web pages
+  const getSourceUrl = (source) => {
+    return source.url || 
+           source.source?.metadata?.source_url || 
+           source.metadata?.source_url ||
+           source.source_url;
+  };
+  
+  // Get document ID for download
+  const getDocumentId = (source) => {
+    return source.document_id || 
+           source.source?.document_id || 
+           source.metadata?.document_id ||
+           source.source?.metadata?.document_id;
+  };
+  
+  // Get API base URL
+  const getApiBaseUrl = () => {
+    // Try to detect from current URL or use default
+    const currentUrl = window.location.origin;
+    if (currentUrl.includes('localhost')) {
+      return 'http://localhost:62001';
+    }
+    return currentUrl.includes('/chat/') 
+      ? currentUrl.split('/chat/')[0] 
+      : currentUrl;
+  };
   
   return (
     <div className="mt-3 pt-3 border-t border-gray-200">
@@ -148,36 +190,95 @@ const CollapsibleSources = ({ sources = [], images = [] }) => {
           {sources && sources.length > 0 && (
             <div className="space-y-2">
               {sources.map((source, idx) => {
-                const docName = source.source?.document_name || source.document || 'Unknown';
+                const docName = source.source?.document_name || source.document || source.title || 'Document';
                 const page = source.source?.page || source.source?.metadata?.page_number || source.page || '';
                 const relevance = Math.round((source.score || source.relevance || 0) * 100);
                 const content = source.content || '';
                 const preview = content.substring(0, 200) + (content.length > 200 ? '...' : '');
+                const isWeb = isWebSource(source);
+                const sourceUrl = getSourceUrl(source);
+                const documentId = getDocumentId(source);
+                const isSourceExpanded = expandedSources[idx];
                 
                 return (
                   <div 
-                    key={source.result_id || idx}
-                    className="bg-gray-50 rounded-lg p-3 border border-gray-200"
+                    key={idx} 
+                    className="bg-gray-50 rounded-lg p-3 text-xs"
                   >
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full font-medium">
-                        {idx + 1}
-                      </span>
-                      <span className="text-xs font-medium text-gray-700 truncate max-w-[200px]">
-                        {docName}
-                      </span>
-                      {page && (
-                        <span className="text-xs text-gray-500">
-                          Page {page}
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="flex-shrink-0 w-5 h-5 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center text-xs font-medium">
+                          {idx + 1}
+                        </span>
+                        <span className="font-medium text-gray-900 truncate" title={docName}>
+                          {docName}
+                        </span>
+                      </div>
+                      {relevance > 0 && (
+                        <span className="flex-shrink-0 text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded">
+                          {relevance}%
                         </span>
                       )}
-                      <span className="text-xs text-green-600 font-medium ml-auto">
-                        {relevance}%
-                      </span>
                     </div>
-                    <p className="text-xs text-gray-600 leading-relaxed">
-                      {preview}
-                    </p>
+                    
+                    {/* Page info */}
+                    {page && (
+                      <div className="text-gray-500 mb-2">
+                        📄 Page {page}
+                      </div>
+                    )}
+                    
+                    {/* Content Preview */}
+                    <div className="text-gray-600 mb-2">
+                      {isSourceExpanded ? content : preview}
+                      {content.length > 200 && (
+                        <button
+                          onClick={() => toggleSourceContent(idx)}
+                          className="ml-1 text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          {isSourceExpanded ? 'Show less' : 'Show more'}
+                        </button>
+                      )}
+                    </div>
+                    
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-2 pt-2 border-t border-gray-200">
+                      {isWeb && sourceUrl ? (
+                        // Web source - Open in new tab
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Open Source
+                        </a>
+                      ) : documentId ? (
+                        // Document - Download
+                        <a
+                          href={`${getApiBaseUrl()}/aiva/api/public/chat/document/${documentId}/download`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          <Download className="w-3 h-3" />
+                          Download Document
+                        </a>
+                      ) : sourceUrl ? (
+                        // Fallback to URL if available
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          View Source
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })}
@@ -186,31 +287,24 @@ const CollapsibleSources = ({ sources = [], images = [] }) => {
           
           {/* Images */}
           {images && images.length > 0 && (
-            <div className="grid grid-cols-3 gap-2">
-              {images.slice(0, 9).map((img, idx) => (
-                <a
-                  key={img.image_id || idx}
-                  href={img.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block rounded-lg overflow-hidden border border-gray-200 hover:border-blue-400 transition-colors"
-                >
-                  <img
-                    src={img.thumbnail_url || img.url}
-                    alt={img.title || `Image ${idx + 1}`}
-                    className="w-full h-16 object-cover"
-                    loading="lazy"
-                    onError={(e) => {
-                      e.target.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%2264%22%3E%3Crect fill=%22%23f3f4f6%22 width=%22100%22 height=%2264%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22 font-size=%2212%22%3EImage%3C/text%3E%3C/svg%3E';
-                    }}
-                  />
-                </a>
-              ))}
-              {images.length > 9 && (
-                <div className="flex items-center justify-center bg-gray-100 rounded-lg text-xs text-gray-500">
-                  +{images.length - 9} more
-                </div>
-              )}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-gray-700">Images</div>
+              <div className="grid grid-cols-2 gap-2">
+                {images.map((image, idx) => (
+                  <div key={idx} className="relative group">
+                    <img
+                      src={image.url || image.thumbnail_url}
+                      alt={image.description || `Image ${idx + 1}`}
+                      className="w-full h-24 object-cover rounded-lg"
+                    />
+                    {image.description && (
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs p-1 rounded-b-lg truncate">
+                        {image.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

@@ -80,7 +80,6 @@ const MODEL_PRICING = {
     
     // Anthropic Models
     'claude-3-5-sonnet-20241022': { input: 3.00, output: 15.00, cached_input: 0.30, provider: 'anthropic' },
-    'claude-3-5-sonnet-latest': { input: 3.00, output: 15.00, cached_input: 0.30, provider: 'anthropic' },
     'claude-3-5-haiku-20241022': { input: 0.80, output: 4.00, cached_input: 0.08, provider: 'anthropic' },
     'claude-3-opus-20240229': { input: 15.00, output: 75.00, cached_input: 1.50, provider: 'anthropic' },
     'claude-3-sonnet-20240229': { input: 3.00, output: 15.00, provider: 'anthropic' },
@@ -108,7 +107,7 @@ const MODEL_ALIASES = {
     'llama4': 'meta-llama/llama-4-scout-17b-16e-instruct',
     'qwen': 'qwen/qwen3-32b',
     'gpt-oss': 'openai/gpt-oss-120b',
-    'claude': 'claude-3-5-sonnet-latest',
+    'claude': 'claude-3-5-sonnet-20241022',
     'claude-haiku': 'claude-3-5-haiku-20241022',
     'claude-opus': 'claude-3-opus-20240229',
     'deepseek': 'deepseek-chat',
@@ -122,7 +121,7 @@ const MODEL_ALIASES = {
     'openai/gpt-4o-mini': 'gpt-4o-mini',
     'groq/llama-3.3-70b': 'llama-3.3-70b-versatile',
     'groq/llama-3.1-8b': 'llama-3.1-8b-instant',
-    'anthropic/claude-3.5-sonnet': 'claude-3-5-sonnet-latest',
+    'anthropic/claude-3.5-sonnet': 'claude-3-5-sonnet-20241022',
     'anthropic/claude-3.5-haiku': 'claude-3-5-haiku-20241022',
     'deepseek/chat': 'deepseek-chat',
     'deepseek/reasoner': 'deepseek-reasoner',

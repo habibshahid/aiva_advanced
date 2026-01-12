@@ -1095,6 +1095,73 @@ router.get('/calls', verifyToken, async (req, res) => {
 });
 
 /**
+ * @route GET /api/analytics/calls/:callId/details
+ * @desc Get complete call details with cost breakdown
+ * @access Private
+ */
+router.get('/calls/:callId/details', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const tenantId = req.user.tenant_id || req.user.id;
+    const { callId } = req.params;
+
+    // Get call details
+    const [calls] = await db.query(`
+      SELECT 
+        cl.*,
+        a.name as agent_name,
+        a.type as agent_type
+      FROM yovo_tbl_aiva_call_logs cl
+      LEFT JOIN yovo_tbl_aiva_agents a ON cl.agent_id = a.id
+      WHERE cl.id = ? AND cl.tenant_id = ?
+    `, [callId, tenantId]);
+
+    if (calls.length === 0) {
+      return res.status(404).json(ResponseBuilder.notFound('Call'));
+    }
+
+    const call = calls[0];
+
+    // Get analytics
+    const [analytics] = await db.query(`
+      SELECT *
+      FROM yovo_tbl_aiva_call_analytics
+      WHERE call_log_id = ?
+    `, [callId]);
+
+    let processedAnalytics = null;
+    if (analytics.length > 0) {
+      processedAnalytics = {
+        ...analytics[0],
+        primary_intents: analytics[0].primary_intents ? (analytics[0].primary_intents) : [],
+        languages_detected: analytics[0].languages_detected ? (analytics[0].languages_detected) : []
+      };
+    }
+
+    // Calculate cost breakdown (estimate based on usage)
+    const costBreakdown = {
+      llm_completion: call.base_cost ? parseFloat(call.base_cost * 0.6).toFixed(4) : '0.0000',
+      transcription: call.audio_input_seconds ? parseFloat((call.audio_input_seconds + call.audio_output_seconds || 0) * 0.0006).toFixed(4) : '0.0000',
+      analysis: call.base_cost ? parseFloat(call.base_cost * 0.2).toFixed(4) : '0.0000',
+      knowledge_search: call.base_cost ? parseFloat(call.base_cost * 0.1).toFixed(4) : '0.0000'
+    };
+
+    res.json(rb.success({
+      call,
+      analytics: processedAnalytics,
+      cost_breakdown: costBreakdown
+    }));
+
+  } catch (error) {
+    console.error('Get call details error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to fetch call details')
+    );
+  }
+});
+
+/**
  * @route GET /api/analytics/calls/:callId/transcript
  * @desc Get call transcript with message-level analytics
  * @access Private
@@ -1418,6 +1485,73 @@ router.get('/chats', verifyToken, async (req, res) => {
     console.error('Get chat sessions error:', error);
     res.status(500).json(
       ResponseBuilder.serverError(error.message || 'Failed to fetch chat sessions')
+    );
+  }
+});
+
+/**
+ * @route GET /api/analytics/chats/:sessionId/details
+ * @desc Get complete chat session details with cost breakdown
+ * @access Private
+ */
+router.get('/chats/:sessionId/details', verifyToken, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const tenantId = req.user.tenant_id || req.user.id;
+    const { sessionId } = req.params;
+
+    // Get session details
+    const [sessions] = await db.query(`
+      SELECT 
+        cs.*,
+        a.name as agent_name,
+        a.type as agent_type
+      FROM yovo_tbl_aiva_chat_sessions cs
+      LEFT JOIN yovo_tbl_aiva_agents a ON cs.agent_id = a.id
+      WHERE cs.id = ? AND cs.tenant_id = ?
+    `, [sessionId, tenantId]);
+
+    if (sessions.length === 0) {
+      return res.status(404).json(ResponseBuilder.notFound('Chat session'));
+    }
+
+    const session = sessions[0];
+
+    // Get analytics
+    const [analytics] = await db.query(`
+      SELECT *
+      FROM yovo_tbl_aiva_chat_analytics
+      WHERE session_id = ?
+    `, [sessionId]);
+
+    let processedAnalytics = null;
+    if (analytics.length > 0) {
+      processedAnalytics = {
+        ...analytics[0],
+        primary_intents: analytics[0].primary_intents ? (analytics[0].primary_intents) : [],
+        languages_detected: analytics[0].languages_detected ? (analytics[0].languages_detected) : []
+      };
+    }
+
+    // Calculate cost breakdown (estimate based on usage)
+    const costBreakdown = {
+      llm_completion: session.total_cost ? parseFloat(session.total_cost * 0.65).toFixed(4) : '0.0000',
+      analysis: session.total_cost ? parseFloat(session.total_cost * 0.20).toFixed(4) : '0.0000',
+      knowledge_search: session.total_cost ? parseFloat(session.total_cost * 0.10).toFixed(4) : '0.0000',
+      image_processing: session.total_cost ? parseFloat(session.total_cost * 0.05).toFixed(4) : '0.0000'
+    };
+
+    res.json(rb.success({
+      session,
+      analytics: processedAnalytics,
+      cost_breakdown: costBreakdown
+    }));
+
+  } catch (error) {
+    console.error('Get chat session details error:', error);
+    res.status(500).json(
+      ResponseBuilder.serverError(error.message || 'Failed to fetch session details')
     );
   }
 });

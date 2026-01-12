@@ -498,10 +498,12 @@ async def scrape_url(request: ScrapeUrlRequest):
             
         try:
             import httpx
+            from app.config import settings
+            
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{settings.NODE_API_URL}/api/kb/{request.kb_id}/refresh-stats",
-                    headers={"x-api-key": settings.NODE_API_KEY}
+                    f"http://localhost:62001/api/kb/{request.kb_id}/refresh-stats",
+                    headers={"x-api-key": settings.PYTHON_API_KEY}
                 )
         except Exception as e:
             logger.warning(f"Failed to refresh KB stats: {e}")
