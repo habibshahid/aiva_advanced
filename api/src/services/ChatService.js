@@ -736,6 +736,134 @@ class ChatService {
 
 		console.log(`📊 History: ${history.length} messages, ${assistantMessagesCount} assistant messages, isFirstMessage: ${isFirstMessage}`);
 
+		// ============================================
+		// ⚡ RAPID-FIRE MESSAGE DETECTION
+		// ============================================
+		// Detect when customer is sending multiple messages quickly
+		// Inject context to help LLM understand the full picture
+		const recentUserMessages = history.filter(m => m.role === 'user').slice(-5);
+		let rapidFireContext = null;
+		
+		if (recentUserMessages.length >= 2) {
+			// Check timestamps of recent user messages
+			const lastUserMsg = recentUserMessages[recentUserMessages.length - 1];
+			const prevUserMsg = recentUserMessages[recentUserMessages.length - 2];
+			
+			const lastTime = new Date(lastUserMsg.created_at || lastUserMsg.timestamp).getTime();
+			const prevTime = new Date(prevUserMsg.created_at || prevUserMsg.timestamp).getTime();
+			const timeDiff = lastTime - prevTime;
+			
+			// If messages are within 30 seconds of each other, it's rapid-fire
+			if (timeDiff < 30000 && timeDiff > 0) {
+				console.log(`⚡ Rapid-fire detected: ${timeDiff}ms between last 2 user messages`);
+				
+				// Count how many rapid messages (within 60 sec window)
+				const now = Date.now();
+				const rapidMessages = recentUserMessages.filter(m => {
+					const msgTime = new Date(m.created_at || m.timestamp).getTime();
+					return (now - msgTime) < 60000; // Last 60 seconds
+				});
+				
+				if (rapidMessages.length >= 2) {
+					// Build consolidated view of rapid messages
+					const consolidatedText = rapidMessages.map(m => m.content).join(' | ');
+					console.log(`⚡ Consolidated rapid messages (${rapidMessages.length}): ${consolidatedText.substring(0, 200)}`);
+					
+					// Check for frustration indicators
+					const frustrationKeywords = [
+						'urgent', 'urgently', 'jaldi', 'please', 'plz', 'pls',
+						'no', 'nahi', 'nhi', 'want', 'chahiye', 'give me',
+						'real', 'actual', 'asli', 'original'
+					];
+					const hasFrustration = frustrationKeywords.some(kw => 
+						consolidatedText.toLowerCase().includes(kw)
+					);
+					
+					// Build context injection
+					rapidFireContext = `
+⚡ RAPID-FIRE CONTEXT:
+Customer has sent ${rapidMessages.length} messages quickly in the last minute.
+Combined messages: "${consolidatedText}"
+${hasFrustration ? '⚠️ Customer appears frustrated/urgent - prioritize resolution over questions.' : ''}
+
+INSTRUCTIONS FOR RAPID-FIRE:
+1. Consider ALL recent messages together as ONE thought
+2. Don't ask questions the customer already answered in previous rapid messages
+3. ${hasFrustration ? 'Customer is frustrated - be empathetic and action-oriented' : 'Acknowledge you understood everything'}
+4. If they sent contact info (phone/email) in any rapid message, use it
+5. Provide ONE comprehensive response, not multiple back-and-forth`;
+				}
+			}
+		}
+		
+		// Store rapid fire context for later injection into system prompt
+		session.rapidFireContext = rapidFireContext;
+
+		// ============================================
+		// ⏭️ TRIVIAL EMPHASIS MESSAGES - Quick acknowledgment
+		// ============================================
+		// Messages like "Urgently", "Please", "Jaldi" that just add emphasis
+		// Don't need full LLM processing if we're already handling their request
+		const trivialEmphasisPatterns = [
+			/^(urgent(ly)?|jaldi|please|plz|pls|asap|now|abhi)[\s!.]*$/i,
+			/^(hurry|quick(ly)?|fast|tez)[\s!.]*$/i,
+			/^(come on|cmon|hello\??|are you there\??)[\s!.]*$/i
+		];
+		
+		const isTrivialEmphasis = trivialEmphasisPatterns.some(p => p.test(message.trim()));
+		const hasActiveComplaint = session.complaint_state?.active;
+		const recentBotResponse = history.filter(m => m.role === 'assistant').slice(-1)[0];
+		const botJustResponded = recentBotResponse && 
+			(Date.now() - new Date(recentBotResponse.created_at || recentBotResponse.timestamp).getTime()) < 30000;
+		
+		if (isTrivialEmphasis && (hasActiveComplaint || botJustResponded) && !image) {
+			console.log(`⏭️ Trivial emphasis message detected: "${message}" - sending acknowledgment`);
+			
+			// Quick acknowledgment without full LLM call
+			const acknowledgments = {
+				'en': "I understand this is urgent. I'm working on it right away.",
+				'ur': "Samajh gaya, main jaldi se help kar raha hoon."
+			};
+			
+			const customerLang = this._detectCustomerLanguage(history, message);
+			const ackResponse = acknowledgments[customerLang === 'urdu' ? 'ur' : 'en'];
+			
+			const formattedResponse = markdown.formatResponse(ackResponse);
+			
+			const assistantMessageId = await this._saveMessage({
+				sessionId,
+				role: 'assistant',
+				content: formattedResponse.text,
+				contentHtml: formattedResponse.html,
+				contentMarkdown: formattedResponse.markdown,
+				cost: 0
+			});
+			
+			releaseLock();
+			
+			return {
+				session_id: sessionId,
+				message_id: assistantMessageId,
+				agent_transfer: false,
+				interaction_closed: false,
+				response: {
+					text: formattedResponse.text,
+					html: formattedResponse.html,
+					markdown: formattedResponse.markdown
+				},
+				sources: [],
+				images: [],
+				products: [],
+				function_calls: [],
+				llm_decision: {
+					trivial_emphasis: true,
+					acknowledged: true
+				},
+				cost: 0,
+				cost_breakdown: { final_cost: 0 }
+			};
+		}
+
         // ============================================
         // 🖼️ IMAGE DETECTION - AUTOMATIC SEARCH PATH
         // ============================================
@@ -2853,11 +2981,20 @@ Respond in valid JSON format.`
             agent
         );
 		
+		// ============================================
+		// ⚡ INJECT RAPID-FIRE CONTEXT INTO SYSTEM PROMPT
+		// ============================================
+		let enhancedSystemPrompt = systemPrompt;
+		if (session.rapidFireContext) {
+			enhancedSystemPrompt = systemPrompt + '\n\n' + session.rapidFireContext;
+			console.log('⚡ Rapid-fire context injected into system prompt');
+		}
+		
 		//console.log('@@@@@@@@', systemPrompt);
         // Build messages for OpenAI
         const messages = [{
                 role: 'system',
-                content: systemPrompt
+                content: enhancedSystemPrompt
             },
             ...history
 				.filter((msg, index) => !(index === history.length - 1 && msg.role === 'user'))
@@ -2892,6 +3029,50 @@ Respond in valid JSON format.`
 				// Update complaint state with order number
 				session.complaint_state.order_number = orderNum;
 				await this._updateSessionComplaintState(session.id, session.complaint_state);
+			}
+			
+			// ============================================
+			// 📱 PHONE NUMBER EXTRACTION FROM MESSAGE
+			// ============================================
+			// Pakistani phone formats: 03xx-xxxxxxx, 923xxxxxxxxx, +923xxxxxxxxx, 0321xxxxxxx
+			const phonePatterns = [
+				/\b(03\d{2}[-\s]?\d{7})\b/,          // 03xx-xxxxxxx or 03xxxxxxxxx
+				/\b(923\d{9})\b/,                     // 923xxxxxxxxx
+				/\b(\+923\d{9})\b/,                   // +923xxxxxxxxx
+				/\b(0\d{3}[-\s]?\d{7})\b/             // 0xxx-xxxxxxx (landline style mobile)
+			];
+			
+			let extractedPhone = session.complaint_state.customer_phone;
+			if (!extractedPhone) {
+				for (const pattern of phonePatterns) {
+					const phoneMatch = message.match(pattern);
+					if (phoneMatch) {
+						extractedPhone = phoneMatch[1].replace(/[-\s]/g, ''); // Normalize
+						console.log(`📱 Extracted phone number from message: ${extractedPhone}`);
+						
+						// Update complaint state with phone
+						session.complaint_state.customer_phone = extractedPhone;
+						await this._updateSessionComplaintState(session.id, session.complaint_state);
+						break;
+					}
+				}
+			}
+			
+			// ============================================
+			// 📧 EMAIL EXTRACTION FROM MESSAGE
+			// ============================================
+			const emailPattern = /\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b/;
+			let extractedEmail = session.complaint_state.customer_email;
+			if (!extractedEmail) {
+				const emailMatch = message.match(emailPattern);
+				if (emailMatch) {
+					extractedEmail = emailMatch[1].toLowerCase();
+					console.log(`📧 Extracted email from message: ${extractedEmail}`);
+					
+					// Update complaint state with email
+					session.complaint_state.customer_email = extractedEmail;
+					await this._updateSessionComplaintState(session.id, session.complaint_state);
+				}
 			}
 			
 			let complaintContext;
@@ -7715,23 +7896,40 @@ GENERAL RULES:
 		const botAskingForImages = [
 			'share picture', 'share photo', 'send picture', 'send photo',
 			'upload image', 'tasveer bhejo', 'photo share', 'picture share',
-			'please share', 'kindly share', 'share images', 'send images'
+			'please share', 'kindly share', 'share images', 'send images',
+			// Additional patterns
+			'pictures of', 'photo of', 'image of', 'tasveer', 'photos bhejo',
+			'process your complaint', 'complaint process', 'shikayat'
 		];
 		
-		// Check if bot recently asked for complaint images
+		// Check if bot recently asked for complaint images (look back further - 5 messages)
 		const botAskedForImages = recentMessages
 			.filter(m => m.role === 'assistant')
-			.slice(-2)
+			.slice(-5)  // Look at last 5 assistant messages (was 2)
 			.some(m => botAskingForImages.some(phrase => 
 				(m.content || '').toLowerCase().includes(phrase)
 			));
 		
-		if (botAskedForImages) {
-			console.log('📷 Intent: COMPLAINT_EVIDENCE (bot asked for images)');
+		// Also check for complaint discussion context
+		const complaintDiscussionKeywords = [
+			'wrong order', 'wrong color', 'wrong size', 'wrong item',
+			'damaged', 'broken', 'defective', 'not received',
+			'galat order', 'galat color', 'kharab', 'toot',
+			'complaint', 'shikayat', 'masla', 'problem'
+		];
+		
+		const hasComplaintDiscussion = recentMessages.some(m => 
+			complaintDiscussionKeywords.some(kw => 
+				(m.content || '').toLowerCase().includes(kw)
+			)
+		);
+		
+		if (botAskedForImages || hasComplaintDiscussion) {
+			console.log(`📷 Intent: COMPLAINT_EVIDENCE (botAskedForImages=${botAskedForImages}, hasComplaintDiscussion=${hasComplaintDiscussion})`);
 			return { 
 				intent: 'complaint_evidence', 
 				confidence: 'high', 
-				source: 'bot_request' 
+				source: botAskedForImages ? 'bot_request' : 'complaint_discussion'
 			};
 		}
 		
