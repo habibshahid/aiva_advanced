@@ -7,7 +7,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
-import AgentEditor from './pages/AgentEditor';
+import AgentEditor from './pages/AgentEditorV2';
+//import AgentEditorV2 from './pages/AgentEditorV2';
 import Credits from './pages/Credits';
 import Calls from './pages/Calls';
 import Monitor from './pages/Monitor';
@@ -53,6 +54,8 @@ import TenantManager from './pages/TenantManager';
 import APISettings from './pages/APISettings';
 
 import IntentIVRConfig from './pages/IntentIVRConfig';
+
+import { FlowsList, FlowEditor, SessionsMonitor, FlowTemplates, FlowAnalytics } from './pages/FlowEngine';
 
 import { ivrRoutes } from './routes/ivrRoutes';
 
@@ -107,6 +110,8 @@ function App() {
             <Route path="agents/test" element={<AgentTest />} />
             <Route path="agents/new" element={<AgentEditor />} />
             <Route path="agents/:id" element={<AgentEditor />} />
+            <Route path="agents/:id/edit-v2" element={<AgentEditor />} />
+            <Route path="agents/new-v2" element={<AgentEditor />} />
 			<Route path="agents/:id/chat-integration" element={<ChatIntegration />} />
 			<Route path="/agents/:id/conversation-strategy" element={<ConversationStrategy />} />
             <Route path="credits" element={<Credits />} />
@@ -115,6 +120,13 @@ function App() {
 			<Route path="agent-test" element={<AgentTestChat />} />
 			<Route path="/agents/:id/ivr" element={<IntentIVRConfig />} />
 			{ivrRoutes}
+			
+				{/* Flow Engine Routes */}
+				<Route path="agents/:agentId/flows" element={<FlowsList />} />
+				<Route path="agents/:agentId/flows/sessions" element={<SessionsMonitor />} />
+				<Route path="agents/:agentId/flows/templates" element={<FlowTemplates />} />
+				<Route path="agents/:agentId/flows/analytics" element={<FlowAnalytics />} />
+				<Route path="agents/:agentId/flows/:flowId" element={<FlowEditor />} />
 			
             {/* Knowledge Base Routes */}
             <Route path="knowledge" element={<KnowledgeList />} />

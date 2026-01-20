@@ -33,7 +33,7 @@ const flowRoutes = require('./routes/flows');
 const segmentRoutes = require('./routes/segments');
 const templateRoutes = require('./routes/templates');
 const languageRoutes = require('./routes/languages');
-
+const flowEngineRoutes = require('./routes/flow-engine');
   
 const sessionCleanup = require('./jobs/session-cleanup');
 
@@ -159,6 +159,7 @@ app.use('/api/flows', flowRoutes);         // NEW: /api/flows/:agentId
 app.use('/api/segments', segmentRoutes);   // NEW: /api/segments/:agentId
 app.use('/api/templates', templateRoutes); // NEW: /api/templates/:agentId
 app.use('/api/languages', languageRoutes);
+app.use('/api/flow-engine', flowEngineRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {

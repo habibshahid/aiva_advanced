@@ -243,6 +243,42 @@ router.get('/sessions/:sessionId', authenticate, async (req, res) => {
  * @desc Get conversation history
  * @access Private
  */
+ /**
+ * @swagger
+ * /chat/sessions/{sessionId}/history:
+ *   get:
+ *     summary: List all session Messages
+ *     tags: [Chat]
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: List of messages
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     messages:
+ *                       type: array
+ *                     total:
+ *                       type: integer
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
 router.get('/sessions/:sessionId/history', authenticate, async (req, res) => {
   const rb = new ResponseBuilder();
 

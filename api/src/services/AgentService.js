@@ -14,8 +14,9 @@ class AgentService {
             tts_provider, custom_voice, language_hints, llm_model,
             temperature, max_tokens, vad_threshold, 
             silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, 
-			chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice,
+			use_flow_engine, message_buffer_seconds, session_timeout_minutes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             agentId,
             tenantId,
@@ -48,7 +49,11 @@ class AgentService {
 			agentData.chat_tts_model || 'whisper-1',
 			agentData.chat_audio_response || 1,
 			agentData.chat_tts_provider || 'openai',
-			agentData.chat_tts_voice || 'shimmer'
+			agentData.chat_tts_voice || 'shimmer',
+			// Flow Engine V2 settings
+			agentData.use_flow_engine ? 1 : 0,
+			agentData.message_buffer_seconds || 2,
+			agentData.session_timeout_minutes || 30
         ]
     );
         
@@ -224,14 +229,18 @@ class AgentService {
 			'tts_provider', 'custom_voice', 'language_hints', 'llm_model',  // NEW
 			'temperature', 'max_tokens', 'vad_threshold', 
 			'silence_duration_ms', 'greeting', 'is_active', 'kb_id', 'conversation_strategy', 'knowledge_search_mode',
-			'chat_stt_provider', 'chat_tts_model', 'chat_audio_response', 'chat_tts_provider', 'chat_tts_voice'
+			'chat_stt_provider', 'chat_tts_model', 'chat_audio_response', 'chat_tts_provider', 'chat_tts_voice',
+			// Flow Engine V2 settings
+			'use_flow_engine', 'message_buffer_seconds', 'session_timeout_minutes',
+			// Intelligent Flow Engine settings
+			'flow_mode', 'image_flow_actions'
 		];
 		
 		for (const field of allowedFields) {
 			if (updates[field] !== undefined) {
 				fields.push(`${field} = ?`);
 				// Handle JSON fields
-				if (field === 'conversation_strategy' || field === 'language_hints') {
+				if (field === 'conversation_strategy' || field === 'language_hints' || field === 'image_flow_actions') {
 					values.push(JSON.stringify(updates[field]));
 				} else {
 					values.push(updates[field]);

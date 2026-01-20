@@ -20,7 +20,6 @@ const TranscriptionService = require('./TranscriptionService');
 const TranscriptionAnalysisService = require('./TranscriptionAnalysisService');
 const llmService = require('./LLMService');
 const https = require('https');
-const FlowEngineIntegration = require('./FlowEngineIntegration');
 
 class ChatService {
     constructor() {
@@ -536,53 +535,6 @@ class ChatService {
             });
             sessionId = session.id;
         }
-
-		// ============================================
-		// 🔄 FLOW ENGINE V2 CHECK
-		// ============================================
-		// Check if this agent uses Flow Engine V2
-		// If so, route the message through FlowEngine instead of traditional processing
-		if (!agent) {
-			agent = await AgentService.getAgent(session?.agent_id || agentId);
-		}
-		
-		if (agent) {
-			const useFlowEngine = await FlowEngineIntegration.shouldUseFlowEngine(agent.id);
-			
-			if (useFlowEngine) {
-				console.log('🔄 Routing message through Flow Engine V2');
-				try {
-					const flowResult = await FlowEngineIntegration.processMessage({
-						sessionId,
-						agentId: agent.id,
-						message,
-						image,
-						userId,
-						channelInfo: channelInfo || {
-							channel: 'public_chat',
-							channelUserId: null,
-							channelUserName: null
-						}
-					});
-					
-					// If buffering (rapid messages), return early
-					if (flowResult.buffering) {
-						releaseLock();
-						return flowResult;
-					}
-					
-					// Note: Message saving is handled by FlowEngine internally
-					// The flowResult contains the response to return to the user
-					
-					releaseLock();
-					return flowResult;
-					
-				} catch (flowError) {
-					console.error('❌ Flow Engine error, falling back to ChatService:', flowError);
-					// Fall through to traditional processing on error
-				}
-			}
-		}
 
 		//console.log(session)
 		// ============================================
@@ -8585,9 +8537,6 @@ Reply ONLY with valid JSON:
 				newState.validation_checked = true;
 				newState.validation_passed = llmDecision.date_validation.validation_passed;
 			}
-			
-			let newStatForConsole = newState;
-			delete newStatForConsole.images_collected;
 			
 			console.log('📝 Updating complaint state:', JSON.stringify(newState, null, 2));
 			await this._updateSessionComplaintState(sessionId, newState);

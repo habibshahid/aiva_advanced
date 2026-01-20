@@ -256,21 +256,6 @@ router.post('/message', audioUpload.single('audio'), async (req, res) => {
 	  }
     });
 
-    // ============================================
-    // 🔄 FLOW ENGINE BUFFERING CHECK
-    // ============================================
-    // If Flow Engine is buffering (shouldn't happen for public_chat with buffer=0)
-    // Return error since public chat expects immediate response
-    if (result.buffering || result.status === 'buffering') {
-      console.log('⚠️ [PUBLIC CHAT] Flow Engine returned buffering - this should not happen for public chat');
-      console.log('💡 Set message_buffer_seconds = 0 for this agent to get immediate responses');
-      return res.status(500).json({
-        success: false,
-        error: 'Message buffering is enabled. Please disable it for public chat (set message_buffer_seconds = 0).',
-        session_id: sessionId
-      });
-    }
-
 	// ============================================
     // 🔊 TTS GENERATION
     // ============================================
@@ -362,55 +347,42 @@ router.post('/message', audioUpload.single('audio'), async (req, res) => {
 	  op => op?.operation === 'message_analysis'
 	);
 
-    // Extract cost - handle both number and object formats
-    let baseCost = 0;
-    if (typeof result.cost === 'number') {
-      baseCost = result.cost;
-    } else if (result.cost && typeof result.cost === 'object') {
-      baseCost = result.cost.final_cost || result.cost.base_cost || 0;
-    }
-    
-    const llmCost = llmOperation?.total_cost || baseCost || 0;
-    const analysisCost = analysisOperation?.total_cost || result.user_analysis_cost || 0;
-    const totalCost = (llmCost + analysisCost) || 0;
+    const llmCost = llmOperation?.total_cost || result.cost;
+    const analysisCost = analysisOperation?.total_cost || result.user_analysis_cost || 0.0;
+    const totalCost = llmCost + analysisCost;
 
-    // Skip credit deduction if cost is invalid
-    if (isNaN(totalCost) || totalCost <= 0) {
-      console.log('⚠️ [PUBLIC CHAT] Skipping credit deduction - invalid cost:', totalCost);
-    } else {
-      console.log('💰 [PUBLIC CHAT] Cost breakdown:', {
-        llm_cost: llmCost,
+    console.log('💰 [PUBLIC CHAT] Cost breakdown:', {
+      llm_cost: llmCost,
+      analysis_cost: analysisCost,
+      total_cost: totalCost,
+      llm_operation_found: !!llmOperation,
+      analysis_operation_found: !!analysisOperation
+    });
+
+    console.log('💰 [PUBLIC CHAT] Deducting total cost:', totalCost);
+
+    // 3. Deduct combined cost
+    await CreditService.deductCredits(
+      session.tenant_id,
+      totalCost,
+      'public_chat_message',
+      {
+        session_id: sessionId,
+        message_id: result.message_id,
+        agent_id: session.agent_id,
+        public_chat: true,
+        model: result.agent_metadata?.model || 'gpt-4o-mini',
+        message_length: message.length,
+        response_length: result.response?.text?.length || 0,
+        input_tokens: result.context_used?.total_context_tokens || 0,
+        output_tokens: result.response?.text?.length || 0,
         analysis_cost: analysisCost,
-        total_cost: totalCost,
-        llm_operation_found: !!llmOperation,
-        analysis_operation_found: !!analysisOperation
-      });
+        includes_analysis: analysisCost > 0
+      },
+      sessionId
+    );
 
-      console.log('💰 [PUBLIC CHAT] Deducting total cost:', totalCost);
-
-      // 3. Deduct combined cost
-      await CreditService.deductCredits(
-        session.tenant_id,
-        totalCost,
-        'public_chat_message',
-        {
-          session_id: sessionId,
-          message_id: result.message_id,
-          agent_id: session.agent_id,
-          public_chat: true,
-          model: result.agent_metadata?.model || 'gpt-4o-mini',
-          message_length: message.length,
-          response_length: result.response?.text?.length || 0,
-          input_tokens: result.context_used?.total_context_tokens || 0,
-          output_tokens: result.response?.text?.length || 0,
-          analysis_cost: analysisCost,
-          includes_analysis: analysisCost > 0
-        },
-        sessionId
-      );
-
-      console.log('✅ [PUBLIC CHAT] Credit deduction complete');
-    }
+    console.log('✅ [PUBLIC CHAT] Credit deduction complete');
 
 	if (audioCost > 0) {
       console.log('💰 [PUBLIC CHAT] Deducting audio cost:', audioCost);

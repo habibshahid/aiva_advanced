@@ -1957,6 +1957,10 @@ class ShopifyService {
 						}
 						fulfillments {
 						  status
+						  createdAt
+						  updatedAt
+						  deliveredAt
+						  displayStatus
 						  trackingInfo {
 							number
 							url
@@ -2016,13 +2020,37 @@ class ShopifyService {
 	  const latestFulfillment = fulfillments[fulfillments.length - 1];
 	  let trackingInfo = null;
 	  
+	  // Map GraphQL displayStatus to REST shipment_status
+	  // GraphQL displayStatus: "FULFILLED", "DELIVERED", "IN_TRANSIT", etc.
+	  // REST shipment_status: "delivered", "in_transit", etc.
+	  const mapDisplayStatusToShipmentStatus = (displayStatus) => {
+		if (!displayStatus) return null;
+		const statusMap = {
+		  'DELIVERED': 'delivered',
+		  'IN_TRANSIT': 'in_transit',
+		  'OUT_FOR_DELIVERY': 'out_for_delivery',
+		  'ATTEMPTED_DELIVERY': 'attempted_delivery',
+		  'READY_FOR_PICKUP': 'ready_for_pickup',
+		  'PICKED_UP': 'delivered',
+		  'FULFILLED': 'shipped',
+		  'SUCCESS': 'shipped'  // Fulfillment status SUCCESS means shipped
+		};
+		return statusMap[displayStatus.toUpperCase()] || 'shipped';
+	  };
+	  
+	  // Also check order-level displayFulfillmentStatus for delivery info
+	  const orderDisplayStatus = order.displayFulfillmentStatus;
+	  const isDelivered = orderDisplayStatus === 'DELIVERED' || 
+	                      latestFulfillment?.displayStatus === 'DELIVERED' ||
+	                      latestFulfillment?.deliveredAt;
+	  
 	  if (latestFulfillment?.trackingInfo?.length > 0) {
 		const tracking = latestFulfillment.trackingInfo[0];
 		trackingInfo = {
 		  company: tracking.company || 'Courier',
 		  number: tracking.number,
 		  url: tracking.url,
-		  status: latestFulfillment.status
+		  status: isDelivered ? 'delivered' : mapDisplayStatusToShipmentStatus(latestFulfillment.displayStatus || latestFulfillment.status)
 		};
 	  }
 	  
@@ -2036,6 +2064,20 @@ class ShopifyService {
 		variant_title: item.variantTitle
 	  }));
 	  
+	  // Map displayFulfillmentStatus to REST fulfillment_status
+	  const mapFulfillmentStatus = (displayStatus) => {
+		if (!displayStatus) return 'unfulfilled';
+		const statusMap = {
+		  'UNFULFILLED': 'unfulfilled',
+		  'PARTIALLY_FULFILLED': 'partial',
+		  'FULFILLED': 'fulfilled',
+		  'DELIVERED': 'fulfilled',  // Delivered is also fulfilled
+		  'IN_TRANSIT': 'fulfilled',
+		  'OUT_FOR_DELIVERY': 'fulfilled'
+		};
+		return statusMap[displayStatus.toUpperCase()] || 'unfulfilled';
+	  };
+	  
 	  // Build REST-compatible order object
 	  return {
 		id: order.id.replace('gid://shopify/Order/', ''),
@@ -2048,8 +2090,8 @@ class ShopifyService {
 		processed_at: order.processedAt,
 		closed_at: order.closedAt,
 		cancelled_at: order.cancelledAt,
-		financial_status: order.financialStatus?.toLowerCase(),
-		fulfillment_status: order.fulfillmentStatus?.toLowerCase() || 'unfulfilled',
+		financial_status: order.displayFinancialStatus?.toLowerCase()?.replace(/_/g, ' '),
+		fulfillment_status: mapFulfillmentStatus(order.displayFulfillmentStatus),
 		display_financial_status: order.displayFinancialStatus,
 		display_fulfillment_status: order.displayFulfillmentStatus,
 		currency: order.currencyCode,
@@ -2082,8 +2124,12 @@ class ShopifyService {
 		  country: order.billingAddress.country,
 		  phone: order.billingAddress.phone
 		} : null,
+		// Convert GraphQL fulfillments to REST format with shipment_status
 		fulfillments: fulfillments.map(f => ({
 		  status: f.status,
+		  shipment_status: isDelivered ? 'delivered' : mapDisplayStatusToShipmentStatus(f.displayStatus || f.status),
+		  created_at: f.createdAt,
+		  updated_at: f.updatedAt,
 		  tracking_company: f.trackingInfo?.[0]?.company,
 		  tracking_numbers: f.trackingInfo?.map(t => t.number).filter(Boolean) || [],
 		  tracking_urls: f.trackingInfo?.map(t => t.url).filter(Boolean) || []
@@ -2091,7 +2137,9 @@ class ShopifyService {
 		order_status_url: order.statusPageUrl,
 		// Pre-computed fields
 		tracking: trackingInfo,
-		has_tracking: !!trackingInfo
+		has_tracking: !!trackingInfo,
+		// Flag to indicate this came from GraphQL customer lookup
+		_fromCustomerLookup: true
 	  };
 	}
 }

@@ -108,7 +108,13 @@ const AgentEditor = () => {
 	  vad_threshold: 0.5,
 	  silence_duration_ms: 500,
 	  greeting: '',
-	  kb_id: null 
+	  kb_id: null,
+	  // Flow Engine settings
+	  use_flow_engine: false,
+	  message_buffer_seconds: 2,
+	  session_timeout_minutes: 30,
+	  // Intelligent Flow Engine settings
+	  flow_mode: 'intelligent'
   });
 
   const [functions, setFunctions] = useState([]);
@@ -1598,6 +1604,133 @@ const AgentEditor = () => {
 				</div>
 			  </div>
 			)}
+			
+			{/* Flow Engine Configuration - Available for all agents */}
+			{id && (
+			  <div className="mt-3 p-4 bg-gradient-to-r from-green-50 to-teal-50 border border-green-200 rounded-lg">
+				<div className="flex items-center justify-between mb-3">
+				  <div>
+					<h4 className="text-sm font-semibold text-gray-800">Conversation Flows</h4>
+					<p className="text-xs text-gray-600">Configure conversation flows for lead capture, order tracking, appointments, and more.</p>
+				  </div>
+				  
+				  {/* Flow Engine Toggle */}
+				  <button
+					type="button"
+					onClick={() => setAgent({ ...agent, use_flow_engine: !agent.use_flow_engine })}
+					className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+					  agent.use_flow_engine
+						? 'bg-green-500 text-white'
+						: 'bg-gray-200 text-gray-600'
+					}`}
+				  >
+					{agent.use_flow_engine ? (
+					  <>
+						<span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
+						Enabled
+					  </>
+					) : (
+					  <>
+						<span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+						Disabled
+					  </>
+					)}
+				  </button>
+				</div>
+				
+				{/* Flow Engine Settings - Only show when enabled */}
+				{agent.use_flow_engine && (
+				  <div className="mb-4 p-3 bg-white rounded-lg border border-green-200">
+					<div className="grid grid-cols-3 gap-4">
+					  {/* Flow Mode - NEW */}
+					  <div>
+						<label className="block text-xs font-medium text-gray-700 mb-1">
+						  Flow Mode
+						</label>
+						<select
+						  value={agent.flow_mode || 'intelligent'}
+						  onChange={(e) => setAgent({ ...agent, flow_mode: e.target.value })}
+						  className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-green-500 focus:border-green-500"
+						>
+						  <option value="guided">🔒 Guided (Strict)</option>
+						  <option value="intelligent">🧠 Intelligent (Recommended)</option>
+						  <option value="adaptive">🔄 Adaptive (Flexible)</option>
+						</select>
+						<p className="text-xs text-gray-500 mt-1">
+						  {agent.flow_mode === 'guided' && 'Follows flow steps strictly in order'}
+						  {agent.flow_mode === 'intelligent' && 'Can skip steps & call functions directly'}
+						  {agent.flow_mode === 'adaptive' && 'Handles tangents, pauses & resumes'}
+						  {!agent.flow_mode && 'Can skip steps & call functions directly'}
+						</p>
+					  </div>
+					  
+					  {/* Message Buffer */}
+					  <div>
+						<label className="block text-xs font-medium text-gray-700 mb-1">
+						  Message Buffer (seconds)
+						</label>
+						<input
+						  type="number"
+						  min="0"
+						  max="10"
+						  step="0.5"
+						  value={agent.message_buffer_seconds || 2}
+						  onChange={(e) => setAgent({ ...agent, message_buffer_seconds: parseFloat(e.target.value) })}
+						  className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-green-500 focus:border-green-500"
+						/>
+						<p className="text-xs text-gray-500 mt-1">Wait time before processing rapid messages</p>
+					  </div>
+					  
+					  {/* Session Timeout */}
+					  <div>
+						<label className="block text-xs font-medium text-gray-700 mb-1">
+						  Session Timeout (minutes)
+						</label>
+						<input
+						  type="number"
+						  min="5"
+						  max="1440"
+						  value={agent.session_timeout_minutes || 30}
+						  onChange={(e) => setAgent({ ...agent, session_timeout_minutes: parseInt(e.target.value) })}
+						  className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-green-500 focus:border-green-500"
+						/>
+						<p className="text-xs text-gray-500 mt-1">Auto-close inactive sessions after</p>
+					  </div>
+					</div>
+					
+					{/* Info box for intelligent mode */}
+					{(agent.flow_mode === 'intelligent' || !agent.flow_mode) && (
+					  <div className="mt-3 p-2 bg-blue-50 rounded-md border border-blue-200">
+						<p className="text-xs text-blue-700">
+						  <strong>🧠 Intelligent Mode:</strong> The AI will extract all data from messages and can call functions directly when it has enough information. No more asking for data that was already provided!
+						</p>
+					  </div>
+					)}
+					
+					{agent.flow_mode === 'adaptive' && (
+					  <div className="mt-3 p-2 bg-purple-50 rounded-md border border-purple-200">
+						<p className="text-xs text-purple-700">
+						  <strong>🔄 Adaptive Mode:</strong> The AI can pause flows to handle tangent questions, then resume where it left off. Great for complex conversations.
+						</p>
+					  </div>
+					)}
+				  </div>
+				)}
+				
+				<Link
+				  to={`/agents/${id}/flows`}
+				  className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded-lg hover:border-green-400 hover:shadow-sm transition-all"
+				>
+				  <GitBranch className="w-5 h-5 text-green-600" />
+				  <div className="flex-1">
+					<div className="text-sm font-medium text-gray-900">Manage Flows</div>
+					<div className="text-xs text-gray-500">Create and configure conversation workflows</div>
+				  </div>
+				  <ArrowRight className="w-4 h-4 text-gray-400" />
+				</Link>
+			  </div>
+			)}
+			
 		  <div className="mt-6 pt-6 border-t border-gray-200">
             <h4 className="text-sm font-medium text-gray-900 mb-4">
               Chat Model Configuration
