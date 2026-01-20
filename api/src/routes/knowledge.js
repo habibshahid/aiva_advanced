@@ -1537,4 +1537,81 @@ router.post('/document-complete', async (req, res) => {
   }
 });
 
+// ============================================
+// Scrape Sources Routes
+// ============================================
+
+// Get scrape sources for a KB
+router.get('/:kbId/scrape-sources', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const { kbId } = req.params;
+    
+    const pythonResponse = await axios.get(
+      `${process.env.PYTHON_SERVICE_URL}/api/v1/kb/${kbId}/scrape-sources`,
+      {
+        headers: {
+          'X-API-Key': process.env.PYTHON_SERVICE_API_KEY
+        }
+      }
+    );
+    
+    res.json(rb.success(pythonResponse.data));
+  } catch (error) {
+    console.error('Get scrape sources error:', error);
+    res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
+// Sync a scrape source
+router.post('/scrape-sources/:sourceId/sync', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const { sourceId } = req.params;
+    const { force = false } = req.body;
+    
+    const pythonResponse = await axios.post(
+      `${process.env.PYTHON_SERVICE_URL}/api/v1/scrape-sources/${sourceId}/sync`,
+      { force },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': process.env.PYTHON_SERVICE_API_KEY
+        },
+        timeout: 300000 // 5 minutes
+      }
+    );
+    
+    res.json(rb.success(pythonResponse.data));
+  } catch (error) {
+    console.error('Sync scrape source error:', error);
+    res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
+// Check for changes
+router.get('/scrape-sources/:sourceId/check-changes', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const { sourceId } = req.params;
+    
+    const pythonResponse = await axios.get(
+      `${process.env.PYTHON_SERVICE_URL}/api/v1/scrape-sources/${sourceId}/check-changes`,
+      {
+        headers: {
+          'X-API-Key': process.env.PYTHON_SERVICE_API_KEY
+        }
+      }
+    );
+    
+    res.json(rb.success(pythonResponse.data));
+  } catch (error) {
+    console.error('Check changes error:', error);
+    res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
 module.exports = router;

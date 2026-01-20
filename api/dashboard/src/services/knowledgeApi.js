@@ -161,3 +161,24 @@ export const clearCache = async (kbId = null) => {
   const response = await api.delete(url);
   return response.data;
 };
+
+// Get scrape sources for a knowledge base
+export const getScrapeSources = (kbId) => {
+  return api.get(`/knowledge/${kbId}/scrape-sources`);
+};
+// Trigger manual sync for a scrape source
+export const syncScrapeSource = (sourceId, force = false) => {
+  return api.post(`/knowledge/scrape-sources/${sourceId}/sync`, { force });
+};
+
+// Check for changes without syncing
+export const checkScrapeChanges = (sourceId) => {
+  return api.get(`/knowledge/scrape-sources/${sourceId}/check-changes`);
+};
+
+// Delete a scrape source
+export const deleteScrapeSource = (sourceId) => {
+  return api.delete(`/knowledge/scrape-sources/${sourceId}`);
+};
+
+

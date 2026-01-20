@@ -61,7 +61,27 @@ async def lifespan(app: FastAPI):
     logger.info("✓ CLIP model loaded and ready!")
     logger.info("=" * 60)
     
+    from app.services.scrape_sync_service import get_scrape_sync_service
+    import asyncio
+    
+    sync_service = get_scrape_sync_service()
+    sync_task = asyncio.create_task(sync_service.run_sync_loop(check_interval_minutes=5))
+    logger.info("✓ Scrape sync background loop started")
+    
     yield  # Application runs
+    
+    
+    logger.info("Shutting down: Stopping scrape sync loop...")
+    sync_service.stop_sync_loop()
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("✓ Scrape sync loop stopped")
+    
+    logger.info("Shutting down: Cleaning up resources...")
+    _image_processor = None
     
     # Shutdown: Cleanup
     logger.info("Shutting down: Cleaning up resources...")

@@ -241,6 +241,10 @@ class DocumentProcessor:
             return await self._extract_txt(file_content)
         elif file_ext == 'html':
             return await self._extract_html(file_content)
+        elif file_ext == 'md' or 'markdown' in content_type:
+            return await self._extract_markdown(file_content)
+        elif file_ext == 'json' or 'json' in content_type:
+            return await self._extract_json(file_content)
         else:
             raise ValueError(f"Unsupported file type: {file_ext}")
     
@@ -700,6 +704,100 @@ class DocumentProcessor:
             logger.error(f"HTML extraction error: {e}")
             raise
     
+    async def _extract_markdown(self, file_content: bytes) -> Dict[str, Any]:
+        """Extract text from Markdown files with structure preservation"""
+        try:
+            text = file_content.decode('utf-8', errors='ignore')
+            
+            # Markdown is already in a format we want to preserve
+            # Just clean up any excessive whitespace
+            lines = text.split('\n')
+            cleaned_lines = []
+            blank_count = 0
+            
+            for line in lines:
+                if line.strip() == '':
+                    blank_count += 1
+                    if blank_count <= 2:  # Allow max 2 consecutive blank lines
+                        cleaned_lines.append('')
+                else:
+                    blank_count = 0
+                    cleaned_lines.append(line.rstrip())
+            
+            cleaned_text = '\n'.join(cleaned_lines).strip()
+            
+            return {
+                "text": cleaned_text,
+                "pages": 1,
+                "images": 0,
+                "tables": 0
+            }
+            
+        except Exception as e:
+            logger.error(f"Markdown extraction error: {e}")
+            raise
+
+
+    async def _extract_json(self, file_content: bytes) -> Dict[str, Any]:
+        """Extract and format JSON content for knowledge base"""
+        try:
+            text = file_content.decode('utf-8', errors='ignore')
+            
+            # Parse JSON to validate and pretty-print
+            import json as json_module
+            try:
+                data = json_module.loads(text)
+                
+                # Convert JSON to readable text format
+                formatted_text = self._json_to_readable_text(data)
+                
+            except json_module.JSONDecodeError:
+                # If invalid JSON, treat as plain text
+                logger.warning("Invalid JSON, treating as plain text")
+                formatted_text = text
+            
+            return {
+                "text": formatted_text,
+                "pages": 1,
+                "images": 0,
+                "tables": 0
+            }
+            
+        except Exception as e:
+            logger.error(f"JSON extraction error: {e}")
+            raise
+
+
+    def _json_to_readable_text(self, data: Any, prefix: str = "", depth: int = 0) -> str:
+        """Convert JSON structure to readable text for embedding"""
+        lines = []
+        indent = "  " * depth
+        
+        if isinstance(data, dict):
+            for key, value in data.items():
+                readable_key = key.replace('_', ' ').replace('-', ' ').title()
+                
+                if isinstance(value, (dict, list)):
+                    lines.append(f"{indent}## {readable_key}")
+                    lines.append(self._json_to_readable_text(value, prefix, depth + 1))
+                else:
+                    if value is not None and str(value).strip():
+                        lines.append(f"{indent}{readable_key}: {value}")
+                        
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                if isinstance(item, dict):
+                    # Check for common name/title fields
+                    item_name = item.get('name') or item.get('title') or item.get('id') or f"Item {i + 1}"
+                    lines.append(f"{indent}### {item_name}")
+                    lines.append(self._json_to_readable_text(item, prefix, depth + 1))
+                else:
+                    lines.append(f"{indent}- {item}")
+        else:
+            lines.append(f"{indent}{data}")
+        
+        return '\n'.join(lines)
+        
     async def process_text_content(
         self,
         document_id: str,

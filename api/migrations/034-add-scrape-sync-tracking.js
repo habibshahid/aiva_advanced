@@ -224,6 +224,8 @@ module.exports = {
                   AND table_name = 'yovo_tbl_aiva_scrape_sources'
             `);
             
+            console.log(`✓ yovo_tbl_aiva_scrape_sources table: ${verifyTable.length > 0 ? 'exists' : 'missing'}`);
+            
             const [verifyCols] = await db.query(`
                 SELECT COLUMN_NAME 
                 FROM information_schema.COLUMNS 
@@ -232,15 +234,9 @@ module.exports = {
                   AND column_name IN ('content_hash', 'last_sync_at', 'sync_status', 'scrape_source_id')
             `);
             
-            if (verifyTable.length === 1) {
-                console.log('✓ Verified: yovo_tbl_aiva_scrape_sources table exists');
-            }
-            
-            if (verifyCols.length === 4) {
-                verifyCols.forEach(c => {
-                    console.log(`✓ Verified: ${c.COLUMN_NAME} column exists`);
-                });
-            }
+            verifyCols.forEach(c => {
+                console.log(`✓ Verified: ${c.COLUMN_NAME} column exists`);
+            });
             
             console.log('✓ Migration completed successfully!');
             
@@ -261,9 +257,9 @@ module.exports = {
             console.log('Rolling back web scrape sync tracking migration...');
             
             // =================================================================
-            // 1. Remove columns from yovo_tbl_aiva_documents
+            // 1. Remove indexes from yovo_tbl_aiva_documents
             // =================================================================
-            console.log('Removing columns from yovo_tbl_aiva_documents...');
+            console.log('Removing indexes from yovo_tbl_aiva_documents...');
             
             const [docTable] = await db.query(`
                 SELECT TABLE_NAME 
@@ -273,7 +269,7 @@ module.exports = {
             `);
             
             if (docTable.length > 0) {
-                // Drop indexes first
+                // Drop idx_content_hash index
                 const [hashIdx] = await db.query(`
                     SELECT INDEX_NAME 
                     FROM information_schema.STATISTICS 
@@ -287,6 +283,7 @@ module.exports = {
                     console.log('✓ Dropped index idx_content_hash');
                 }
                 
+                // Drop idx_scrape_source_id index
                 const [sourceIdIdx] = await db.query(`
                     SELECT INDEX_NAME 
                     FROM information_schema.STATISTICS 
@@ -300,7 +297,11 @@ module.exports = {
                     console.log('✓ Dropped index idx_scrape_source_id');
                 }
                 
-                // Drop columns
+                // =================================================================
+                // 2. Remove columns from yovo_tbl_aiva_documents
+                // =================================================================
+                console.log('Removing columns from yovo_tbl_aiva_documents...');
+                
                 const columnsToRemove = ['content_hash', 'last_sync_at', 'sync_status', 'scrape_source_id'];
                 
                 for (const colName of columnsToRemove) {
@@ -309,8 +310,8 @@ module.exports = {
                         FROM information_schema.COLUMNS 
                         WHERE table_schema = DATABASE() 
                           AND table_name = 'yovo_tbl_aiva_documents'
-                          AND column_name = ?
-                    `, { replacements: [colName] });
+                          AND column_name = '${colName}'
+                    `);
                     
                     if (col.length > 0) {
                         await db.query(`ALTER TABLE yovo_tbl_aiva_documents DROP COLUMN ${colName}`);
@@ -320,7 +321,7 @@ module.exports = {
             }
             
             // =================================================================
-            // 2. Drop scrape_sources table
+            // 3. Drop scrape_sources table
             // =================================================================
             const [tables1] = await db.query(`
                 SELECT TABLE_NAME 

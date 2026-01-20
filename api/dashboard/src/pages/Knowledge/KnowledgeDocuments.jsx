@@ -19,6 +19,7 @@ import WebScraper from '../../components/Knowledge/WebScraper';
 import ImageUploader from '../../components/Knowledge/ImageUploader';
 import ImageGallery from '../../components/Knowledge/ImageGallery';
 import ImageSearch from '../../components/Knowledge/ImageSearch';
+import ScrapeSources from '../../components/Knowledge/ScrapeSources';
 
 const KnowledgeDocuments = () => {
   const { id } = useParams();
@@ -495,12 +496,26 @@ const KnowledgeDocuments = () => {
           )}
 
           {/* Scrape Tab */}
-          {activeTab === 'scrape' && (
-            <WebScraper 
-              kbId={id} 
-              onComplete={handleScrapeComplete}
-            />
-          )}
+          {/* Scrape Tab */}
+			{activeTab === 'scrape' && (
+			  <div className="space-y-6">
+				{/* New Scrape Section */}
+				<div className="bg-white rounded-lg">
+				  <h3 className="text-lg font-medium text-gray-900 mb-4">
+					Scrape New Website
+				  </h3>
+				  <WebScraper 
+					kbId={id} 
+					onComplete={handleScrapeComplete}
+				  />
+				</div>
+				
+				{/* Scrape Sources Section - Shows existing sources with auto-sync */}
+				<div className="bg-white rounded-lg border border-gray-200 p-6">
+				  <ScrapeSources kbId={id} />
+				</div>
+			  </div>
+			)}
 		  {/* Images Tab */}
 			{activeTab === 'images' && (
 			  <div className="space-y-6">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, Link as LinkIcon, FileText, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { Globe, Link as LinkIcon, FileText, AlertCircle, CheckCircle, Loader, RefreshCw, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { scrapeUrl, scrapeSitemap, testUrl } from '../../services/knowledgeApi';
 
@@ -12,6 +12,10 @@ const WebScraper = ({ kbId, onComplete }) => {
   const [scraping, setScraping] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [scrapeResult, setScrapeResult] = useState(null);
+  
+  // Auto-sync settings (NEW)
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
+  const [syncIntervalHours, setSyncIntervalHours] = useState(24);
 
   const handleTestUrl = async () => {
     if (!url.trim()) {
@@ -56,7 +60,10 @@ const WebScraper = ({ kbId, onComplete }) => {
           max_pages: maxPages,
           metadata: {
             source: 'web_scrape',
-            scraped_at: new Date().toISOString()
+            scraped_at: new Date().toISOString(),
+            // NEW: Include auto-sync settings
+            auto_sync_enabled: autoSyncEnabled,
+            sync_interval_hours: syncIntervalHours
           }
         });
       } else {
@@ -65,7 +72,10 @@ const WebScraper = ({ kbId, onComplete }) => {
           max_pages: maxPages,
           metadata: {
             source: 'sitemap_scrape',
-            scraped_at: new Date().toISOString()
+            scraped_at: new Date().toISOString(),
+            // NEW: Include auto-sync settings
+            auto_sync_enabled: autoSyncEnabled,
+            sync_interval_hours: syncIntervalHours
           }
         });
       }
@@ -238,6 +248,52 @@ const WebScraper = ({ kbId, onComplete }) => {
           </p>
         </div>
       )}
+
+      {/* NEW: Auto-Sync Settings */}
+      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <RefreshCw className="w-5 h-5 text-gray-600 mr-2" />
+            <div>
+              <div className="font-medium text-gray-900">Auto-Sync</div>
+              <div className="text-sm text-gray-500">Automatically detect and update changed content</div>
+            </div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoSyncEnabled}
+              onChange={(e) => setAutoSyncEnabled(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+          </label>
+        </div>
+
+        {autoSyncEnabled && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              <Clock className="w-4 h-4 inline mr-1" />
+              Sync Interval
+            </label>
+            <select
+              value={syncIntervalHours}
+              onChange={(e) => setSyncIntervalHours(parseInt(e.target.value))}
+              className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            >
+              <option value={6}>Every 6 hours</option>
+              <option value={12}>Every 12 hours</option>
+              <option value={24}>Every 24 hours (Daily)</option>
+              <option value={48}>Every 48 hours</option>
+              <option value={72}>Every 72 hours</option>
+              <option value={168}>Every week</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Content will be checked for changes at this interval. Only changed pages will be re-processed.
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Info Box */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">

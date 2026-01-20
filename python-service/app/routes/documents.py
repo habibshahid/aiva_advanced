@@ -22,6 +22,7 @@ from app.services.document_processor import DocumentProcessor
 from app.utils.cost_tracking import CostTracker
 from app.services.web_scraper import WebScraper
 from app.services.document_job_processor import get_document_job_processor
+from app.services.scrape_sync_service import get_scrape_sync_service
 
 router = APIRouter()
 document_processor = DocumentProcessor()
@@ -75,6 +76,23 @@ class AsyncDocumentUploadResponse(BaseModel):
     estimated_time_seconds: Optional[int] = None
 
 
+class CreateScrapeSourceRequest(BaseModel):
+    kb_id: str
+    tenant_id: str
+    url: str
+    scrape_type: str = 'single_url'
+    max_depth: int = 2
+    max_pages: int = 20
+    auto_sync_enabled: bool = False
+    sync_interval_hours: int = 24
+    metadata: Optional[Dict[str, Any]] = None
+
+class UpdateScrapeSourceRequest(BaseModel):
+    auto_sync_enabled: Optional[bool] = None
+    sync_interval_hours: Optional[int] = None
+    max_depth: Optional[int] = None
+    max_pages: Optional[int] = None
+    
 # ============================================
 # ASYNC Document Upload (NEW - Primary endpoint)
 # ============================================
@@ -449,7 +467,6 @@ async def test_url(request: TestUrlRequest):
 async def scrape_url(request: ScrapeUrlRequest):
     """
     Scrape URL and add to knowledge base
-    (Synchronous - as in original implementation)
     """
     try:
         # Scrape website
@@ -468,7 +485,7 @@ async def scrape_url(request: ScrapeUrlRequest):
         for page in scrape_result['pages']:
             document_id = str(uuid.uuid4())
             
-            # Process as text document (uses existing synchronous method)
+            # Process as text document
             result = await document_processor.process_text_content(
                 document_id=document_id,
                 kb_id=request.kb_id,
@@ -490,12 +507,125 @@ async def scrape_url(request: ScrapeUrlRequest):
                 'title': page['title'],
                 'chunks': result.processing_results.total_chunks
             })
+        
+        # Update KB stats
+        if processed_documents:
+            from app.services.document_job_processor import get_document_job_processor
+            job_processor = get_document_job_processor()
+            await job_processor._update_kb_stats(request.kb_id)
+        
+        # ============================================
+        # NEW: Create/Update scrape source for auto-sync tracking
+        # ============================================
+        source_id = None
+        try:
+            import mysql.connector
+            from app.config import settings
+            from datetime import timedelta
             
-            if processed_documents:
-                from app.services.document_job_processor import get_document_job_processor
-                job_processor = get_document_job_processor()
-                await job_processor._update_kb_stats(request.kb_id)
+            # Get auto-sync settings from metadata
+            auto_sync_enabled = request.metadata.get('auto_sync_enabled', False) if request.metadata else False
+            sync_interval_hours = request.metadata.get('sync_interval_hours', 24) if request.metadata else 24
             
+            conn = mysql.connector.connect(
+                host=settings.DB_HOST,
+                port=settings.DB_PORT,
+                user=settings.DB_USER,
+                password=settings.DB_PASSWORD,
+                database=settings.DB_NAME
+            )
+            cursor = conn.cursor(dictionary=True)
+            
+            # Check if source already exists for this URL and KB
+            cursor.execute("""
+                SELECT id FROM yovo_tbl_aiva_scrape_sources 
+                WHERE kb_id = %s AND url = %s
+            """, (request.kb_id, request.url))
+            
+            existing = cursor.fetchone()
+            
+            now = datetime.utcnow()
+            next_sync = now + timedelta(hours=sync_interval_hours) if auto_sync_enabled else None
+            
+            if existing:
+                # Update existing source
+                source_id = existing['id']
+                cursor.execute("""
+                    UPDATE yovo_tbl_aiva_scrape_sources SET
+                        auto_sync_enabled = %s,
+                        sync_interval_hours = %s,
+                        last_sync_at = %s,
+                        next_sync_at = %s,
+                        sync_status = 'idle',
+                        documents_count = %s,
+                        max_depth = %s,
+                        max_pages = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                """, (
+                    1 if auto_sync_enabled else 0,
+                    sync_interval_hours,
+                    now,
+                    next_sync,
+                    len(processed_documents),
+                    request.max_depth,
+                    request.max_pages,
+                    now,
+                    source_id
+                ))
+                logger.info(f"Updated scrape source {source_id} for {request.url}, auto_sync={auto_sync_enabled}")
+            else:
+                # Create new source
+                source_id = str(uuid.uuid4())
+                cursor.execute("""
+                    INSERT INTO yovo_tbl_aiva_scrape_sources 
+                    (id, kb_id, tenant_id, url, scrape_type, max_depth, max_pages, 
+                     auto_sync_enabled, sync_interval_hours, last_sync_at, next_sync_at,
+                     sync_status, documents_count, metadata, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    source_id,
+                    request.kb_id,
+                    request.tenant_id,
+                    request.url,
+                    'crawl',
+                    request.max_depth,
+                    request.max_pages,
+                    1 if auto_sync_enabled else 0,
+                    sync_interval_hours,
+                    now,
+                    next_sync,
+                    'idle',
+                    len(processed_documents),
+                    json.dumps(request.metadata) if request.metadata else None,
+                    now,
+                    now
+                ))
+                logger.info(f"Created scrape source {source_id} for {request.url}, auto_sync={auto_sync_enabled}")
+            
+            # Update documents with scrape_source_id
+            if processed_documents and source_id:
+                doc_ids = [doc['document_id'] for doc in processed_documents]
+                for doc_id in doc_ids:
+                    cursor.execute("""
+                        UPDATE yovo_tbl_aiva_documents 
+                        SET scrape_source_id = %s, sync_status = 'synced', last_sync_at = %s
+                        WHERE id = %s
+                    """, (source_id, now, doc_id))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Failed to create/update scrape source: {e}", exc_info=True)
+            # Don't fail the whole request if source tracking fails
+        
+        # ============================================
+        # END OF NEW CODE
+        # ============================================
+        
+        # Refresh KB stats via Node.js API
         try:
             import httpx
             from app.config import settings
@@ -512,7 +642,8 @@ async def scrape_url(request: ScrapeUrlRequest):
             'total_pages_scraped': scrape_result['total_pages'],
             'documents_processed': len(processed_documents),
             'documents': processed_documents,
-            'base_url': request.url
+            'base_url': request.url,
+            'scrape_source_id': source_id  # NEW: Return source ID
         }
         
     except Exception as e:
@@ -592,4 +723,156 @@ async def scrape_sitemap(request: ScrapeSitemapRequest):
         
     except Exception as e:
         logger.error(f"Scrape sitemap error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Scrape Sources Management
+# ============================================
+
+@router.get("/kb/{kb_id}/scrape-sources")
+async def list_scrape_sources(kb_id: str):
+    """
+    List all scrape sources for a knowledge base
+    """
+    try:
+        import mysql.connector
+        from app.config import settings
+        
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor(dictionary=True)
+        
+        # Check if table exists first
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM information_schema.tables 
+            WHERE table_schema = DATABASE() 
+            AND table_name = 'yovo_tbl_aiva_scrape_sources'
+        """)
+        table_exists = cursor.fetchone()['cnt'] > 0
+        
+        if not table_exists:
+            cursor.close()
+            conn.close()
+            return {"sources": []}
+        
+        cursor.execute("""
+            SELECT * FROM yovo_tbl_aiva_scrape_sources
+            WHERE kb_id = %s
+            ORDER BY created_at DESC
+        """, (kb_id,))
+        
+        sources = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Convert datetime objects to ISO strings
+        for source in sources:
+            for key in ['created_at', 'updated_at', 'last_sync_at', 'next_sync_at']:
+                if source.get(key):
+                    source[key] = source[key].isoformat()
+            # Parse metadata JSON if present
+            if source.get('metadata'):
+                try:
+                    source['metadata'] = json.loads(source['metadata']) if isinstance(source['metadata'], str) else source['metadata']
+                except:
+                    pass
+        
+        return {"sources": sources}
+        
+    except Exception as e:
+        logger.error(f"List scrape sources error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/scrape-sources/{source_id}/sync")
+async def sync_scrape_source(source_id: str, force: bool = False):
+    """
+    Manually trigger sync for a scrape source
+    """
+    try:
+        import mysql.connector
+        from app.config import settings
+        
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get source
+        cursor.execute("SELECT * FROM yovo_tbl_aiva_scrape_sources WHERE id = %s", (source_id,))
+        source = cursor.fetchone()
+        
+        if not source:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="Scrape source not found")
+        
+        cursor.close()
+        conn.close()
+        
+        # TODO: Implement actual sync logic here
+        # For now, just return a placeholder response
+        return {
+            "status": "sync_started",
+            "source_id": source_id,
+            "message": "Sync functionality will be implemented"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scrape-sources/{source_id}/check-changes")
+async def check_scrape_source_changes(source_id: str):
+    """
+    Check if scraped content has changed without syncing
+    """
+    try:
+        import mysql.connector
+        from app.config import settings
+        
+        conn = mysql.connector.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME
+        )
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("SELECT * FROM yovo_tbl_aiva_scrape_sources WHERE id = %s", (source_id,))
+        source = cursor.fetchone()
+        
+        if not source:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="Scrape source not found")
+        
+        cursor.close()
+        conn.close()
+        
+        # TODO: Implement actual change detection
+        return {
+            "source_id": source_id,
+            "has_changes": False,
+            "message": "Change detection will be implemented"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Check changes error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
