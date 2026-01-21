@@ -262,6 +262,9 @@ class FlowEngineIntegration {
      */
     static async _saveMessages(sessionId, userMessage, userImage, result) {
         try {
+			const userCreatedAt = new Date();
+			const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1000);
+			
             const responseText = result.response?.text || result.response?.html || '';
             
             // Save user message
@@ -269,12 +272,13 @@ class FlowEngineIntegration {
             await db.query(
                 `INSERT INTO yovo_tbl_aiva_chat_messages (
                     id, session_id, role, content, images, created_at
-                ) VALUES (?, ?, 'user', ?, ?, NOW())`,
+                ) VALUES (?, ?, 'user', ?, ?, ?)`,
                 [
                     userMessageId,
                     sessionId,
                     userMessage,
-                    userImage ? JSON.stringify([userImage]) : null
+                    userImage ? JSON.stringify([userImage]) : null,
+					userCreatedAt
                 ]
             );
 
@@ -308,7 +312,7 @@ class FlowEngineIntegration {
             await db.query(
                 `INSERT INTO yovo_tbl_aiva_chat_messages (
                     id, session_id, role, content, content_html, cost, cost_breakdown, tokens_input, tokens_output, created_at
-                ) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, NOW())`,
+                ) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     assistantMessageId,
                     sessionId,
@@ -317,7 +321,8 @@ class FlowEngineIntegration {
                     cost,
                     costBreakdown ? JSON.stringify(costBreakdown) : null,
                     tokensInput,
-                    tokensOutput
+                    tokensOutput,
+					assistantCreatedAt
                 ]
             );
 
