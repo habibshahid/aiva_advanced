@@ -853,8 +853,107 @@ If you can extract an order number from the image:
             mode: agent.flow_mode || this.defaultMode
         });
 
+        // ============================================
+        // 🖼️ PRE-LLM IMAGE ANALYSIS - ALWAYS RUN FOR IMAGES
+        // ============================================
+        // Run pre-analysis for ALL images regardless of active flow state
+        // This ensures order screenshots are always detected for context switching
+        let imageAnalysisHints = null;
+		if (bufferedData.images && bufferedData.images.length > 0) {
+			console.log(`🖼️ Images detected (${bufferedData.images.length}) - running pre-analysis (active_flow: ${session.active_flow?.flow_id || 'none'}, step: ${session.active_flow?.current_step || 'none'})`);
+			
+			imageAnalysisHints = await this._preAnalyzeImages(bufferedData.images, agent);
+			
+			// ============================================
+			// 🔧 NORMALIZE RESULT STRUCTURE
+			// ============================================
+			if (imageAnalysisHints) {
+				// Build order_numbers array from extracted values
+				const orderNumbers = [];
+				
+				// Add extracted_order_number if present
+				if (imageAnalysisHints.extracted_order_number) {
+					orderNumbers.push(imageAnalysisHints.extracted_order_number);
+				}
+				
+				// Add extracted_phone if it could be used for lookup
+				if (imageAnalysisHints.extracted_phone) {
+					orderNumbers.push(imageAnalysisHints.extracted_phone);
+				}
+				
+				// Create normalized extracted object
+				imageAnalysisHints.extracted = {
+					order_numbers: orderNumbers.length > 0 ? orderNumbers : undefined,
+					phone: imageAnalysisHints.extracted_phone || undefined,
+					email: imageAnalysisHints.extracted_email || undefined,
+					tracking: imageAnalysisHints.extracted_tracking || undefined
+				};
+				
+				console.log('🖼️ Image pre-analysis result:', {
+					image_type: imageAnalysisHints.image_type,
+					has_order_numbers: !!(imageAnalysisHints.extracted?.order_numbers?.length),
+					order_numbers: imageAnalysisHints.extracted?.order_numbers,
+					confidence: imageAnalysisHints.confidence
+				});
+			}
+		}
+
+        // ============================================
+        // 🔄 CONTEXT SWITCH: New order screenshot mid-flow?
+        // ============================================
+        // If user sends a new order screenshot while in an active flow,
+        // and we're NOT at the initial order analysis step, AND it's a 
+        // DIFFERENT order than what's already collected - restart the flow
+        if (session.active_flow && 
+            imageAnalysisHints?.image_type === 'order_screenshot' &&
+            imageAnalysisHints?.extracted?.order_numbers?.length > 0) {
+            
+            const currentStep = session.active_flow.current_step;
+            const collectedParams = session.active_flow.collected_params || {};
+            const currentOrderId = collectedParams.order_identifier;
+            const newOrderNumbers = imageAnalysisHints.extracted.order_numbers;
+            
+            // Steps where we expect order images (don't switch on these)
+            const orderAnalysisSteps = ['step_analyze_image', 'step_collect_order', 'step_get_order'];
+            const isAtOrderAnalysisStep = orderAnalysisSteps.includes(currentStep);
+            
+            // Check if the new image has a DIFFERENT order than what we collected
+            const normalizeOrderId = (id) => {
+                if (!id) return '';
+                return id.toString().replace(/[^0-9]/g, ''); // Strip to just numbers
+            };
+            
+            const currentNormalized = normalizeOrderId(currentOrderId);
+            const newNormalized = newOrderNumbers.map(n => normalizeOrderId(n));
+            
+            const isDifferentOrder = newOrderNumbers.length > 0 && 
+                                     (!currentOrderId || 
+                                      !newNormalized.some(n => n === currentNormalized));
+            
+            if (!isAtOrderAnalysisStep && isDifferentOrder) {
+                console.log('🔄 [CONTEXT SWITCH] New order screenshot detected mid-flow!');
+                console.log('   Flow:', session.active_flow.flow_id);
+                console.log('   Current step:', currentStep);
+                console.log('   Previous order:', currentOrderId || 'none');
+                console.log('   New order(s):', newOrderNumbers);
+                
+                // Abandon current flow to trigger fresh start
+                await SessionStateService.abandonFlow(session.id, 'new_order_screenshot');
+                
+                // Clear active flow in session object so LLM sees no active flow
+                session.active_flow = null;
+                
+                console.log('🔄 Flow abandoned - will restart for new order lookup');
+            }
+        }
+
         // Build enhanced context
         let context = await this._buildLLMContext(session, agent, bufferedData);
+        
+        // Add image analysis hints to context if available
+        if (imageAnalysisHints) {
+            context.image_analysis_hints = imageAnalysisHints;
+        }
 
         // Get LLM decision with flow awareness
         let llmDecision = await this._getLLMDecision(context, agent);
@@ -876,7 +975,6 @@ If you can extract an order number from the image:
         // Handle KB search (same as parent)
         const kbSearchNeeded = llmDecision.search_kb || llmDecision.kb_search?.needed;
         if (kbSearchNeeded && agent.kb_id) {
-            // ... KB search logic (inherited from parent)
             const searchResult = await this._performKBSearch(context, llmDecision, agent);
             if (searchResult) {
                 context.kb_results = searchResult;

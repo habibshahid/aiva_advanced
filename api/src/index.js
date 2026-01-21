@@ -35,7 +35,7 @@ const templateRoutes = require('./routes/templates');
 const languageRoutes = require('./routes/languages');
 const flowEngineRoutes = require('./routes/flow-engine');
 const scrapeRoutes = require('./routes/scrape-sources');  
-  
+const chatMediaRoutes = require('./routes/chat-media');
 const sessionCleanup = require('./jobs/session-cleanup');
 
 const app = express();
@@ -162,6 +162,7 @@ app.use('/api/templates', templateRoutes); // NEW: /api/templates/:agentId
 app.use('/api/languages', languageRoutes);
 app.use('/api/flow-engine', flowEngineRoutes);
 app.use('/api/knowledge', scrapeRoutes);
+app.use('/api/chat-media', chatMediaRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {

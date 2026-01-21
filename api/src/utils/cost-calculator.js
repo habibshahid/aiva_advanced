@@ -7,7 +7,7 @@ require('dotenv').config();
 class CostCalculator {
   constructor() {
     // Profit margin from environment
-    this.profitMarginPercent = parseFloat(process.env.PROFIT_MARGIN_PERCENT || 20);
+    this.profitMarginPercent = parseFloat(process.env.PROFIT_MARGIN_PERCENT || 30);
     this.profitMargin = this.profitMarginPercent / 100;
 
     // OpenAI Chat Pricing (per 1M tokens)

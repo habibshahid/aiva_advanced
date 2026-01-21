@@ -2679,7 +2679,8 @@ Respond in valid JSON format.`
 				});
 				
 				// Update cost breakdown totals
-				const baseAnalysisCost = userAnalysisCost / 1.2; // Remove 20% profit margin
+				const profitMultiplier = 1 + (parseFloat(process.env.PROFIT_MARGIN_PERCENT || 30) / 100);
+				const baseAnalysisCost = userAnalysisCost / profitMultiplier; 
 				totalCost.base_cost = (totalCost.base_cost || 0) + baseAnalysisCost;
 				totalCost.profit_amount = (totalCost.profit_amount || 0) + (userAnalysisCost - baseAnalysisCost);
 				totalCost.final_cost = (totalCost.final_cost || 0) + userAnalysisCost;
@@ -4541,7 +4542,8 @@ Your response MUST be in JSON format with knowledge_search_needed=false.
 			});
 			
 			// Update cost breakdown totals
-			const baseAnalysisCost = userAnalysisCost / 1.2; // Remove profit margin to get base
+			const profitMultiplier = 1 + (parseFloat(process.env.PROFIT_MARGIN_PERCENT || 30) / 100);
+			const baseAnalysisCost = userAnalysisCost / profitMultiplier; 
 			totalCost.base_cost = (totalCost.base_cost || 0) + baseAnalysisCost;
 			totalCost.profit_amount = (totalCost.profit_amount || 0) + (userAnalysisCost - baseAnalysisCost);
 			totalCost.final_cost = (totalCost.final_cost || 0) + userAnalysisCost;

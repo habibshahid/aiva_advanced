@@ -23,6 +23,8 @@ const ShopifyService = require('./ShopifyService');
 const TranscriptionAnalysisService = require('./TranscriptionAnalysisService');
 const db = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const CreditService = require('./CreditService');
+const ChatMediaService = require('./ChatMediaService');
 
 class FlowEngineIntegration {
 
@@ -261,189 +263,292 @@ class FlowEngineIntegration {
      * Save user and assistant messages to chat history
      */
     static async _saveMessages(sessionId, userMessage, userImage, result) {
-        try {
-			const userCreatedAt = new Date();
-			const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1000);
+		try {
+			const responseText = result.response?.text || result.response?.html || '';
 			
-            const responseText = result.response?.text || result.response?.html || '';
-            
-            // Save user message
-            const userMessageId = uuidv4();
-            await db.query(
-                `INSERT INTO yovo_tbl_aiva_chat_messages (
-                    id, session_id, role, content, images, created_at
-                ) VALUES (?, ?, 'user', ?, ?, ?)`,
-                [
-                    userMessageId,
-                    sessionId,
-                    userMessage,
-                    userImage ? JSON.stringify([userImage]) : null,
+			// Generate timestamps with guaranteed ordering
+			// User message is 1 second BEFORE assistant to ensure proper ORDER BY
+			const userCreatedAt = new Date();
+			const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1000); // +1 second offset
+			
+			// ============================================
+			// 📷 COLLECT ALL MEDIA FROM VARIOUS SOURCES
+			// ============================================
+			let allMedia = [];
+			
+			// 1. Original userImage parameter (single image from direct call)
+			if (userImage) {
+				allMedia.push(userImage);
+			}
+			
+			// 2. Images processed during flow execution
+			if (result.images_processed && Array.isArray(result.images_processed)) {
+				allMedia = [...allMedia, ...result.images_processed];
+			}
+			
+			// 3. Images from message buffer
+			if (result.bufferedData?.images && Array.isArray(result.bufferedData.images)) {
+				allMedia = [...allMedia, ...result.bufferedData.images];
+			}
+			
+			// Deduplicate
+			allMedia = [...new Set(allMedia.filter(Boolean))];
+			
+			// ============================================
+			// 💾 SAVE MEDIA TO FILE STORAGE (NOT DB)
+			// ============================================
+			const userMessageId = uuidv4();
+			let savedMediaObjects = [];
+			
+			if (allMedia.length > 0) {
+				console.log(`📷 [FlowEngine] Processing ${allMedia.length} media items for message ${userMessageId}`);
+				
+				try {
+					// Save all media to storage, returns array of metadata objects
+					savedMediaObjects = await ChatMediaService.saveMedia(sessionId, userMessageId, allMedia);
+					console.log(`✅ [FlowEngine] Saved ${savedMediaObjects.length} media items to storage`);
+				} catch (mediaError) {
+					console.error(`❌ [FlowEngine] Error saving media:`, mediaError.message);
+					// Continue without media - don't fail the message save
+				}
+			}
+			
+			// ============================================
+			// 💾 SAVE USER MESSAGE
+			// ============================================
+			await db.query(
+				`INSERT INTO yovo_tbl_aiva_chat_messages (
+					id, session_id, role, content, images, created_at
+				) VALUES (?, ?, 'user', ?, ?, ?)`,
+				[
+					userMessageId,
+					sessionId,
+					userMessage,
+					savedMediaObjects.length > 0 ? JSON.stringify(savedMediaObjects) : null,
 					userCreatedAt
-                ]
-            );
+				]
+			);
 
-            // Save assistant message
-            const assistantMessageId = uuidv4();
-            
-            // Extract cost - handle both number and object formats
-            const cost = typeof result.cost === 'number' 
-                ? result.cost 
-                : (result.cost?.final_cost || result.cost?.base_cost || 0);
-            
-            // Extract tokens if available
-            const tokensInput = result.cost?.input_tokens || result.cost?.tokens?.input || result.tokens?.input || 0;
-            const tokensOutput = result.cost?.output_tokens || result.cost?.tokens?.output || result.tokens?.output || 0;
-            
-            // Build cost breakdown JSON
-            const costBreakdown = result.cost ? {
-                provider: result.cost.provider || 'openai',
-                model: result.cost.model || result.model || 'gpt-4o-mini',
-                input_tokens: tokensInput,
-                output_tokens: tokensOutput,
-                cached_tokens: result.cost.cached_tokens || 0,
-                input_cost: result.cost.input_cost || 0,
-                output_cost: result.cost.output_cost || 0,
-                cached_cost: result.cost.cached_cost || 0,
-                base_cost: result.cost.base_cost || 0,
-                profit_amount: result.cost.profit_amount || 0,
-                final_cost: result.cost.final_cost || cost
-            } : null;
-            
-            await db.query(
-                `INSERT INTO yovo_tbl_aiva_chat_messages (
-                    id, session_id, role, content, content_html, cost, cost_breakdown, tokens_input, tokens_output, created_at
-                ) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    assistantMessageId,
-                    sessionId,
-                    responseText,
-                    result.response?.html || null,
-                    cost,
-                    costBreakdown ? JSON.stringify(costBreakdown) : null,
-                    tokensInput,
-                    tokensOutput,
+			// ============================================
+			// 💾 SAVE ASSISTANT MESSAGE
+			// ============================================
+			const assistantMessageId = uuidv4();
+			
+			// Extract cost - handle both number and object formats
+			let cost = 0;
+			if (typeof result.cost === 'number') {
+				cost = result.cost;
+			} else if (result.cost) {
+				cost = result.cost.final_cost || result.cost.base_cost || 0;
+			}
+			
+			// Extract tokens if available
+			const tokensInput = result.cost?.input_tokens || result.cost?.tokens?.input || result.tokens?.input || 0;
+			const tokensOutput = result.cost?.output_tokens || result.cost?.tokens?.output || result.tokens?.output || 0;
+			
+			// Build cost breakdown JSON
+			const costBreakdown = result.cost ? {
+				provider: result.cost.provider || 'openai',
+				model: result.cost.model || result.model || 'gpt-4o-mini',
+				input_tokens: tokensInput,
+				output_tokens: tokensOutput,
+				cached_tokens: result.cost.cached_tokens || 0,
+				input_cost: result.cost.input_cost || 0,
+				output_cost: result.cost.output_cost || 0,
+				cached_cost: result.cost.cached_cost || 0,
+				base_cost: result.cost.base_cost || 0,
+				profit_amount: result.cost.profit_amount || 0,
+				final_cost: result.cost.final_cost || cost
+			} : null;
+			
+			await db.query(
+				`INSERT INTO yovo_tbl_aiva_chat_messages (
+					id, session_id, role, content, content_html, cost, cost_breakdown, tokens_input, tokens_output, created_at
+				) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, ?)`,
+				[
+					assistantMessageId,
+					sessionId,
+					responseText,
+					result.response?.html || null,
+					cost,
+					costBreakdown ? JSON.stringify(costBreakdown) : null,
+					tokensInput,
+					tokensOutput,
 					assistantCreatedAt
-                ]
-            );
+				]
+			);
 
-            // Update session statistics (message count and total cost)
-            // We count 2 messages: 1 user + 1 assistant
-            await db.query(
-                `UPDATE yovo_tbl_aiva_chat_sessions 
-                 SET total_messages = total_messages + 2,
-                     total_cost = total_cost + ?,
-                     last_activity_at = NOW()
-                 WHERE id = ?`,
-                [cost, sessionId]
-            );
+			// ============================================
+			// 📊 UPDATE SESSION STATISTICS
+			// ============================================
+			await db.query(
+				`UPDATE yovo_tbl_aiva_chat_sessions 
+				 SET total_messages = total_messages + 2,
+					 total_cost = total_cost + ?,
+					 last_activity_at = NOW()
+				 WHERE id = ?`,
+				[cost, sessionId]
+			);
 
-            console.log(`💾 Saved flow messages: user=${userMessageId}, assistant=${assistantMessageId}, cost=$${cost.toFixed(6)}`);
-            
-            // Trigger background analysis for user message (non-blocking)
-            if (userMessage && userMessage.trim()) {
-                this._analyzeMessageAsync(userMessageId, userMessage, sessionId)
-                    .catch(err => console.error('Background analysis error:', err));
-            }
-            
-            return { userMessageId, assistantMessageId, cost };
-        } catch (error) {
-            console.error('Error saving flow messages:', error);
-            // Don't throw - message saving failure shouldn't break the response
-            return null;
-        }
-    }
+			console.log(`💾 Saved flow messages: user=${userMessageId} (${savedMediaObjects.length} media), assistant=${assistantMessageId}, cost=$${cost.toFixed(6)}`);
+			
+			// ============================================
+			// 🔍 TRIGGER BACKGROUND ANALYSIS (NON-BLOCKING)
+			// ============================================
+			if (userMessage && userMessage.trim()) {
+				this._analyzeMessageAsync(userMessageId, userMessage, sessionId)
+					.catch(err => console.error('Background analysis error:', err));
+			}
+			
+			return { userMessageId, assistantMessageId, cost, mediaCount: savedMediaObjects.length };
+		} catch (error) {
+			console.error('Error saving flow messages:', error);
+			// Don't throw - message saving failure shouldn't break the response
+			return null;
+		}
+	}
     
     /**
-     * Analyze message in background (sentiment, language, intents)
-     * @private
-     */
-    static async _analyzeMessageAsync(messageId, content, sessionId) {
-        try {
-            console.info(`🔄 [ASYNC] Starting background analysis for message: ${messageId}`);
-            const startTime = Date.now();
-            
-            // Analyze the message
-            const analysis = await TranscriptionAnalysisService.analyzeMessage(
-                content,
-                'customer',
-                {}
-            );
-            
-            // Translate if not English
-            let translatedMessage = null;
-            if (analysis.language_detected && analysis.language_detected !== 'en') {
-                const translation = await TranscriptionAnalysisService.translateToEnglish(
-                    content,
-                    analysis.language_detected
-                );
-                translatedMessage = translation.translated_text;
-            }
-            
-            // Update message with analysis data
-            await db.query(
-                `UPDATE yovo_tbl_aiva_chat_messages SET
-                    language_detected = ?,
-                    translated_message = ?,
-                    sentiment = ?,
-                    sentiment_score = ?,
-                    sentiment_confidence = ?,
-                    profanity_detected = ?,
-                    profanity_score = ?,
-                    profane_words = ?,
-                    intents = ?,
-                    primary_intent = ?,
-                    intent_confidence = ?,
-                    topics = ?,
-                    keywords = ?,
-                    emotion_tags = ?,
-                    analyzed_at = ?,
-                    analysis_model = ?,
-                    analysis_cost = ?
-                WHERE id = ?`,
-                [
-                    analysis?.language_detected || null,
-                    translatedMessage || null,
-                    analysis?.sentiment || null,
-                    analysis?.sentiment_score || null,
-                    analysis?.sentiment_confidence || null,
-                    analysis?.profanity_detected ? 1 : 0,
-                    analysis?.profanity_score || 0.0,
-                    analysis?.profane_words ? JSON.stringify(analysis.profane_words) : null,
-                    analysis?.intents ? JSON.stringify(analysis.intents) : null,
-                    analysis?.primary_intent || null,
-                    analysis?.intent_confidence || null,
-                    analysis?.topics ? JSON.stringify(analysis.topics) : null,
-                    analysis?.keywords ? JSON.stringify(analysis.keywords) : null,
-                    analysis?.emotion_tags ? JSON.stringify(analysis.emotion_tags) : null,
-                    new Date(),
-                    analysis?.analysis_metadata?.model || null,
-                    analysis?.analysis_metadata?.cost || 0.0,
-                    messageId
-                ]
-            );
-            
-            const elapsed = Date.now() - startTime;
-            console.info(`✅ [ASYNC] Analysis complete for ${messageId} in ${elapsed}ms: sentiment=${analysis?.sentiment}, intent=${analysis?.primary_intent}`);
-            
-            // Update session cost with analysis cost
-            const analysisCost = (analysis?.analysis_metadata?.cost || 0) + 
-                               (translatedMessage ? 0.0001 : 0);
-            
-            if (analysisCost > 0 && sessionId) {
-                await db.query(
-                    `UPDATE yovo_tbl_aiva_chat_sessions 
-                     SET total_cost = total_cost + ?
-                     WHERE id = ?`,
-                    [analysisCost, sessionId]
-                );
-                console.info(`💰 [ASYNC] Added analysis cost $${analysisCost.toFixed(6)} to session ${sessionId}`);
-            }
-            
-        } catch (error) {
-            console.error(`❌ [ASYNC] Analysis failed for message ${messageId}:`, error.message);
-            // Don't throw - this is background processing, failure shouldn't affect user
-        }
-    }
+	 * Analyze message in background (sentiment, language, intents)
+	 * - Calculates profit margin from env
+	 * - Updates user message cost column
+	 * - Deducts credits for analysis
+	 * @private
+	 */
+	static async _analyzeMessageAsync(messageId, content, sessionId) {
+		try {
+			console.info(`🔄 [ASYNC] Starting background analysis for message: ${messageId}`);
+			const startTime = Date.now();
+			
+			// Analyze the message
+			const analysis = await TranscriptionAnalysisService.analyzeMessage(
+				content,
+				'customer',
+				{}
+			);
+			
+			// Translate if not English
+			let translatedMessage = null;
+			let translationCost = 0;
+			if (analysis.language_detected && analysis.language_detected !== 'en') {
+				// Add translation logic here if needed
+				translationCost = 0.0001; // Small fixed cost for translation
+			}
+			
+			// ============================================
+			// 💰 CALCULATE COST WITH PROFIT MARGIN FROM ENV
+			// ============================================
+			const baseAnalysisCost = (analysis?.analysis_metadata?.cost || 0) + translationCost;
+			const profitMarginPercent = parseFloat(process.env.PROFIT_MARGIN_PERCENT || 30);
+			const profitMargin = profitMarginPercent / 100;
+			const profitAmount = baseAnalysisCost * profitMargin;
+			const finalAnalysisCost = baseAnalysisCost + profitAmount;
+			
+			// ============================================
+			// 💾 UPDATE USER MESSAGE WITH ANALYSIS + COST
+			// ============================================
+			await db.query(
+				`UPDATE yovo_tbl_aiva_chat_messages SET
+					language_detected = ?,
+					translated_message = ?,
+					sentiment = ?,
+					sentiment_score = ?,
+					sentiment_confidence = ?,
+					profanity_detected = ?,
+					profanity_score = ?,
+					profane_words = ?,
+					intents = ?,
+					primary_intent = ?,
+					intent_confidence = ?,
+					topics = ?,
+					keywords = ?,
+					emotion_tags = ?,
+					analyzed_at = ?,
+					analysis_model = ?,
+					analysis_cost = ?,
+					cost = ?
+				WHERE id = ?`,
+				[
+					analysis?.language_detected || null,
+					translatedMessage || null,
+					analysis?.sentiment || null,
+					analysis?.sentiment_score || null,
+					analysis?.sentiment_confidence || null,
+					analysis?.profanity_detected ? 1 : 0,
+					analysis?.profanity_score || 0.0,
+					analysis?.profane_words ? JSON.stringify(analysis.profane_words) : null,
+					analysis?.intents ? JSON.stringify(analysis.intents) : null,
+					analysis?.primary_intent || null,
+					analysis?.intent_confidence || null,
+					analysis?.topics ? JSON.stringify(analysis.topics) : null,
+					analysis?.keywords ? JSON.stringify(analysis.keywords) : null,
+					analysis?.emotion_tags ? JSON.stringify(analysis.emotion_tags) : null,
+					new Date(),
+					analysis?.analysis_metadata?.model || 'gpt-4o-mini',
+					baseAnalysisCost,   // Store base cost in analysis_cost
+					finalAnalysisCost,  // Store final cost (with profit) in cost column
+					messageId
+				]
+			);
+			
+			const elapsed = Date.now() - startTime;
+			console.info(`✅ [ASYNC] Analysis complete for ${messageId} in ${elapsed}ms: sentiment=${analysis?.sentiment}, intent=${analysis?.primary_intent}, cost=$${finalAnalysisCost.toFixed(6)}`);
+			
+			// ============================================
+			// 📊 UPDATE SESSION COST WITH ANALYSIS COST
+			// ============================================
+			if (finalAnalysisCost > 0 && sessionId) {
+				await db.query(
+					`UPDATE yovo_tbl_aiva_chat_sessions 
+					 SET total_cost = total_cost + ?
+					 WHERE id = ?`,
+					[finalAnalysisCost, sessionId]
+				);
+				console.info(`💰 [ASYNC] Added analysis cost $${finalAnalysisCost.toFixed(6)} to session ${sessionId}`);
+			}
+			
+			// ============================================
+			// 💳 DEDUCT CREDITS FOR ANALYSIS
+			// ============================================
+			if (finalAnalysisCost > 0) {
+				try {
+					// Get tenant_id from session
+					const [sessions] = await db.query(
+						'SELECT tenant_id FROM yovo_tbl_aiva_chat_sessions WHERE id = ?',
+						[sessionId]
+					);
+					
+					if (sessions.length > 0) {
+						const tenantId = sessions[0].tenant_id;
+						
+						await CreditService.deductCredits(
+							tenantId,
+							finalAnalysisCost,
+							'message_analysis',
+							{
+								session_id: sessionId,
+								message_id: messageId,
+								base_cost: baseAnalysisCost,
+								profit_amount: profitAmount,
+								profit_margin_percent: profitMarginPercent,
+								analysis_type: 'sentiment_language_intent',
+								model: analysis?.analysis_metadata?.model || 'gpt-4o-mini'
+							},
+							messageId
+						);
+						console.info(`💳 [ASYNC] Deducted analysis credits $${finalAnalysisCost.toFixed(6)} from tenant ${tenantId}`);
+					}
+				} catch (creditError) {
+					console.error(`❌ [ASYNC] Failed to deduct analysis credits:`, creditError.message);
+					// Don't throw - credit deduction failure shouldn't break the flow
+				}
+			}
+			
+		} catch (error) {
+			console.error(`❌ [ASYNC] Analysis failed for message ${messageId}:`, error.message);
+			// Don't throw - this is background processing, failure shouldn't affect user
+		}
+	}
 
     /**
      * Build channel identifier from channel info
