@@ -162,10 +162,18 @@ export const clearCache = async (kbId = null) => {
   return response.data;
 };
 
+// Scrape Sources
+
 // Get scrape sources for a knowledge base
 export const getScrapeSources = (kbId) => {
   return api.get(`/knowledge/${kbId}/scrape-sources`);
 };
+
+// Update scrape source settings (auto-save)
+export const updateScrapeSource = (sourceId, data) => {
+  return api.patch(`/knowledge/scrape-sources/${sourceId}`, data);
+};
+
 // Trigger manual sync for a scrape source
 export const syncScrapeSource = (sourceId, force = false) => {
   return api.post(`/knowledge/scrape-sources/${sourceId}/sync`, { force });
@@ -177,8 +185,7 @@ export const checkScrapeChanges = (sourceId) => {
 };
 
 // Delete a scrape source
-export const deleteScrapeSource = (sourceId) => {
-  return api.delete(`/knowledge/scrape-sources/${sourceId}`);
+export const deleteScrapeSource = (sourceId, deleteDocuments = false) => {
+  return api.delete(`/knowledge/scrape-sources/${sourceId}?delete_documents=${deleteDocuments}`);
 };
-
 

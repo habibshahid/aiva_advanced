@@ -12,17 +12,11 @@ const api = axios.create({
 // Add token to requests
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
-    
-    //console.log('=== API REQUEST DEBUG ===');
-    //console.log('URL:', config.url);
-    //console.log('Token from localStorage:', token);
+    // Check both storages - localStorage for "remember me", sessionStorage for session-only
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
     
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      //console.log('Authorization header set:', config.headers.Authorization);
-    } else {
-      console.log('NO TOKEN FOUND');
     }
     
     return config;
@@ -39,8 +33,11 @@ api.interceptors.response.use(
     console.log('Error data:', error.response?.data);
     
     if (error.response?.status === 401) {
+      // Clear both storages
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      sessionStorage.removeItem('token');
+      sessionStorage.removeItem('user');
       // Let React Router handle redirect
     }
     return Promise.reject(error);

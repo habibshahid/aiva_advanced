@@ -18,20 +18,20 @@ const Login = () => {
   const location = useLocation();
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
+	  e.preventDefault();
+	  setLoading(true);
 
-    try {
-      await login(email, password);
-      toast.success('Welcome back!');
-      
-      const from = location.state?.from?.pathname || '/';
-      navigate(from, { replace: true });
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
+	  try {
+		await login(email, password, rememberMe);
+		toast.success('Welcome back!');
+		
+		const from = location.state?.from?.pathname || '/';
+		navigate(from, { replace: true });
+	  } catch (error) {
+		toast.error(error.response?.data?.error || 'Login failed');
+	  } finally {
+		setLoading(false);
+	  }
   };
 
   return (
