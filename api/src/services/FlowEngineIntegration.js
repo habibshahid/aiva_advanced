@@ -869,9 +869,33 @@ FlowEngine.registerFunction('search_products', async (params, agent, session, bu
                 : params.search_keywords;
         }
         
-        // Use message as fallback query
+        // Check if query is an unresolved template placeholder
+        if (searchQuery && searchQuery.includes('{{') && searchQuery.includes('}}')) {
+            console.log('⚠️ Query contains unresolved template, using bufferedData instead:', searchQuery);
+            searchQuery = null;
+        }
+        
+        // Use message as fallback query from bufferedData
         if (!searchQuery && bufferedData?.combinedMessage) {
             searchQuery = bufferedData.combinedMessage;
+        }
+        
+        // FINAL FALLBACK: Get last user message from session/chat history
+        if (!searchQuery && session?.id) {
+            try {
+                const [messages] = await db.query(
+                    `SELECT content FROM yovo_tbl_aiva_chat_messages 
+                     WHERE session_id = ? AND role = 'user' 
+                     ORDER BY created_at DESC LIMIT 1`,
+                    [session.id]
+                );
+                if (messages.length > 0 && messages[0].content) {
+                    searchQuery = messages[0].content;
+                    console.log('📝 Using last user message from DB as query:', searchQuery);
+                }
+            } catch (dbError) {
+                console.error('❌ Error fetching last message:', dbError);
+            }
         }
         
         // Get Shopify store - try kb_id first (like check_order_status), then direct config
@@ -992,7 +1016,7 @@ FlowEngine.registerFunction('search_products', async (params, agent, session, bu
             }
             
             // Fallback: Keyword search via ProductService
-            if (products.length === 0 && searchQuery) {
+            if (products.length === 0 && searchQuery && agent.kb_id) {
                 console.log('🔍 Falling back to keyword search:', searchQuery);
                 
                 try {
@@ -1048,24 +1072,36 @@ FlowEngine.registerFunction('search_products', async (params, agent, session, bu
                 query: searchQuery,
                 image: null,
                 topK: params.limit || 5,
-                searchType: 'hybrid'
+                searchType: 'hybrid',
+				filters: {
+					include_products: true
+				}
             });
             
-            products = results?.results?.product_results || [];
-        }
-        
-        // Final fallback: Shopify keyword search
-        if (products.length === 0 && hasShopify && searchQuery) {
-            console.log('🔍 Final fallback: Shopify keyword search');
-            
-            const results = await ShopifyService.searchProducts(
-                store.tenant_id || agent.tenant_id,
-                store.shop_domain,
-                store.access_token,
-                searchQuery,
-                params.limit || 5
-            );
-            products = results.products || [];
+            // KB search returns already-formatted products, map to internal structure
+			const kbProducts = results?.results?.product_results || [];
+			products = kbProducts.map(p => ({
+				id: p.product_id,
+				shopify_product_id: p.shopify_product_id,
+				title: p.name,
+				description: p.description,
+				vendor: p.vendor,
+				product_type: p.product_type,
+				tags: p.tags || [],
+				handle: p.handle || p.metadata?.handle,
+				shop_domain: p.shop_domain || p.metadata?.shop_domain || store?.shop_domain,
+				image_url: p.image_url,
+				variants: [{
+					price: p.price,
+					sku: p.sku || p.metadata?.sku,
+					inventory_quantity: p.inventory_quantity ?? p.total_inventory ?? 0
+				}],
+				similarity_score: p.similarity_score || 0,
+				match_percentage: p.similarity_score ? Math.round(p.similarity_score * 100) : 0
+			}));
+			if (products.length > 0) {
+				console.log(`✅ KB search found ${products.length} products`);
+			}
         }
         
         console.log('✅ Product search completed:', {

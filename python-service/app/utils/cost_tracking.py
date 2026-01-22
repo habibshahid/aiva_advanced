@@ -25,7 +25,7 @@ class CostTracker:
         }
         
         # Profit margin
-        self.profit_margin = 0.20  # 20%
+        self.profit_margin = 0.30  # 20%
     
     def calculate_document_processing_cost(self, result: Any) -> float:
         """
