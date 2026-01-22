@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel
 import logging
 import asyncio
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -663,6 +664,7 @@ async def scrape_sitemap(request: ScrapeSitemapRequest):
     """
     try:
         import aiohttp
+        import random
         
         # Get URLs from sitemap
         urls = await web_scraper.scrape_sitemap(request.sitemap_url)
@@ -676,7 +678,16 @@ async def scrape_sitemap(request: ScrapeSitemapRequest):
         # Scrape each URL
         processed_documents = []
         
-        async with aiohttp.ClientSession() as session:
+        if not web_scraper._stable_headers:
+            stable_ua = random.choice(web_scraper.user_agents)
+            web_scraper._stable_headers = {
+                'User-Agent': stable_ua,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+            }
+            
+        async with aiohttp.ClientSession(headers=web_scraper._stable_headers) as session:
             for url in urls:
                 try:
                     page_data = await web_scraper._scrape_single_page(session, url)

@@ -67,12 +67,26 @@ class WebScraper:
 
         # User-agents pool (choose ONE per crawl)
         self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'AIVA-Bot/1.0 (+https://intellicon.io/bot; aiva@intellicon.io)'
+            # Chrome on Windows (most common)
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            # Chrome on Mac
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            # Chrome on Linux
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            # Firefox on Windows
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+            # Firefox on Mac
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0',
+            # Edge on Windows (Chromium-based)
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
         ]
+        #self.user_agents = [
+        #    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        #    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/133.0',
+        #    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        #    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        #    'AIVA-Bot/1.0 (+https://intellicon.io/bot; aiva@intellicon.io)'
+        #]
 
     # =========================
     # Public API
@@ -106,25 +120,41 @@ class WebScraper:
 
         # Stable identity for the WHOLE crawl (one UA, consistent headers)
         stable_ua = random.choice(self.user_agents)
+        
+        # Determine browser type from UA to set matching sec-ch-ua
+        is_firefox = 'Firefox' in stable_ua
+        is_edge = 'Edg/' in stable_ua
+        
+        if is_firefox:
+            # Firefox doesn't send sec-ch-ua headers
+            sec_ch_ua = None
+        elif is_edge:
+            sec_ch_ua = '"Chromium";v="131", "Microsoft Edge";v="131", "Not-A.Brand";v="99"'
+        else:
+            sec_ch_ua = '"Chromium";v="131", "Google Chrome";v="131", "Not-A.Brand";v="99"'
+        
         self._stable_headers = {
             'User-Agent': stable_ua,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            # Slightly richer, browser-like headers
-            "DNT": "1",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-User": "?1",
-            "Sec-Fetch-Dest": "document",
-            "sec-ch-ua": '"Chromium";v="120", "Not=A?Brand";v="24"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
+            'DNT': '1',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-User': '?1',
+            'Sec-Fetch-Dest': 'document',
         }
+        
+        # Add sec-ch-ua headers only for Chrome/Edge (Firefox doesn't send them)
+        if sec_ch_ua:
+            self._stable_headers['sec-ch-ua'] = sec_ch_ua
+            self._stable_headers['sec-ch-ua-mobile'] = '?0'
+            self._stable_headers['sec-ch-ua-platform'] = '"Windows"' if 'Windows' in stable_ua else '"macOS"' if 'Macintosh' in stable_ua else '"Linux"'
+
 
         # If this domain is already flagged for Playwright, escalate early
         if base_host in self._playwright_domains and PLAYWRIGHT_AVAILABLE:
@@ -238,7 +268,13 @@ class WebScraper:
     async def scrape_sitemap(self, sitemap_url: str) -> List[str]:
         """Parse a sitemap (or sitemap index) and return URLs."""
         urls: List[str] = []
-        async with aiohttp.ClientSession(headers=self._stable_headers or {}) as session:
+        sitemap_headers = self._stable_headers or {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'application/xml,text/xml,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+        }
+        async with aiohttp.ClientSession(headers=sitemap_headers) as session:
             try:
                 async with session.get(sitemap_url, timeout=self.timeout) as response:
                     if not (200 <= response.status < 300):
@@ -277,10 +313,26 @@ class WebScraper:
             'needs_playwright': False,
         }
 
-        headers = (self._stable_headers or {
-            'User-Agent': random.choice(self.user_agents),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        })
+        # Always use full browser-like headers to avoid being blocked
+        stable_ua = random.choice(self.user_agents)
+        headers = self._stable_headers or {
+            'User-Agent': stable_ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'DNT': '1',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-User': '?1',
+            'Sec-Fetch-Dest': 'document',
+            'sec-ch-ua': '"Chromium";v="131", "Google Chrome";v="131", "Not-A.Brand";v="99"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+        }
 
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
@@ -495,6 +547,19 @@ class WebScraper:
         logger.info(f"🎭 Starting Playwright crawl: {url}")
 
         stable_ua = (self._stable_headers or {}).get('User-Agent', random.choice(self.user_agents))
+        
+        # Determine if Chrome-based UA for sec-ch-ua headers
+        is_chrome = 'Chrome' in stable_ua and 'Firefox' not in stable_ua
+        
+        # Build extra headers for Playwright
+        extra_headers = {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'DNT': '1',
+        }
+        if is_chrome:
+            extra_headers['sec-ch-ua'] = '"Chromium";v="131", "Google Chrome";v="131", "Not-A.Brand";v="99"'
+            extra_headers['sec-ch-ua-mobile'] = '?0'
+            extra_headers['sec-ch-ua-platform'] = '"Windows"'
 
         try:
             async with async_playwright() as p:
@@ -506,8 +571,9 @@ class WebScraper:
                     viewport={'width': 1366, 'height': 768},
                     user_agent=stable_ua,
                     java_script_enabled=True,
-                    timezone_id="America/New_York",  # adjust if you prefer
+                    timezone_id="America/New_York",
                     locale="en-US",
+                    extra_http_headers=extra_headers,  # <-- ADD THIS
                 )
                 # Stealth
                 await context.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
