@@ -64,7 +64,7 @@ module.exports = {
                         INDEX idx_sync_status (sync_status),
                         
                         FOREIGN KEY (kb_id) REFERENCES yovo_tbl_aiva_knowledge_bases(id) ON DELETE CASCADE
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                 `);
                 console.log('✓ Created yovo_tbl_aiva_scrape_sources table');
             } else {
