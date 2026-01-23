@@ -599,7 +599,7 @@ class WebScraper:
 
                     logger.info(f"🎭 Scraping: {current_url} (depth: {depth})")
                     try:
-                        await page.goto(current_url, referer=referer, wait_until='domcontentloaded', timeout=45000)
+                        await page.goto(current_url, referer=referer, wait_until='networkidle', timeout=60000)
                         await page.wait_for_timeout(random.randint(3500, 9000))
                         try:
                             await page.wait_for_load_state('networkidle', timeout=10000)
@@ -610,7 +610,27 @@ class WebScraper:
                         await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
                         await page.wait_for_timeout(random.randint(1200, 2500))
 
-                        html = await page.content()
+                        # Retry content retrieval if page is still navigating
+                        html = None
+                        for attempt in range(3):
+                            try:
+                                # Wait for any pending navigation to finish
+                                try:
+                                    await page.wait_for_load_state('load', timeout=5000)
+                                except Exception:
+                                    pass
+                                html = await page.content()
+                                break
+                            except Exception as content_err:
+                                if 'navigating' in str(content_err).lower() and attempt < 2:
+                                    logger.warning(f"🎭 Page still navigating, retry {attempt + 1}/3")
+                                    await page.wait_for_timeout(3000)
+                                else:
+                                    raise content_err
+
+                        if html is None:
+                            raise Exception("Failed to get page content after retries")
+
                         title = await page.title()
 
                         if self._is_bot_protection(html):

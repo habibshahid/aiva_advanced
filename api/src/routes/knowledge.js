@@ -1614,4 +1614,82 @@ router.get('/scrape-sources/:sourceId/check-changes', authenticate, async (req, 
   }
 });
 
+router.post('/:kbId/scrape-url-async', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const { kbId } = req.params;
+    const { url, max_depth = 2, max_pages = 20, metadata = {} } = req.body;
+    
+    if (!url) {
+      return res.status(400).json(rb.error('URL is required', 400));
+    }
+    
+    const kb = await KnowledgeService.getKnowledgeBase(kbId);
+    if (!kb) {
+      return res.status(404).json(ResponseBuilder.notFound('Knowledge base'));
+    }
+    
+    // Check ownership
+    if (kb.tenant_id !== (req.user.tenant_id || req.user.id) && req.user.role !== 'super_admin') {
+      return res.status(403).json(ResponseBuilder.forbidden());
+    }
+    
+    // Call Python async endpoint
+    const pythonResponse = await axios.post(
+      `${process.env.PYTHON_SERVICE_URL}/api/v1/documents/scrape-url-async`,
+      {
+        url,
+        kb_id: kbId,
+        tenant_id: kb.tenant_id,
+        max_depth,
+        max_pages,
+        metadata
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': process.env.PYTHON_SERVICE_API_KEY
+        },
+        timeout: 30000 // 30 seconds - just to start the job
+      }
+    );
+    
+    res.json(rb.success(pythonResponse.data));
+    
+  } catch (error) {
+    console.error('Async scrape error:', error);
+    res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
+
+// Get scrape job status
+router.get('/scrape-job/:jobId/status', authenticate, async (req, res) => {
+  const rb = new ResponseBuilder();
+  
+  try {
+    const { jobId } = req.params;
+    
+    const pythonResponse = await axios.get(
+      `${process.env.PYTHON_SERVICE_URL}/api/v1/documents/scrape-job/${jobId}/status`,
+      {
+        headers: {
+          'X-API-Key': process.env.PYTHON_SERVICE_API_KEY
+        },
+        timeout: 10000
+      }
+    );
+    
+    res.json(rb.success(pythonResponse.data));
+    
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return res.status(404).json(rb.error('Scrape job not found', 404));
+    }
+    console.error('Get scrape job status error:', error);
+    res.status(500).json(rb.error(error.message, 500));
+  }
+});
+
 module.exports = router;

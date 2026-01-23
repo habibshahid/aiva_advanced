@@ -189,3 +189,70 @@ export const deleteScrapeSource = (sourceId, deleteDocuments = false) => {
   return api.delete(`/knowledge/scrape-sources/${sourceId}?delete_documents=${deleteDocuments}`);
 };
 
+// Add these methods to your existing knowledgeApi.js
+
+/**
+ * Start async URL scraping job
+ * @param {string} kbId - Knowledge base ID
+ * @param {Object} data - Scrape parameters
+ * @returns {Promise<Object>} Job info with job_id
+ */
+export const scrapeUrlAsync = async (kbId, { url, max_depth = 2, max_pages = 20, metadata = {} }) => {
+  const response = await api.post(`/knowledge/${kbId}/scrape-url-async`, {
+    url,
+    max_depth,
+    max_pages,
+    metadata
+  });
+  return response.data;
+};
+
+/**
+ * Get scrape job status
+ * @param {string} jobId - Job ID
+ * @returns {Promise<Object>} Job status
+ */
+export const getScrapeJobStatus = async (jobId) => {
+  const response = await api.get(`/knowledge/scrape-job/${jobId}/status`);
+  return response.data;
+};
+
+/**
+ * Poll scrape job until completion
+ * @param {string} jobId - Job ID
+ * @param {Function} onProgress - Progress callback
+ * @param {number} intervalMs - Polling interval (default 2000ms)
+ * @param {number} maxAttempts - Max polling attempts (default 300 = 10 mins)
+ * @returns {Promise<Object>} Final job status
+ */
+export const waitForScrapeCompletion = async (jobId, onProgress, intervalMs = 2000, maxAttempts = 300) => {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await getScrapeJobStatus(jobId);
+      const status = response.data;
+      
+      if (onProgress) {
+        onProgress(status);
+      }
+      
+      if (status.status === 'completed') {
+        return status;
+      }
+      
+      if (status.status === 'failed') {
+        throw new Error(status.error_message || 'Scraping failed');
+      }
+      
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+      
+    } catch (error) {
+      if (error.message.includes('failed') || error.message.includes('not found')) {
+        throw error;
+      }
+      console.warn(`Polling attempt ${attempt + 1} failed:`, error.message);
+    }
+  }
+  
+  throw new Error('Scraping timed out');
+};

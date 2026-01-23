@@ -93,6 +93,18 @@ class UpdateScrapeSourceRequest(BaseModel):
     sync_interval_hours: Optional[int] = None
     max_depth: Optional[int] = None
     max_pages: Optional[int] = None
+  
+class ScrapeJobStatusResponse(BaseModel):
+    job_id: str
+    status: str  # queued, scraping, processing, completed, failed
+    progress: int = 0
+    current_step: Optional[str] = None
+    pages_scraped: int = 0
+    pages_processed: int = 0
+    total_pages: int = 0
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
     
 # ============================================
 # ASYNC Document Upload (NEW - Primary endpoint)
@@ -887,3 +899,196 @@ async def check_scrape_source_changes(source_id: str):
     except Exception as e:
         logger.error(f"Check changes error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+        
+@router.post("/documents/scrape-url-async")
+async def scrape_url_async(request: ScrapeUrlRequest, background_tasks: BackgroundTasks):
+    """
+    Scrape URL asynchronously - returns immediately with job_id.
+    Use GET /documents/scrape-job/{job_id}/status to check progress.
+    """
+    try:
+        job_id = str(uuid.uuid4())
+        
+        # Get job processor for Redis status tracking
+        job_processor = get_document_job_processor()
+        
+        # Create scrape job in Redis
+        job_data = {
+            "job_id": job_id,
+            "kb_id": request.kb_id,
+            "tenant_id": request.tenant_id,
+            "url": request.url,
+            "max_depth": request.max_depth,
+            "max_pages": request.max_pages,
+            "status": "queued",
+            "progress": 0,
+            "current_step": "Queued for scraping",
+            "pages_scraped": 0,
+            "pages_processed": 0,
+            "total_pages": 0,
+            "error_message": "",
+            "created_at": datetime.now().isoformat(),
+            "completed_at": ""
+        }
+        
+        # Store job in Redis
+        job_key = f"scrape_job:{job_id}"
+        job_processor.redis_client.hset(job_key, mapping={k: str(v) if v is not None else "" for k, v in job_data.items()})
+        job_processor.redis_client.expire(job_key, 86400)  # 24 hours TTL
+        
+        # Add background task
+        background_tasks.add_task(
+            _process_scrape_job_background,
+            job_id=job_id,
+            url=request.url,
+            kb_id=request.kb_id,
+            tenant_id=request.tenant_id,
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+            metadata=request.metadata or {}
+        )
+        
+        logger.info(f"Scrape job {job_id} queued for URL: {request.url}")
+        
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Scraping started. Use GET /documents/scrape-job/{job_id}/status to check progress."
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create scrape job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/documents/scrape-job/{job_id}/status", response_model=ScrapeJobStatusResponse)
+async def get_scrape_job_status(job_id: str):
+    """
+    Get scrape job status
+    """
+    try:
+        job_processor = get_document_job_processor()
+        job_key = f"scrape_job:{job_id}"
+        job_data = job_processor.redis_client.hgetall(job_key)
+        
+        if not job_data:
+            raise HTTPException(status_code=404, detail="Scrape job not found")
+        
+        # Convert Redis data
+        return ScrapeJobStatusResponse(
+            job_id=job_data.get("job_id", job_id),
+            status=job_data.get("status", "unknown"),
+            progress=int(job_data.get("progress", 0)),
+            current_step=job_data.get("current_step") or None,
+            pages_scraped=int(job_data.get("pages_scraped", 0)),
+            pages_processed=int(job_data.get("pages_processed", 0)),
+            total_pages=int(job_data.get("total_pages", 0)),
+            error_message=job_data.get("error_message") or None,
+            created_at=job_data.get("created_at") or None,
+            completed_at=job_data.get("completed_at") or None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get scrape job status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _process_scrape_job_background(
+    job_id: str,
+    url: str,
+    kb_id: str,
+    tenant_id: str,
+    max_depth: int,
+    max_pages: int,
+    metadata: dict
+):
+    """
+    Background task to process scrape job
+    """
+    job_processor = get_document_job_processor()
+    job_key = f"scrape_job:{job_id}"
+    
+    def update_status(status: str, progress: int = None, current_step: str = None, **kwargs):
+        updates = {"status": status}
+        if progress is not None:
+            updates["progress"] = str(progress)
+        if current_step:
+            updates["current_step"] = current_step
+        for k, v in kwargs.items():
+            updates[k] = str(v) if v is not None else ""
+        job_processor.redis_client.hset(job_key, mapping=updates)
+    
+    try:
+        update_status("scraping", 10, "Starting web scrape...")
+        
+        # Scrape website
+        scrape_result = await web_scraper.scrape_url(
+            url=url,
+            max_depth=max_depth,
+            max_pages=max_pages
+        )
+        
+        total_pages = scrape_result.get('total_pages', 0)
+        update_status("scraping", 30, f"Scraped {total_pages} pages", 
+                     pages_scraped=total_pages, total_pages=total_pages)
+        
+        if total_pages == 0:
+            update_status("failed", 100, "No pages could be scraped",
+                         error_message="No pages could be scraped from the URL",
+                         completed_at=datetime.now().isoformat())
+            return
+        
+        # Process each scraped page
+        update_status("processing", 40, "Processing scraped content...")
+        processed_count = 0
+        
+        for i, page in enumerate(scrape_result['pages']):
+            document_id = str(uuid.uuid4())
+            
+            try:
+                result = await document_processor.process_text_content(
+                    document_id=document_id,
+                    kb_id=kb_id,
+                    tenant_id=tenant_id,
+                    text=page['text'],
+                    title=page['title'],
+                    source_url=page['url'],
+                    metadata={
+                        **metadata,
+                        **page.get('metadata', {}),
+                        'source_type': 'web_scrape',
+                        'depth': page.get('depth', 0),
+                        'scrape_job_id': job_id
+                    }
+                )
+                processed_count += 1
+                
+                # Update progress
+                progress = 40 + int((i + 1) / total_pages * 50)
+                update_status("processing", progress, 
+                             f"Processed {processed_count}/{total_pages} pages",
+                             pages_processed=processed_count)
+                             
+            except Exception as e:
+                logger.error(f"Error processing page {page['url']}: {e}")
+                continue
+        
+        # Update KB stats
+        if processed_count > 0:
+            await job_processor._update_kb_stats(kb_id)
+        
+        # Mark completed
+        update_status("completed", 100, 
+                     f"Completed: {processed_count} pages processed",
+                     pages_processed=processed_count,
+                     completed_at=datetime.now().isoformat())
+        
+        logger.info(f"Scrape job {job_id} completed: {processed_count}/{total_pages} pages")
+        
+    except Exception as e:
+        logger.error(f"Scrape job {job_id} failed: {e}")
+        update_status("failed", 100, str(e),
+                     error_message=str(e),
+                     completed_at=datetime.now().isoformat())
