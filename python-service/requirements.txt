@@ -12,11 +12,15 @@ openpyxl==3.1.2
 beautifulsoup4==4.12.3
 lxml==5.1.0
 markdown==3.5.1
+pdfminer.six>=20231228
+pdfplumber==0.11.8
+xlsxwriter>=3.1.0
 
 # Text Processing
 nltk==3.8.1
 unidecode==1.3.8
 langdetect==1.0.9
+html2text>=2020.1.16
 
 # AI/ML
 openai>=1.12.0
@@ -25,7 +29,14 @@ pillow==10.2.0
 torch==2.1.2
 torchvision==0.16.2
 transformers==4.37.2
-faiss-cpu==1.7.4
+huggingface-hub>=0.20.0
+safetensors>=0.4.0
+faiss-cpu>=1.7.4
+
+# LangChain
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-text-splitters>=1.0.0
 
 # Vector Storage
 redis==5.0.1
@@ -34,16 +45,19 @@ numpy==1.26.3
 # Database
 mysql-connector-python==8.3.0
 
+# HTTP clients
+requests>=2.31.0
+httpx>=0.26.0
+aiohttp==3.9.1
+
 # Utilities
 python-dotenv==1.0.0
-pydantic==2.5.3
+pydantic>=2.5.3
 pydantic-settings==2.1.0
+brotli==1.2.0
 
-aiohttp==3.9.1
-beautifulsoup4==4.12.3
-
-# Logging and Monitoring
-python-json-logger==2.0.7
-pdfplumber==0.11.8
-html2text>=2020.1.16
+# Browser automation
 playwright==1.57.0
+
+# Logging
+python-json-logger==2.0.7
