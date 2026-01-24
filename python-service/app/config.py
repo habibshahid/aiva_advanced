@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str
     
+    FIRECRAWL_API_KEY: Optional[str] = os.getenv('FIRECRAWL_API_KEY', None)
+    
     # Embedding
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSION: int = 1536

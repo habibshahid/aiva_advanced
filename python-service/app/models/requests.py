@@ -19,6 +19,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="Number of results")
     search_type: str = Field("hybrid", pattern="^(text|image|hybrid)$")
     filters: Optional[Dict[str, Any]] = Field(default={}, description="Additional filters")
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
 
 class EmbeddingRequest(BaseModel):

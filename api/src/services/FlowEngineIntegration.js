@@ -612,11 +612,23 @@ class FlowEngineIntegration {
      * Convert FlowEngine result to ChatService-compatible format
      */
     static _convertToLegacyFormat(result, agentId) {
-        // Extract products from function result if search_products was executed
-        let products = [];
-        if (result.function_executed === 'search_products' && result.function_result?.products) {
-            products = result.function_result.products;
-        }
+		// Extract products from function result if search_products was executed
+		let products = [];
+		
+		// Check multiple locations where products might be stored
+		if (result.function_executed === 'search_products' && result.function_result?.products) {
+			// Direct function execution
+			products = result.function_result.products;
+		} else if (result.flow?.llm_context?.function_result?.products) {
+			// Flow execution with LLM context
+			products = result.flow.llm_context.function_result.products;
+		} else if (result.flow?.function_result?.products) {
+			// Flow execution direct result
+			products = result.flow.function_result.products;
+		}
+		
+		console.log('📦 [_convertToLegacyFormat] Extracted products:', products.length, 
+			'from:', result.function_executed ? 'direct' : (result.flow?.llm_context ? 'flow.llm_context' : 'flow.function_result'));
         
         return {
             session_id: result.session_id,

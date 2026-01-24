@@ -49,6 +49,20 @@ try:
 except ImportError:
     logger.info("ℹ️ Playwright not installed - bot-protected sites may fail")
 
+# At the top of the file, add:
+try:
+    from playwright_stealth import stealth_async
+    STEALTH_AVAILABLE = True
+except ImportError:
+    STEALTH_AVAILABLE = False
+    logger.info("ℹ️ playwright-stealth not installed - using basic stealth")
+
+FIRECRAWL_AVAILABLE = False
+try:
+    from firecrawl import Firecrawl
+    FIRECRAWL_AVAILABLE = True
+except ImportError:
+    logger.info("ℹ️ Firecrawl not installed - pip install firecrawl-py")
 
 class WebScraper:
     """Scrape and extract content from websites (polite + WP-aware)."""
@@ -64,6 +78,9 @@ class WebScraper:
 
         # Domains we should auto-escalate to Playwright
         self._playwright_domains: Set[str] = set()
+        
+        self._firecrawl_client = None
+        self._firecrawl_domains: Set[str] = set()
 
         # User-agents pool (choose ONE per crawl)
         self.user_agents = [
@@ -155,6 +172,10 @@ class WebScraper:
             self._stable_headers['sec-ch-ua-mobile'] = '?0'
             self._stable_headers['sec-ch-ua-platform'] = '"Windows"' if 'Windows' in stable_ua else '"macOS"' if 'Macintosh' in stable_ua else '"Linux"'
 
+        # If this domain needs Firecrawl (captcha-protected), use it directly
+        if base_host in self._firecrawl_domains and FIRECRAWL_AVAILABLE:
+            logger.info(f"🔥 Using Firecrawl for known captcha-protected domain: {base_host}")
+            return await self._scrape_with_firecrawl(url, max_depth, max_pages)
 
         # If this domain is already flagged for Playwright, escalate early
         if base_host in self._playwright_domains and PLAYWRIGHT_AVAILABLE:
@@ -354,6 +375,15 @@ class WebScraper:
                 result['error'] = 'Connection timed out'
             except Exception as e:
                 result['error'] = str(e)
+                
+        # Check if Firecrawl might help
+        if result.get('needs_playwright') and FIRECRAWL_AVAILABLE:
+            result['needs_firecrawl'] = True
+            result['firecrawl_available'] = True
+        else:
+            result['needs_firecrawl'] = False
+            result['firecrawl_available'] = FIRECRAWL_AVAILABLE
+            
         return result
 
     # =========================
@@ -565,7 +595,29 @@ class WebScraper:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
-                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+                    args=[
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-infobars',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--window-size=1366,768',
+                        '--start-maximized',
+                        '--disable-extensions',
+                        '--disable-plugins',
+                        '--disable-web-security',
+                        '--ignore-certificate-errors',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-background-networking',
+                        '--disable-sync',
+                        '--disable-translate',
+                        '--hide-scrollbars',
+                        '--metrics-recording-only',
+                        '--mute-audio',
+                        '--no-zygote',
+                    ]
                 )
                 context = await browser.new_context(
                     viewport={'width': 1366, 'height': 768},
@@ -576,9 +628,68 @@ class WebScraper:
                     extra_http_headers=extra_headers,  # <-- ADD THIS
                 )
                 # Stealth
-                await context.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
+                stealth_js = """
+                // Webdriver
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                
+                // Chrome runtime
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+                
+                // Permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+                
+                // Plugins
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                
+                // Languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                
+                // Platform
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32'
+                });
+                
+                // Hardware concurrency
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8
+                });
+                
+                // Device memory
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
+                
+                // WebGL Vendor
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) return 'Intel Inc.';
+                    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                    return getParameter.call(this, parameter);
+                };
+                
+                // Console.debug override
+                console.debug = () => {};
+                """
+                await context.add_init_script(stealth_js)
 
                 page = await context.new_page()
+                
+                if STEALTH_AVAILABLE:
+                    await stealth_async(page)
 
                 # Small first-party cookie to look “lived in”
                 try:
@@ -634,11 +745,34 @@ class WebScraper:
                         title = await page.title()
 
                         if self._is_bot_protection(html):
-                            logger.warning("🎭 Protection page; waiting and retrying once")
-                            await page.wait_for_timeout(8000)
-                            html = await page.content()
-                            if self._is_bot_protection(html):
+                            logger.warning("🎭 Protection page detected; attempting to wait for challenge")
+                            
+                            # Try multiple times with increasing waits
+                            challenge_passed = False
+                            for challenge_attempt in range(3):
+                                wait_time = 10.0 + (challenge_attempt * 5.0)  # 10s, 15s, 20s
+                                logger.info(f"🎭 Waiting {wait_time}s for challenge (attempt {challenge_attempt + 1}/3)")
+                                await page.wait_for_timeout(int(wait_time * 1000))
+                                
+                                html = await page.content()
+                                if not self._is_bot_protection(html):
+                                    challenge_passed = True
+                                    logger.info("🎭 Challenge passed!")
+                                    break
+                            
+                            if not challenge_passed:
                                 logger.error(f"🎭 Could not bypass security for {current_url}")
+                                
+                                # Mark domain as needing Firecrawl
+                                domain = self._norm_host(urlparse(current_url).netloc)
+                                self._firecrawl_domains.add(domain)
+                                
+                                # If this is the root URL and Firecrawl is available, use it
+                                if depth == 0 and FIRECRAWL_AVAILABLE:
+                                    logger.info(f"🔥 Escalating to Firecrawl for {domain}")
+                                    await browser.close()
+                                    return await self._scrape_with_firecrawl(url, max_depth, max_pages)
+                                
                                 await asyncio.sleep(random.uniform(4, 7))
                                 continue
 
@@ -676,6 +810,175 @@ class WebScraper:
         logger.info(f"🎭 Crawl complete: {len(pages)} pages")
         return self._result(url, pages, max_depth_reached)
 
+    async def _scrape_with_playwright_visible(
+        self,
+        url: str,
+        max_depth: int = 1,
+        max_pages: int = 5,
+        allowed_hosts: Set[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Last resort: Use visible browser (non-headless) for heavily protected sites.
+        Note: Requires DISPLAY environment variable on Linux.
+        """
+        if not PLAYWRIGHT_AVAILABLE:
+            logger.error("Playwright not available")
+            return self._result(url, [])
+            
+        pages: List[Dict[str, Any]] = []
+        
+        logger.info(f"🎭 Starting VISIBLE Playwright crawl (last resort): {url}")
+        
+        stable_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        
+        try:
+            async with async_playwright() as p:
+                # Launch in visible mode
+                browser = await p.chromium.launch(
+                    headless=False,  # VISIBLE
+                    args=[
+                        '--no-sandbox',
+                        '--disable-blink-features=AutomationControlled',
+                        '--start-maximized',
+                    ]
+                )
+                
+                context = await browser.new_context(
+                    viewport={'width': 1366, 'height': 768},
+                    user_agent=stable_ua,
+                    java_script_enabled=True,
+                )
+                
+                # Stealth
+                await context.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
+                
+                page = await context.new_page()
+                
+                logger.info(f"🎭 Navigating to {url} in visible browser...")
+                await page.goto(url, wait_until='networkidle', timeout=60000)
+                
+                # Wait longer for manual challenge solving if needed
+                logger.info("🎭 Waiting 30s for any challenges to complete...")
+                await page.wait_for_timeout(30000)
+                
+                html = await page.content()
+                title = await page.title()
+                
+                if not self._is_bot_protection(html):
+                    soup = BeautifulSoup(html, 'lxml')
+                    extracted = self._extract_content(soup)
+                    
+                    if len(extracted['text'].strip()) > 50:
+                        pages.append({
+                            'html': html,
+                            'title': title or extracted['title'],
+                            'text': extracted['text'],
+                            'metadata': extracted['metadata'],
+                            'url': url,
+                            'depth': 0,
+                        })
+                
+                await browser.close()
+                
+        except Exception as e:
+            logger.error(f"🎭 Visible Playwright error: {e}")
+        
+        return self._result(url, pages)
+        
+    # =========================
+    # Firecrawl fallback (for captcha-protected sites)
+    # =========================
+
+    async def _scrape_with_firecrawl(
+        self,
+        url: str,
+        max_depth: int,
+        max_pages: int,
+    ) -> Dict[str, Any]:
+        """
+        Scrape using Firecrawl API - handles captchas and bot protection.
+        This is the final fallback when HTTP and Playwright both fail.
+        """
+        client = self._get_firecrawl_client()
+        if not client:
+            logger.error("🔥 Firecrawl not available (no API key or not installed)")
+            return self._result(url, [])
+
+        pages: List[Dict[str, Any]] = []
+        
+        try:
+            logger.info(f"🔥 Starting Firecrawl crawl: {url} (max_pages={max_pages})")
+            
+            # Use Firecrawl V2 crawl method
+            crawl_result = client.crawl(
+                url,
+                limit=max_pages,
+                scrape_options={
+                    'formats': ['markdown', 'html'],
+                },
+                poll_interval=5
+            )
+            
+            # Process results - V2 returns data directly in the result
+            if crawl_result and crawl_result.get('data'):
+                for item in crawl_result['data']:
+                    markdown = item.get('markdown', '')
+                    html = item.get('html', '')
+                    metadata = item.get('metadata', {})
+                    page_url = metadata.get('sourceURL', url)
+                    title = metadata.get('title', '')
+                    
+                    if markdown and len(markdown.strip()) > 50:
+                        pages.append({
+                            'html': html or markdown,
+                            'title': title,
+                            'text': markdown,
+                            'metadata': {
+                                'source': 'firecrawl',
+                                'description': metadata.get('description', ''),
+                                'language': metadata.get('language', 'en'),
+                            },
+                            'url': page_url,
+                            'depth': 0,
+                        })
+                
+                logger.info(f"🔥 Firecrawl complete: {len(pages)} pages scraped")
+            else:
+                logger.warning(f"🔥 Firecrawl returned no data for {url}")
+                
+        except Exception as e:
+            logger.error(f"🔥 Firecrawl error: {e}")
+        
+        return self._result(url, pages)
+
+    async def _scrape_single_with_firecrawl(self, url: str) -> Optional[Dict[str, Any]]:
+        """Scrape a single URL with Firecrawl"""
+        client = self._get_firecrawl_client()
+        if not client:
+            return None
+            
+        try:
+            logger.info(f"🔥 Firecrawl single page: {url}")
+            
+            # Use Firecrawl V2 scrape method
+            result = client.scrape(url, formats=['markdown', 'html'])
+            
+            if result and result.get('markdown'):
+                metadata = result.get('metadata', {})
+                return {
+                    'html': result.get('html', result['markdown']),
+                    'title': metadata.get('title', ''),
+                    'text': result['markdown'],
+                    'metadata': {
+                        'source': 'firecrawl',
+                        'description': metadata.get('description', ''),
+                    },
+                }
+        except Exception as e:
+            logger.error(f"🔥 Firecrawl single page error: {e}")
+        
+        return None
+        
     # =========================
     # robots.txt & sitemaps
     # =========================

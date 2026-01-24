@@ -72,7 +72,8 @@ async def search_knowledge(request: SearchRequest):
                 top_k=top_k,
                 search_type=search_type,
                 filters=request.filters or {},
-                include_products=include_products
+                include_products=include_products,
+                conversation_history=request.conversation_history
             )
         else:
             # Original search (unchanged)

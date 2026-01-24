@@ -786,7 +786,7 @@ async listDocumentsWithStatus(kbId, options = {}) {
    * @param {Object} params - Search parameters
    * @returns {Promise<Object>} Search results with cost
    */
-  async search({ kbId, query, image = null, topK = 5, searchType = 'hybrid', filters = {} }) {
+  async search({ kbId, query, image = null, topK = 5, searchType = 'hybrid', filters = {}, conversationHistory = null }) {
     // Call Python service
     const results = await PythonServiceClient.search({
       kb_id: kbId,
@@ -794,7 +794,8 @@ async listDocumentsWithStatus(kbId, options = {}) {
       image,
       top_k: topK,
       search_type: searchType,
-      filters
+      filters,
+	  conversation_history: conversationHistory
     });
 	  
     // Calculate search cost

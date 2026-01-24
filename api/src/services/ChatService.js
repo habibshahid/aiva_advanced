@@ -4055,7 +4055,8 @@ Respond in valid JSON format.`
 						searchType: 'text',
 						filters: {
 							include_products: true
-						}
+						},
+						conversationHistory: formattedHistory
 					});
 
 					console.log('🔍 Knowledge search results 2:', {
@@ -4306,7 +4307,8 @@ Respond in valid JSON format.`
                     searchType: 'text',
                     filters: {
                         include_products: false
-                    }
+                    },
+					conversationHistory: formattedHistory
                 });
 
                 knowledgeResults = searchResult.results;

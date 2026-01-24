@@ -61,3 +61,5 @@ playwright==1.57.0
 
 # Logging
 python-json-logger==2.0.7
+
+firecrawl-py==4.13.4
