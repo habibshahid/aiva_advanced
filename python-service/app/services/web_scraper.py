@@ -889,6 +889,21 @@ class WebScraper:
     # Firecrawl fallback (for captcha-protected sites)
     # =========================
 
+    def _get_firecrawl_client(self):
+        """Get or create Firecrawl client"""
+        if self._firecrawl_client is None:
+            try:
+                from app.config import settings
+                if hasattr(settings, 'FIRECRAWL_API_KEY') and settings.FIRECRAWL_API_KEY:
+                    from firecrawl import Firecrawl
+                    self._firecrawl_client = Firecrawl(api_key=settings.FIRECRAWL_API_KEY)
+                    logger.info("✅ Firecrawl client initialized")
+                else:
+                    logger.warning("⚠️ FIRECRAWL_API_KEY not configured")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Firecrawl: {e}")
+        return self._firecrawl_client
+        
     async def _scrape_with_firecrawl(
         self,
         url: str,
@@ -919,7 +934,7 @@ class WebScraper:
                 poll_interval=5
             )
             
-            # Process results - V2 returns data directly in the result
+            # Process results - V2 returns data directly
             if crawl_result and crawl_result.get('data'):
                 for item in crawl_result['data']:
                     markdown = item.get('markdown', '')

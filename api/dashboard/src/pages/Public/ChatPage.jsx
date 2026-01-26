@@ -318,6 +318,7 @@ const ChatPage = () => {
   const [sessionId, setSessionId] = useState(null);
   const [agent, setAgent] = useState(null);
   const [messages, setMessages] = useState([]);
+  const sessionIdRef = useRef(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -348,6 +349,10 @@ const ChatPage = () => {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+  
   const initChat = async () => {
     try {
       setLoading(true);
@@ -357,6 +362,7 @@ const ChatPage = () => {
       
       if (savedSession) {
         setSessionId(savedSession);
+        sessionIdRef.current = savedSession;
         await loadHistory(savedSession);
       }
 
@@ -379,6 +385,7 @@ const ChatPage = () => {
         if (initResponse.data.success) {
           const newSessionId = initResponse.data.data.session_id;
           setSessionId(newSessionId);
+          sessionIdRef.current = newSessionId;
           localStorage.setItem(`aiva_chat_${agentId}`, newSessionId);
           
           // Add greeting message
@@ -623,7 +630,7 @@ const ChatPage = () => {
 		  // Send as FormData for audio
 		  const formData = new FormData();
 		  formData.append('audio', sentAudioBlob, 'recording.webm');
-		  formData.append('session_id', sessionId || '');
+		  formData.append('session_id', sessionIdRef.current || '');
 		  formData.append('agent_id', agentId);
 		  formData.append('generate_audio_response', 'true');
 		  
@@ -639,7 +646,7 @@ const ChatPage = () => {
 		  // Send as JSON for text/image
 		  // ✅ FIX: Added missing parentheses
 		  response = await axios.post(`${API_URL}/message`, {
-			session_id: sessionId,
+			session_id: sessionIdRef.current,
 			agent_id: agentId,
 			message: userMessage || '.',
 			image: imageBase64
@@ -649,8 +656,10 @@ const ChatPage = () => {
 		const data = response.data.data;
 		
 		// Save session if new
-		if (data.session_id && (!sessionId || data.new_session_created)) {
+		if (data.session_id && (!sessionIdRef.current || data.new_session_created)) {
+		  console.log('🔄 Session update:', sessionIdRef.current, '->', data.session_id, 'new_session_created:', data.new_session_created);
 		  setSessionId(data.session_id);
+		  sessionIdRef.current = data.session_id;
 		  localStorage.setItem(`aiva_chat_${agentId}`, data.session_id);
 		}
 		
