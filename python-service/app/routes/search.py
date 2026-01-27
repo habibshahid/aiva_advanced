@@ -43,6 +43,12 @@ async def search_knowledge(request: SearchRequest):
         
         logger.info(f"Search request: kb_id={kb_id}, query={query[:50]}, top_k={top_k}")
         
+        # ADD THIS:
+        if request.conversation_history:
+            logger.info(f"📝 Conversation history received: {len(request.conversation_history)} messages")
+        else:
+            logger.info(f"📝 No conversation history provided")
+            
         include_products = False
         if request.filters:
             include_products = request.filters.get('include_products', False)

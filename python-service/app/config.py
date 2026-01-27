@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     QUERY_EXPANSION_MAX_VARIATIONS: int = int(os.getenv('QUERY_EXPANSION_MAX_VARIATIONS', '5'))
     
     # Query Rewriting - LLM-based context-aware query improvement (COST: ~$0.001/query)
-    ENABLE_QUERY_REWRITING: bool = bool(os.getenv('ENABLE_QUERY_REWRITING', 'false').lower() == 'true')
+    ENABLE_QUERY_REWRITING: bool = True #bool = bool(os.getenv('ENABLE_QUERY_REWRITING', 'false').lower() == 'true')
     QUERY_REWRITER_MODEL: str = os.getenv('QUERY_REWRITER_MODEL', 'gpt-4o-mini')
     
     # BM25 Keyword Search - Hybrid semantic + keyword retrieval (FREE)

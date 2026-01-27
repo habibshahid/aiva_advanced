@@ -67,7 +67,8 @@ class QueryRewriter:
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        max_history_turns: int = 5
+        max_history_turns: int = 5,
+        enrich_with_context: bool = True  # NEW: Always try to enrich with context
     ) -> str:
         """
         Rewrite query using conversation context.
@@ -76,15 +77,11 @@ class QueryRewriter:
             query: Current user query
             conversation_history: List of previous messages with 'role' and 'content'
             max_history_turns: Maximum conversation turns to consider
+            enrich_with_context: If True, always try to add context even for standalone queries
             
         Returns:
             Rewritten query (or original if no rewrite needed)
         """
-        # Quick checks - skip rewriting for simple queries
-        if self._is_standalone_query(query):
-            logger.debug(f"Query is standalone, no rewrite needed: {query[:50]}")
-            return query
-        
         if not conversation_history:
             logger.debug("No conversation history, returning original query")
             return query
@@ -95,8 +92,16 @@ class QueryRewriter:
         if not recent_history:
             return query
         
+        # Check if query needs rewriting (pronouns, references, etc.)
+        needs_rewrite = not self._is_standalone_query(query)
+        
+        # If enrich_with_context is enabled, always try to improve the query
+        if not needs_rewrite and not enrich_with_context:
+            logger.debug(f"Query is standalone, no rewrite needed: {query[:50]}")
+            return query
+        
         try:
-            rewritten = await self._rewrite_with_llm(query, recent_history)
+            rewritten = await self._rewrite_with_llm(query, recent_history, enrich_with_context)
             
             if rewritten and rewritten != query:
                 logger.info(f"Query rewritten: '{query[:30]}...' -> '{rewritten[:50]}...'")
@@ -144,13 +149,20 @@ class QueryRewriter:
         # Query with specific nouns is likely standalone
         return True
     
+
     async def _rewrite_with_llm(
         self,
         query: str,
-        history: List[Dict[str, str]]
+        history: List[Dict[str, str]],
+        enrich_with_context: bool = False
     ) -> str:
         """
         Use LLM to rewrite query with context.
+        
+        Args:
+            query: Original query
+            history: Conversation history
+            enrich_with_context: If True, add relevant context even for clear queries
         """
         # Build context string
         context_parts = []
@@ -161,7 +173,32 @@ class QueryRewriter:
         
         context_str = "\n".join(context_parts)
         
-        prompt = f"""Given the conversation context below, rewrite the user's latest query to be a complete, standalone question that includes all necessary context.
+        if enrich_with_context:
+            # Enhanced prompt that adds context to improve search
+            prompt = f"""You are a search query optimizer. Given the conversation context and the user's latest query, create an improved search query that will find the most relevant results.
+
+CONVERSATION CONTEXT:
+{context_str}
+
+LATEST QUERY: {query}
+
+RULES:
+1. If the query contains pronouns (it, this, that, they), replace them with the actual subject from context
+2. If the conversation mentions a specific product, system, or topic, include that context in the query
+3. Add relevant keywords from the conversation that would improve search results
+4. Keep the query concise (under 15 words ideally)
+5. Make it a clear search query, not a question
+6. Only return the improved query, nothing else
+
+EXAMPLES:
+- Context about "Intellicon dashboard" + Query "how to check stats" → "Intellicon dashboard check agent stats"
+- Context about "order #12345" + Query "where is it" → "order 12345 tracking status"
+- Context about "return policy" + Query "how many days" → "return policy days limit timeframe"
+
+IMPROVED SEARCH QUERY:"""
+        else:
+            # Original prompt for pronoun resolution only
+            prompt = f"""Given the conversation context below, rewrite the user's latest query to be a complete, standalone question that includes all necessary context.
 
 CONVERSATION CONTEXT:
 {context_str}

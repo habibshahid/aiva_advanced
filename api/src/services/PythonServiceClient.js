@@ -236,18 +236,33 @@ class PythonServiceClient {
    */
   async search({ kb_id, query, image = null, top_k = 3, search_type = 'hybrid', filters = {}, conversation_history = null }) {
     try {
-      const response = await this.client.post('/api/v1/search', {
+      const payload = {
         kb_id,
         query,
         image,
         top_k,
         search_type,
-        filters,
-		conversation_history
-      });
+        filters
+      };
+      
+      // Include conversation history for contextual query rewriting (if provided)
+      if (conversation_history && Array.isArray(conversation_history) && conversation_history.length > 0) {
+        payload.conversation_history = conversation_history
+          .filter(msg => msg && msg.role && msg.content)  // Filter out invalid messages
+          .map(msg => ({
+            role: String(msg.role),
+            content: String(msg.content || '')
+          }))
+          .slice(-10);  // Only last 10 messages to avoid payload size issues
+      }
 
+      const response = await this.client.post('/api/v1/search', payload);
       return response.data;
     } catch (error) {
+      // Log full error details for debugging
+      if (error.response) {
+        console.error('Python Service Error:', error.response.status, JSON.stringify(error.response.data, null, 2));
+      }
       throw new Error(`Knowledge search failed: ${error.message}`);
     }
   }
