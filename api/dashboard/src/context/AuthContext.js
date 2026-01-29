@@ -3,7 +3,6 @@ import { login as loginAPI, getCurrentUser } from '../services/api';
 
 const AuthContext = createContext();
 
-// EXPORT THIS FUNCTION
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -17,9 +16,8 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check both storages - localStorage for "remember me", sessionStorage for session-only
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-    const savedUser = localStorage.getItem('user') || sessionStorage.getItem('user');
+    const token = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('user');
     
     if (token && savedUser) {
       try {
@@ -30,12 +28,7 @@ export const AuthProvider = ({ children }) => {
         getCurrentUser()
           .then(response => {
             setUser(response.data.user);
-            // Update in the same storage where it was found
-            if (localStorage.getItem('token')) {
-              localStorage.setItem('user', JSON.stringify(response.data.user));
-            } else {
-              sessionStorage.setItem('user', JSON.stringify(response.data.user));
-            }
+            localStorage.setItem('user', JSON.stringify(response.data.user));
           })
           .catch(() => {
             logout();
@@ -56,17 +49,9 @@ export const AuthProvider = ({ children }) => {
     const response = await loginAPI(email, password);
     const { token, user } = response.data;
     
-    // Clear both storages first to avoid conflicts
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('user');
-    
-    // Use localStorage if rememberMe, otherwise sessionStorage
-    const storage = rememberMe ? localStorage : sessionStorage;
-    
-    storage.setItem('token', token);
-    storage.setItem('user', JSON.stringify(user));
+    // Always use localStorage (persists across tabs)
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
     
     setUser(user);
     
@@ -74,11 +59,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    // Clear both storages
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('user');
     setUser(null);
   };
 

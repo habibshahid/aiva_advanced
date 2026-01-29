@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Power, PowerOff, MessageSquare } from 'lucide-react';
+import { Plus, Edit2, Trash2, Power, PowerOff, MessageSquare, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAgents, deleteAgent, updateAgent } from '../services/api';
 
@@ -8,7 +8,8 @@ const Agents = () => {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
-
+  const [searchTerm, setSearchTerm] = useState('');
+  
   useEffect(() => {
     loadAgents();
   }, [filter]);
@@ -24,6 +25,16 @@ const Agents = () => {
       setLoading(false);
     }
   };
+  
+  const filteredAgents = agents.filter(agent => {
+    if (!searchTerm) return true;
+    const search = searchTerm.toLowerCase();
+    return (
+      agent.name?.toLowerCase().includes(search) ||
+      agent.type?.toLowerCase().includes(search) ||
+      agent.provider?.toLowerCase().includes(search)
+    );
+  });
 
   const handleToggleActive = async (agent) => {
     try {
@@ -73,47 +84,67 @@ const Agents = () => {
         </Link>
       </div>
 
-      <div className="flex space-x-4">
-        <button
-          onClick={() => setFilter('all')}
-          className={`px-4 py-2 text-sm font-medium rounded-md ${
-            filter === 'all'
-              ? 'bg-primary-100 text-primary-700'
-              : 'text-gray-700 hover:bg-gray-100'
-          }`}
-        >
-          All
-        </button>
-        <button
-          onClick={() => setFilter('active')}
-          className={`px-4 py-2 text-sm font-medium rounded-md ${
-            filter === 'active'
-              ? 'bg-primary-100 text-primary-700'
-              : 'text-gray-700 hover:bg-gray-100'
-          }`}
-        >
-          Active
-        </button>
-        <button
-          onClick={() => setFilter('inactive')}
-          className={`px-4 py-2 text-sm font-medium rounded-md ${
-            filter === 'inactive'
-              ? 'bg-primary-100 text-primary-700'
-              : 'text-gray-700 hover:bg-gray-100'
-          }`}
-        >
-          Inactive
-        </button>
-      </div>
+      <div className="flex flex-col sm:flex-row gap-4">
+		  {/* Search Input */}
+		  <div className="relative flex-1 max-w-md">
+			<div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+			  <Search className="h-5 w-5 text-gray-400" />
+			</div>
+			<input
+			  type="text"
+			  value={searchTerm}
+			  onChange={(e) => setSearchTerm(e.target.value)}
+			  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+			  placeholder="Search agents..."
+			/>
+		  </div>
+		  
+		  {/* Filter Buttons */}
+		  <div className="flex space-x-2">
+			<button
+			  onClick={() => setFilter('all')}
+			  className={`px-4 py-2 text-sm font-medium rounded-md ${
+				filter === 'all'
+				  ? 'bg-primary-100 text-primary-700'
+				  : 'text-gray-700 hover:bg-gray-100'
+			  }`}
+			>
+			  All
+			</button>
+			<button
+			  onClick={() => setFilter('active')}
+			  className={`px-4 py-2 text-sm font-medium rounded-md ${
+				filter === 'active'
+				  ? 'bg-primary-100 text-primary-700'
+				  : 'text-gray-700 hover:bg-gray-100'
+			  }`}
+			>
+			  Active
+			</button>
+			<button
+			  onClick={() => setFilter('inactive')}
+			  className={`px-4 py-2 text-sm font-medium rounded-md ${
+				filter === 'inactive'
+				  ? 'bg-primary-100 text-primary-700'
+				  : 'text-gray-700 hover:bg-gray-100'
+			  }`}
+			>
+			  Inactive
+			</button>
+		  </div>
+	  </div>
 
       <div className="bg-white shadow overflow-hidden rounded-lg">
         <ul className="divide-y divide-gray-200">
-          {agents.length === 0 ? (
+          {filteredAgents.length === 0 ? (
             <li className="p-8 text-center text-gray-500">
-              No agents found. Create your first agent to get started.
-            </li>
+			  {searchTerm 
+				? `No agents found matching "${searchTerm}"`
+				: 'No agents found. Create your first agent to get started.'
+			  }
+			</li>
           ) : (
-            agents.map((agent) => (
+            filteredAgents.map((agent) => (
               <li key={agent.id} className="p-6 hover:bg-gray-50">
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">

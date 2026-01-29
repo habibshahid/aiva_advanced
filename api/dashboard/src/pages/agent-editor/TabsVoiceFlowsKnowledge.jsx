@@ -286,6 +286,30 @@ export const VoiceTab = ({ agent, setAgent, handleProviderChange, agentId }) => 
               </select>
             )}
           </div>
+		  {/* LLM Model Selection */}
+			<div>
+			  <label className="block text-sm font-medium text-gray-700 mb-1">LLM Model</label>
+			  <select
+				value={agent.llm_model || 'llama-3.3-70b-versatile'}
+				onChange={(e) => setAgent({ ...agent, llm_model: e.target.value })}
+				className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+			  >
+				<optgroup label="Groq (Fast & Free)">
+				  <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Recommended)</option>
+				  <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+				  <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+				  <option value="gemma2-9b-it">Gemma 2 9B</option>
+				</optgroup>
+				<optgroup label="OpenAI">
+				  <option value="gpt-4o-mini">GPT-4o Mini</option>
+				  <option value="gpt-4o">GPT-4o</option>
+				  <option value="gpt-4-turbo">GPT-4 Turbo</option>
+				</optgroup>
+			  </select>
+			  <p className="text-xs text-gray-500 mt-1">
+				Groq models are faster and free. OpenAI models may be more accurate.
+			  </p>
+			</div>
         </div>
       </div>
     )}

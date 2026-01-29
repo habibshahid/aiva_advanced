@@ -6,6 +6,93 @@ import React, { useState, useEffect } from 'react';
 import { Zap, Info, Shirt, Laptop, Sofa, Utensils, AlertCircle, Phone, MessageSquare, TrendingUp, DollarSign, Loader } from 'lucide-react';
 import { getOverviewSummary } from '../../services/AnalyticsService';
 
+// Chat TTS Voice options per provider
+const CHAT_TTS_VOICES = {
+  openai: [
+    { value: 'alloy', label: 'Alloy (Neutral)' },
+    { value: 'echo', label: 'Echo (Male)' },
+    { value: 'fable', label: 'Fable (Expressive)' },
+    { value: 'onyx', label: 'Onyx (Deep Male)' },
+    { value: 'nova', label: 'Nova (Female)' },
+    { value: 'shimmer', label: 'Shimmer (Female)' }
+  ],
+  deepgram: [
+    { value: 'aura-asteria-en', label: 'Asteria (Female)' },
+    { value: 'aura-luna-en', label: 'Luna (Female)' },
+    { value: 'aura-stella-en', label: 'Stella (Female)' },
+    { value: 'aura-athena-en', label: 'Athena (Female)' },
+    { value: 'aura-hera-en', label: 'Hera (Female)' },
+    { value: 'aura-orion-en', label: 'Orion (Male)' },
+    { value: 'aura-arcas-en', label: 'Arcas (Male)' },
+    { value: 'aura-perseus-en', label: 'Perseus (Male)' },
+    { value: 'aura-angus-en', label: 'Angus (Male - Irish)' },
+    { value: 'aura-orpheus-en', label: 'Orpheus (Male)' },
+    { value: 'aura-helios-en', label: 'Helios (Male)' },
+    { value: 'aura-zeus-en', label: 'Zeus (Male)' }
+  ],
+  uplift: [
+    { value: 'v_meklc281', label: '👩 Ayesha (Female - Urdu)' },
+    { value: 'v_8eelc901', label: '👩 Fatima (Female - Urdu)' },
+    { value: 'v_30s70t3a', label: '👨 Asad (Male - Urdu)' },
+    { value: 'v_yypgzenx', label: '👴 Dada Jee (Male - Elder)' },
+    { value: 'v_kwmp7zxt', label: '👩 Zara (Female - Urdu)' },
+    { value: 'v_sd0kl3m9', label: '👩 Samina (Female - Urdu)' },
+    { value: 'v_sd6mn4p2', label: '👨 Waqar (Male - Urdu)' },
+    { value: 'v_sd9qr7x5', label: '👨 Imran (Male - Urdu)' }
+  ],
+  azure: [
+    { value: 'en-US-JennyNeural', label: '👩 Jenny (US Female)' },
+    { value: 'en-US-GuyNeural', label: '👨 Guy (US Male)' },
+    { value: 'en-GB-SoniaNeural', label: '👩 Sonia (UK Female)' },
+    { value: 'en-GB-RyanNeural', label: '👨 Ryan (UK Male)' },
+    { value: 'ur-PK-UzmaNeural', label: '👩 Uzma (Urdu Female)' },
+    { value: 'ur-PK-AsadNeural', label: '👨 Asad (Urdu Male)' },
+    { value: 'hi-IN-SwaraNeural', label: '👩 Swara (Hindi Female)' },
+    { value: 'hi-IN-MadhurNeural', label: '👨 Madhur (Hindi Male)' },
+    { value: 'ar-SA-ZariyahNeural', label: '👩 Zariyah (Arabic Female)' },
+    { value: 'ar-SA-HamedNeural', label: '👨 Hamed (Arabic Male)' }
+  ]
+};
+
+// Chat STT Language options per provider
+const CHAT_STT_LANGUAGES = {
+  deepgram: [
+    { value: 'multi', label: '🌍 Multi (Auto-detect)' },
+    { value: 'en', label: '🇺🇸 English' },
+    { value: 'en-GB', label: '🇬🇧 English (UK)' },
+    { value: 'hi', label: '🇮🇳 Hindi' },
+    { value: 'es', label: '🇪🇸 Spanish' },
+    { value: 'fr', label: '🇫🇷 French' },
+    { value: 'de', label: '🇩🇪 German' },
+    { value: 'ar', label: '🇸🇦 Arabic' },
+    { value: 'zh', label: '🇨🇳 Chinese' }
+  ],
+  openai: [
+    { value: 'en', label: '🇺🇸 English' },
+    { value: 'ur', label: '🇵🇰 Urdu' },
+    { value: 'hi', label: '🇮🇳 Hindi' },
+    { value: 'ar', label: '🇸🇦 Arabic' },
+    { value: 'es', label: '🇪🇸 Spanish' },
+    { value: 'fr', label: '🇫🇷 French' },
+    { value: 'de', label: '🇩🇪 German' },
+    { value: 'zh', label: '🇨🇳 Chinese' }
+  ],
+  soniox: [
+    { value: 'en', label: '🇺🇸 English' },
+    { value: 'ur', label: '🇵🇰 Urdu' },
+    { value: 'hi', label: '🇮🇳 Hindi' },
+    { value: 'ar', label: '🇸🇦 Arabic' }
+  ]
+};
+
+// Default voices per TTS provider
+const DEFAULT_TTS_VOICES = {
+  openai: 'nova',
+  deepgram: 'aura-asteria-en',
+  uplift: 'v_meklc281',
+  azure: 'en-US-JennyNeural'
+};
+
 // ============================================================================
 // OVERVIEW TAB
 // ============================================================================
@@ -299,71 +386,112 @@ export const ChatTab = ({
     </div>
 
     {/* Chat Audio Settings */}
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-      <h3 className="text-lg font-medium text-gray-900 mb-4">🎤 Chat Audio Settings</h3>
-      <p className="text-sm text-gray-500 mb-4">
-        Configure speech-to-text and text-to-speech for audio messages in web/mobile chat.
-      </p>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Chat STT Provider</label>
-          <select
-            value={agent.chat_stt_provider || 'deepgram'}
-            onChange={(e) => setAgent({ ...agent, chat_stt_provider: e.target.value })}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="deepgram">Deepgram</option>
-            <option value="openai">OpenAI Whisper</option>
-            <option value="soniox">Soniox</option>
-          </select>
-        </div>
-        
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Chat TTS Provider</label>
-          <select
-            value={agent.chat_tts_provider || 'openai'}
-            onChange={(e) => setAgent({ ...agent, chat_tts_provider: e.target.value })}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="openai">OpenAI TTS</option>
-            <option value="deepgram">Deepgram Aura</option>
-            <option value="uplift">Uplift AI</option>
-          </select>
-        </div>
-        
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Chat TTS Voice</label>
-          <select
-            value={agent.chat_tts_voice || 'nova'}
-            onChange={(e) => setAgent({ ...agent, chat_tts_voice: e.target.value })}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="alloy">Alloy</option>
-            <option value="echo">Echo</option>
-            <option value="fable">Fable</option>
-            <option value="onyx">Onyx</option>
-            <option value="nova">Nova</option>
-            <option value="shimmer">Shimmer</option>
-          </select>
-        </div>
-        
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Chat STT Language</label>
-          <select
-            value={agent.chat_stt_language || 'en'}
-            onChange={(e) => setAgent({ ...agent, chat_stt_language: e.target.value })}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="multi">🌍 Multi (Auto-detect)</option>
-            <option value="en">🇺🇸 English</option>
-            <option value="ur">🇵🇰 Urdu</option>
-            <option value="hi">🇮🇳 Hindi</option>
-            <option value="ar">🇸🇦 Arabic</option>
-          </select>
-        </div>
-      </div>
-    </div>
+	<div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+	  <h3 className="text-lg font-medium text-gray-900 mb-4">🎤 Chat Audio Settings</h3>
+	  <p className="text-sm text-gray-500 mb-4">
+		Configure speech-to-text and text-to-speech for audio messages in web/mobile chat.
+	  </p>
+	  
+	  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+		{/* STT Provider */}
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 mb-1">Chat STT Provider</label>
+		  <select
+			value={agent.chat_stt_provider || 'deepgram'}
+			onChange={(e) => {
+			  const newProvider = e.target.value;
+			  const defaultLang = CHAT_STT_LANGUAGES[newProvider]?.[0]?.value || 'en';
+			  setAgent({ 
+				...agent, 
+				chat_stt_provider: newProvider,
+				chat_stt_language: defaultLang
+			  });
+			}}
+			className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
+		  >
+			<option value="deepgram">Deepgram Nova</option>
+			<option value="openai">OpenAI Whisper</option>
+			<option value="soniox">Soniox (Urdu/Hindi)</option>
+		  </select>
+		  <p className="text-xs text-gray-500 mt-1">
+			{agent.chat_stt_provider === 'soniox' && '✅ Best for Urdu/Hindi'}
+			{agent.chat_stt_provider === 'deepgram' && '✅ Fast & accurate, many languages'}
+			{agent.chat_stt_provider === 'openai' && 'Good quality, supports 50+ languages'}
+		  </p>
+		</div>
+		
+		{/* TTS Provider */}
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 mb-1">Chat TTS Provider</label>
+		  <select
+			value={agent.chat_tts_provider || 'openai'}
+			onChange={(e) => {
+			  const newProvider = e.target.value;
+			  const defaultVoice = DEFAULT_TTS_VOICES[newProvider] || 'nova';
+			  setAgent({ 
+				...agent, 
+				chat_tts_provider: newProvider,
+				chat_tts_voice: defaultVoice
+			  });
+			}}
+			className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
+		  >
+			<option value="openai">OpenAI TTS</option>
+			<option value="deepgram">Deepgram Aura</option>
+			<option value="uplift">Uplift AI (Urdu/Punjabi)</option>
+			<option value="azure">Azure Neural TTS</option>
+		  </select>
+		  <p className="text-xs text-gray-500 mt-1">
+			{agent.chat_tts_provider === 'uplift' && '✅ Best quality Urdu voices'}
+			{agent.chat_tts_provider === 'azure' && 'Many languages including Urdu'}
+			{agent.chat_tts_provider === 'openai' && 'High quality English voices'}
+			{agent.chat_tts_provider === 'deepgram' && 'Fast, natural English voices'}
+		  </p>
+		</div>
+		
+		{/* TTS Voice - Dynamic based on provider */}
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 mb-1">Chat TTS Voice</label>
+		  <select
+			value={agent.chat_tts_voice || DEFAULT_TTS_VOICES[agent.chat_tts_provider || 'openai']}
+			onChange={(e) => setAgent({ ...agent, chat_tts_voice: e.target.value })}
+			className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
+		  >
+			{(CHAT_TTS_VOICES[agent.chat_tts_provider || 'openai'] || CHAT_TTS_VOICES.openai).map(voice => (
+			  <option key={voice.value} value={voice.value}>{voice.label}</option>
+			))}
+		  </select>
+		</div>
+		
+		{/* STT Language - Dynamic based on provider */}
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 mb-1">Chat STT Language</label>
+		  <select
+			value={agent.chat_stt_language || 'en'}
+			onChange={(e) => setAgent({ ...agent, chat_stt_language: e.target.value })}
+			className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500"
+		  >
+			{(CHAT_STT_LANGUAGES[agent.chat_stt_provider || 'deepgram'] || CHAT_STT_LANGUAGES.deepgram).map(lang => (
+			  <option key={lang.value} value={lang.value}>{lang.label}</option>
+			))}
+		  </select>
+		</div>
+	  </div>
+	  
+	  {/* Auto Audio Response Toggle */}
+	  <div className="mt-4 flex items-center">
+		<input
+		  type="checkbox"
+		  id="chat_audio_response"
+		  checked={agent.chat_audio_response === 1 || agent.chat_audio_response === true}
+		  onChange={(e) => setAgent({ ...agent, chat_audio_response: e.target.checked ? 1 : 0 })}
+		  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+		/>
+		<label htmlFor="chat_audio_response" className="ml-2 block text-sm text-gray-700">
+		  Auto-generate audio response when user sends voice message
+		</label>
+	  </div>
+	</div>
 
     {/* Conversation Strategy - Only show when Flow Engine is disabled */}
     {!agent.use_flow_engine ? (

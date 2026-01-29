@@ -34,23 +34,33 @@ const KnowledgeDocuments = () => {
   const [refreshImages, setRefreshImages] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const limit = 20; // Items per page
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, statusFilter]);
 
   useEffect(() => {
     loadData();
-  }, [id]);
+  }, [id, page]);
 
   const loadData = async () => {
     try {
       setLoading(true);
       const [kbResponse, docsResponse, statsResponse] = await Promise.all([
-        getKnowledgeBase(id),
-        getDocuments(id),
-        getKBStats(id)
-      ]);
-      
-      setKb(kbResponse.data.data);
-      setDocuments(docsResponse.data.data.items || []);
-      setStats(statsResponse.data.data);
+	    getKnowledgeBase(id),
+	    getDocuments(id, { page, limit }),
+	    getKBStats(id)
+	  ]);
+
+	  setKb(kbResponse.data.data);
+	  setDocuments(docsResponse.data.data.items || []);
+	  setTotalItems(docsResponse.data.data.pagination?.total || 0);
+	  setTotalPages(docsResponse.data.data.pagination?.pages || 1);
+	  setStats(statsResponse.data.data);
 	  await loadCacheStats();
     } catch (error) {
       toast.error('Failed to load documents');
@@ -484,6 +494,56 @@ const KnowledgeDocuments = () => {
 					</table>
 				  </div>
 				)}
+            </div>
+          )}
+
+		  {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 mt-4 rounded-lg">
+              <div className="flex flex-1 justify-between sm:hidden">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-gray-700">
+                    Showing <span className="font-medium">{(page - 1) * limit + 1}</span> to{' '}
+                    <span className="font-medium">{Math.min(page * limit, totalItems)}</span> of{' '}
+                    <span className="font-medium">{totalItems}</span> documents
+                  </p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-sm text-gray-700">
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

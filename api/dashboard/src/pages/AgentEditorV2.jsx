@@ -401,52 +401,52 @@ const AgentEditorV2 = () => {
   };
 
   const handleFunctionSave = async () => {
-    if (!functionForm.name || !functionForm.description) {
-      toast.error('Please fill in function name and description');
-      return;
-    }
+	  if (!functionForm.name || !functionForm.description) {
+		toast.error('Please fill in function name and description');
+		return;
+	  }
 
-    setSavingFunction(true);
-    try {
-      let body = null;
-      if (functionForm.api_body_type === 'json' && bodyRawJson) {
-        try {
-          body = JSON.parse(bodyRawJson);
-        } catch (e) {
-          toast.error('Invalid JSON body');
-          setSavingFunction(false);
-          return;
-        }
-      } else if (['form-data', 'urlencoded'].includes(functionForm.api_body_type)) {
-        body = bodyFormData.reduce((acc, item) => {
-          acc[item.key] = item.value;
-          return acc;
-        }, {});
-      }
+	  setSavingFunction(true);
+	  try {
+		let body = null;
+		if (functionForm.api_body_type === 'json' && bodyRawJson) {
+		  try {
+			body = JSON.parse(bodyRawJson);
+		  } catch (e) {
+			toast.error('Invalid JSON body');
+			setSavingFunction(false);
+			return;
+		  }
+		} else if (['form-data', 'urlencoded'].includes(functionForm.api_body_type)) {
+		  body = bodyFormData.reduce((acc, item) => {
+			acc[item.key] = item.value;
+			return acc;
+		  }, {});
+		}
 
-      const functionData = {
-        ...functionForm,
-        api_body: body,
-        agent_id: id
-      };
+		const functionData = {
+		  ...functionForm,
+		  api_body: body,
+		  agent_id: id
+		};
 
-      if (editingFunction) {
-        await updateFunction(editingFunction.id, functionData);
-        toast.success('Function updated');
-      } else {
-        await createFunction(functionData);
-        toast.success('Function created');
-      }
+		if (editingFunction) {
+		  await updateFunction(editingFunction.id, functionData);
+		  toast.success('Function updated');
+		} else {
+		  await createFunction(id, functionData);  // ✅ FIXED: Added id as first parameter
+		  toast.success('Function created');
+		}
 
-      setShowFunctionModal(false);
-      const functionsResponse = await getFunctions(id);
-      setFunctions(functionsResponse.data.functions || []);
-    } catch (error) {
-      toast.error('Failed to save function');
-      console.error(error);
-    } finally {
-      setSavingFunction(false);
-    }
+		setShowFunctionModal(false);
+		const functionsResponse = await getFunctions(id);
+		setFunctions(functionsResponse.data.functions || []);
+	  } catch (error) {
+		toast.error('Failed to save function');
+		console.error(error);
+	  } finally {
+		setSavingFunction(false);
+	  }
   };
 
   const handleFunctionDelete = async (funcId) => {

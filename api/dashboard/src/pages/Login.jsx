@@ -131,7 +131,7 @@ const Login = () => {
                 </div>
               </div>
 
-              <div className="form-options">
+              {/*<div className="form-options">
                 <label className="checkbox-wrapper">
                   <input 
                     type="checkbox"
@@ -141,7 +141,7 @@ const Login = () => {
                   <span className="checkbox-label">Remember me</span>
                 </label>
                 <a href="#" className="forgot-link">Forgot password?</a>
-              </div>
+              </div>*/}
 
               <button type="submit" className="login-button" disabled={loading}>
                 {loading ? 'Signing in...' : 'Sign in to AiVA'}

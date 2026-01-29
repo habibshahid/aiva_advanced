@@ -885,9 +885,19 @@ class CustomVoiceProvider extends BaseProvider {
         });
         
         // Set TTS voice based on agent config
-        if (agentConfig.voice) {
-            this.tts.setVoice(agentConfig.voice);
-        }
+		// For custom provider: prioritize custom_voice, ignore OpenAI-specific voices
+		const openaiOnlyVoices = ['marin', 'ash', 'ballad', 'coral', 'sage', 'verse', 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+		let voiceToUse = agentConfig.custom_voice || agentConfig.voice;
+
+		// If voice is OpenAI-specific and we have custom_voice, use custom_voice instead
+		if (agentConfig.voice && openaiOnlyVoices.includes(agentConfig.voice.toLowerCase()) && agentConfig.custom_voice) {
+			voiceToUse = agentConfig.custom_voice;
+			console.log(`[CUSTOM-PROVIDER] Ignoring OpenAI voice "${agentConfig.voice}", using custom_voice: ${voiceToUse}`);
+		}
+
+		if (voiceToUse) {
+			this.tts.setVoice(voiceToUse);
+		}
         
         // Store function executor if provided
         if (agentConfig.functionExecutor) {
