@@ -9,6 +9,7 @@ const OpenAIProvider = require('./openai-provider');
 const DeepgramProvider = require('./deepgram-provider');
 const CustomVoiceProvider = require('./custom/custom-voice-provider');
 const IntentIVRProvider = require('./custom/intent-ivr-provider');
+const PipecatProvider = require('./pipecat-provider');
 const logger = require('../utils/logger');
 
 class ProviderFactory {
@@ -85,8 +86,8 @@ class ProviderFactory {
                     languageHints: agentConfig.language_hints || ['ur', 'en'],
                     
                     // LLM Config
-                    llmProvider: process.env.GROQ_API_KEY ? 'groq' : 'openai',
-                    llmApiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
+                    llmProvider: 'openai', //process.env.GROQ_API_KEY ? 'groq' : 'openai',
+                    llmApiKey: process.env.OPENAI_API_KEY, //process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
                     llmModel: agentConfig.llm_model || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
                     
                     // TTS Config
@@ -96,15 +97,29 @@ class ProviderFactory {
                     upliftOutputFormat: agentConfig.uplift_output_format || 'ULAW_8000_8',
                     upliftResample16to8: agentConfig.uplift_resample_16to8 !== false,
                     
-                    // Conversation settings
-                    temperature: agentConfig.temperature || 0.6,
-                    allowBargeIn: agentConfig.allow_barge_in !== false,
+                    // TTS Formatting Config (NEW!)
+					tts_number_format: agentConfig.tts_number_format || 'words-english',
+					tts_script: agentConfig.tts_script || 'auto',
+					tts_currency_format: agentConfig.tts_currency_format || 'words-english',
+					
+					// Streaming LLM Config (NEW!)
+					streaming_llm: agentConfig.streaming_llm !== false,  // Default: enabled
+					
+					// Barge-in Config (NEW!)
+					barge_in_threshold: agentConfig.barge_in_threshold || 4,
+					interim_barge_in_threshold: agentConfig.interim_barge_in_threshold || 2,
+					
+					// Conversation settings
+					temperature: agentConfig.temperature || 0.6,
+					allowBargeIn: agentConfig.allow_barge_in !== false,
+					
                     
                     // Agent config
                     instructions: agentConfig.instructions,
                     functions: agentConfig.functions || [],
                     greeting: agentConfig.greeting,
-                    
+					kb_id: agentConfig.kb_id,
+                    name: agentConfig.name,
                     // Session config
                     ...sessionConfig
                 });
@@ -148,7 +163,45 @@ class ProviderFactory {
                     // Session config
                     ...sessionConfig
                 });
-                
+            case 'pipecat':
+				// Pipecat Python Framework Provider
+				// Uses external Pipecat Python service via WebSocket
+				
+				logger.info(`Creating Pipecat provider for agent: ${agentConfig.agentId}`);
+				
+				return new PipecatProvider({
+					// Service connection
+					pipecatUrl: process.env.PIPECAT_SERVICE_URL || 'ws://localhost:8765',
+					
+					// STT Configuration
+					sttProvider: agentConfig.pipecat_stt || process.env.PIPECAT_STT_PROVIDER || 'deepgram',
+					sttModel: agentConfig.pipecat_stt_model || process.env.PIPECAT_STT_MODEL || 'nova-2',
+					
+					// LLM Configuration
+					llmProvider: agentConfig.pipecat_llm || process.env.PIPECAT_LLM_PROVIDER || 'openai',
+					llmModel: agentConfig.pipecat_llm_model || process.env.PIPECAT_LLM_MODEL || 'gpt-4o-mini',
+					
+					// TTS Configuration
+					ttsProvider: agentConfig.pipecat_tts || process.env.PIPECAT_TTS_PROVIDER || 'cartesia',
+					ttsVoice: agentConfig.pipecat_voice || agentConfig.custom_voice,
+					
+					// VAD Configuration
+					vadEnabled: agentConfig.vad_enabled !== false,
+					vadThreshold: agentConfig.vad_threshold || 0.5,
+					silenceTimeoutMs: agentConfig.silence_duration_ms || 700,
+					interruptionEnabled: agentConfig.allow_interruptions !== false,
+					
+					// Language
+					language: agentConfig.language || 'en',
+					
+					// Audio formats
+					inputFormat: 'mulaw_8000',      // From Asterisk
+					outputFormat: 'pcm16_24000',    // From Pipecat TTS
+					
+					// Pass through session config
+					...sessionConfig
+				});
+	
             default:
                 logger.error(`Unknown provider: ${provider}, defaulting to OpenAI`);
                 return new OpenAIProvider({
@@ -204,6 +257,12 @@ class ProviderFactory {
                 // TTS is optional (used as fallback for uncached responses)
                 // API access is optional (can work with pre-loaded config)
                 break;
+			case 'pipecat':
+				// Pipecat validation
+				if (!process.env.PIPECAT_SERVICE_URL) {
+					errors.push('PIPECAT_SERVICE_URL environment variable not set');
+				}
+				break;
         }
         
         return {

@@ -29,7 +29,7 @@ const STT_PRICING = {
 const TTS_PRICING = {
     'openai': { 'tts-1': 15.00, 'tts-1-hd': 30.00 },
     'azure': { 'neural': 16.00 },
-    'uplift': { 'default': 15.00 }
+    'uplift': { 'default': 50.00 }
 };
 
 class AudioService {

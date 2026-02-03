@@ -1,6 +1,12 @@
 /**
- * Soniox STT Handler
+ * Soniox STT Handler - ENHANCED
  * Real-time speech-to-text using Soniox WebSocket API
+ * 
+ * FIXES APPLIED:
+ * - Auto keepalive timer (prevents timeout during TTS playback)
+ * - Auto-reconnect on unexpected disconnect
+ * - Connection state monitoring
+ * - Better error handling
  * 
  * Features:
  * - Direct mulaw audio input (no conversion needed for Asterisk)
@@ -23,6 +29,13 @@ class SonioxSTT extends EventEmitter {
             enableEndpointDetection: config.enableEndpointDetection !== false,
             enableSpeakerDiarization: config.enableSpeakerDiarization || false,
             sampleRate: config.sampleRate || 8000,
+            
+            // NEW: Keepalive and reconnect settings
+            keepaliveIntervalMs: config.keepaliveIntervalMs || 15000,  // Send keepalive every 15s
+            autoReconnect: config.autoReconnect !== false,             // Auto-reconnect on disconnect
+            maxReconnectAttempts: config.maxReconnectAttempts || 5,
+            reconnectDelayMs: config.reconnectDelayMs || 1000,
+            
             ...config
         };
         
@@ -30,7 +43,13 @@ class SonioxSTT extends EventEmitter {
         this.isConnected = false;
         this.isConfigured = false;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 3;
+        
+        // NEW: Connection state tracking
+        this.isInCall = false;           // True when we're in an active call
+        this.shouldBeConnected = false;  // True when connection is expected
+        this.lastAudioTime = 0;          // Last time audio was sent
+        this.keepaliveTimer = null;      // Keepalive interval timer
+        this.reconnectTimer = null;      // Reconnect delay timer
         
         // Transcript accumulation
         this.currentTranscript = '';
@@ -41,7 +60,9 @@ class SonioxSTT extends EventEmitter {
         this.metrics = {
             startTime: null,
             audioSeconds: 0,
-            bytesProcessed: 0
+            bytesProcessed: 0,
+            keepalivesSent: 0,
+            reconnects: 0
         };
     }
     
@@ -49,14 +70,27 @@ class SonioxSTT extends EventEmitter {
      * Connect to Soniox WebSocket API
      */
     async connect() {
+        // If already connected, return
+        if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
+            console.log('[SONIOX-STT] Already connected');
+            return true;
+        }
+        
+        this.shouldBeConnected = true;
+        this.isInCall = true;
+        
         return new Promise((resolve, reject) => {
             const wsUrl = 'wss://stt-rt.soniox.com/transcribe-websocket';
             
             console.log('[SONIOX-STT] Connecting to Soniox...');
             
+            // Clean up any existing connection
+            this.cleanupConnection();
+            
             this.ws = new WebSocket(wsUrl);
             
             const timeout = setTimeout(() => {
+                this.ws?.close();
                 reject(new Error('Soniox connection timeout'));
             }, 10000);
             
@@ -64,10 +98,15 @@ class SonioxSTT extends EventEmitter {
                 clearTimeout(timeout);
                 console.log('[SONIOX-STT] WebSocket connected');
                 this.isConnected = true;
+                this.reconnectAttempts = 0;  // Reset on successful connect
                 this.metrics.startTime = Date.now();
                 
                 // Send configuration
                 this.sendConfig();
+                
+                // START KEEPALIVE TIMER
+                this.startKeepaliveTimer();
+                
                 resolve(true);
             });
             
@@ -76,29 +115,138 @@ class SonioxSTT extends EventEmitter {
             });
             
             this.ws.on('error', (error) => {
+                clearTimeout(timeout);
                 console.error('[SONIOX-STT] WebSocket error:', error.message);
-                console.error('[SONIOX-STT] Error details:', {
-                    code: error.code,
-                    errno: error.errno,
-                    syscall: error.syscall
-                });
                 this.emit('error', error);
+                
+                // Don't reject here - let close handler deal with reconnection
             });
             
             this.ws.on('close', (code, reason) => {
-                const reasonStr = reason?.toString() || '';
-                console.log(`[SONIOX-STT] WebSocket closed: code=${code}, reason="${reasonStr}"`);
-                console.log('[SONIOX-STT] Connection stats at close:', {
-                    audioSecondsProcessed: this.metrics.audioSeconds.toFixed(2),
-                    bytesProcessed: this.metrics.bytesProcessed,
-                    wasConnected: this.isConnected,
-                    wasConfigured: this.isConfigured
-                });
-                this.isConnected = false;
-                this.isConfigured = false;
-                this.emit('disconnected', { code, reason: reasonStr });
+                clearTimeout(timeout);
+                this.handleDisconnect(code, reason);
             });
         });
+    }
+    
+    /**
+     * Handle WebSocket disconnect
+     */
+    handleDisconnect(code, reason) {
+        const reasonStr = reason?.toString() || '';
+        console.log(`[SONIOX-STT] WebSocket closed: code=${code}, reason="${reasonStr}"`);
+        console.log('[SONIOX-STT] Connection stats at close:', {
+            audioSecondsProcessed: this.metrics.audioSeconds.toFixed(2),
+            bytesProcessed: this.metrics.bytesProcessed,
+            keepalivesSent: this.metrics.keepalivesSent,
+            wasConnected: this.isConnected,
+            wasConfigured: this.isConfigured,
+            isInCall: this.isInCall,
+            shouldBeConnected: this.shouldBeConnected
+        });
+        
+        this.isConnected = false;
+        this.isConfigured = false;
+        
+        // Stop keepalive timer
+        this.stopKeepaliveTimer();
+        
+        this.emit('disconnected', { code, reason: reasonStr });
+        
+        // AUTO-RECONNECT if we're still in a call and should be connected
+        if (this.shouldBeConnected && this.isInCall && this.config.autoReconnect) {
+            // Code 1006 = abnormal closure (timeout, network issue)
+            // Code 1001 = going away
+            // Code 1000 = normal closure (we initiated)
+            
+            if (code !== 1000) {  // Don't reconnect on normal closure
+                this.attemptReconnect();
+            }
+        }
+    }
+    
+    /**
+     * Attempt to reconnect
+     */
+    attemptReconnect() {
+        if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
+            console.error(`[SONIOX-STT] Max reconnect attempts (${this.config.maxReconnectAttempts}) reached`);
+            this.emit('reconnect.failed', { attempts: this.reconnectAttempts });
+            return;
+        }
+        
+        this.reconnectAttempts++;
+        this.metrics.reconnects++;
+        
+        const delay = this.config.reconnectDelayMs * this.reconnectAttempts;  // Exponential backoff
+        
+        console.log(`[SONIOX-STT] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts})`);
+        
+        this.reconnectTimer = setTimeout(async () => {
+            try {
+                await this.connect();
+                console.log('[SONIOX-STT] Reconnected successfully');
+                this.emit('reconnected', { attempts: this.reconnectAttempts });
+            } catch (error) {
+                console.error('[SONIOX-STT] Reconnect failed:', error.message);
+                // Will retry via handleDisconnect
+            }
+        }, delay);
+    }
+    
+    /**
+     * Start keepalive timer
+     */
+    startKeepaliveTimer() {
+        this.stopKeepaliveTimer();  // Clear any existing timer
+        
+        this.keepaliveTimer = setInterval(() => {
+            if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
+                // Check if we've sent audio recently
+                const timeSinceLastAudio = Date.now() - this.lastAudioTime;
+                
+                // If no audio sent in last 10s, send keepalive
+                if (timeSinceLastAudio > 10000) {
+                    this.sendKeepalive();
+                }
+            }
+        }, this.config.keepaliveIntervalMs);
+        
+        console.log(`[SONIOX-STT] Keepalive timer started (${this.config.keepaliveIntervalMs}ms interval)`);
+    }
+    
+    /**
+     * Stop keepalive timer
+     */
+    stopKeepaliveTimer() {
+        if (this.keepaliveTimer) {
+            clearInterval(this.keepaliveTimer);
+            this.keepaliveTimer = null;
+        }
+    }
+    
+    /**
+     * Clean up connection resources
+     */
+    cleanupConnection() {
+        this.stopKeepaliveTimer();
+        
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        
+        if (this.ws) {
+            try {
+                this.ws.removeAllListeners();
+                if (this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.close();
+                }
+            } catch (e) {
+                // Ignore cleanup errors
+            }
+            this.ws = null;
+        }
     }
     
     /**
@@ -255,13 +403,16 @@ class SonioxSTT extends EventEmitter {
         }
         
         // Check WebSocket state (1 = OPEN)
-        if (this.ws.readyState !== 1) {
+        if (this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
         
         try {
             // Send binary audio data directly
             this.ws.send(audioData);
+            
+            // Update last audio time (for keepalive logic)
+            this.lastAudioTime = Date.now();
             
             // Update metrics
             this.metrics.bytesProcessed += audioData.length;
@@ -281,6 +432,10 @@ class SonioxSTT extends EventEmitter {
      */
     finalize(trailingSilenceMs = 300) {
         if (!this.isConnected || !this.ws) {
+            return false;
+        }
+        
+        if (this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
         
@@ -308,7 +463,7 @@ class SonioxSTT extends EventEmitter {
         }
         
         // Check WebSocket state (1 = OPEN)
-        if (this.ws.readyState !== 1) {
+        if (this.ws.readyState !== WebSocket.OPEN) {
             console.warn('[SONIOX-STT] Cannot send keepalive - WebSocket state:', this.ws.readyState);
             return false;
         }
@@ -317,6 +472,10 @@ class SonioxSTT extends EventEmitter {
             this.ws.send(JSON.stringify({
                 type: 'keepalive'
             }));
+            
+            this.metrics.keepalivesSent++;
+            console.log(`[SONIOX-STT] Keepalive sent (#${this.metrics.keepalivesSent})`);
+            
             return true;
         } catch (error) {
             console.error('[SONIOX-STT] Error sending keepalive:', error.message);
@@ -325,21 +484,50 @@ class SonioxSTT extends EventEmitter {
     }
     
     /**
+     * Mark that we're in an active call (enables auto-reconnect)
+     */
+    setInCall(inCall) {
+        this.isInCall = inCall;
+        console.log(`[SONIOX-STT] In-call state: ${inCall}`);
+        
+        if (!inCall) {
+            this.shouldBeConnected = false;
+        }
+    }
+    
+    /**
      * Gracefully close the connection
      */
     async stop() {
+        console.log('[SONIOX-STT] Stopping...');
+        
+        // Mark that we intentionally want to disconnect
+        this.shouldBeConnected = false;
+        this.isInCall = false;
+        
+        // Stop keepalive timer
+        this.stopKeepaliveTimer();
+        
+        // Clear reconnect timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        
         if (!this.isConnected || !this.ws) {
             return;
         }
         
         try {
             // Send empty frame to signal end of stream
-            this.ws.send('');
+            if (this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send('');
+            }
             
             // Wait a bit for final tokens
             await new Promise(resolve => setTimeout(resolve, 500));
             
-            this.ws.close();
+            this.ws.close(1000, 'Normal closure');  // 1000 = normal closure
         } catch (error) {
             console.error('[SONIOX-STT] Error stopping:', error);
         }
@@ -352,9 +540,14 @@ class SonioxSTT extends EventEmitter {
      * Immediately cancel the connection
      */
     cancel() {
-        if (this.ws) {
-            this.ws.close();
-        }
+        console.log('[SONIOX-STT] Cancelling...');
+        
+        // Mark that we intentionally want to disconnect
+        this.shouldBeConnected = false;
+        this.isInCall = false;
+        
+        this.cleanupConnection();
+        
         this.isConnected = false;
         this.isConfigured = false;
     }
@@ -370,7 +563,11 @@ class SonioxSTT extends EventEmitter {
         return {
             duration: duration,
             audioSeconds: this.metrics.audioSeconds,
-            bytesProcessed: this.metrics.bytesProcessed
+            bytesProcessed: this.metrics.bytesProcessed,
+            keepalivesSent: this.metrics.keepalivesSent,
+            reconnects: this.metrics.reconnects,
+            isConnected: this.isConnected,
+            isInCall: this.isInCall
         };
     }
     
@@ -381,6 +578,13 @@ class SonioxSTT extends EventEmitter {
         this.currentTranscript = '';
         this.finalTranscript = '';
         this.pendingTokens = [];
+    }
+    
+    /**
+     * Check if connected and ready
+     */
+    isReady() {
+        return this.isConnected && this.isConfigured && this.ws?.readyState === WebSocket.OPEN;
     }
 }
 

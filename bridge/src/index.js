@@ -291,12 +291,20 @@ IMPORTANT: Before calling the search_knowledge function:
 							openai_tts_model: agentConfig.openai_tts_model,
 							uplift_output_format: agentConfig.uplift_output_format,
 							uplift_resample_16to8: agentConfig.uplift_resample_16to8,
+							pipecat_stt: agentConfig.pipecat_stt,
+							pipecat_stt_model: agentConfig.pipecat_stt_model,
+							pipecat_llm: agentConfig.pipecat_llm,
+							pipecat_llm_model: agentConfig.pipecat_llm_model,
+							pipecat_tts: agentConfig.pipecat_tts,
+							pipecat_voice: agentConfig.pipecat_voice,
+							pipecat_tts_speed: agentConfig.pipecat_tts_speed,
 							// Metadata
 							agentId: agentConfig.id,
 							tenantId: tenantId,
 							asteriskPort: client.port,
 							kbId: agentConfig.kb_id,
-							kb_id: agentConfig.kb_id
+							kb_id: agentConfig.kb_id,
+							name: agentConfig.name
 						}
 					);
 

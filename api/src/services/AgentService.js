@@ -5,45 +5,47 @@ const { v4: uuidv4 } = require('uuid');
 class AgentService {
     // Create agent
     async createAgent(tenantId, agentData) {
-        const agentId = uuidv4();
-        
-        const [result] = await db.query(
-        `INSERT INTO yovo_tbl_aiva_agents (
-            id, tenant_id, name, type, instructions, voice, language, 
-            model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
-            tts_provider, custom_voice, language_hints, llm_model,
-            temperature, max_tokens, vad_threshold, 
-            silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, 
+		const agentId = uuidv4();
+		
+		const [result] = await db.query(
+		`INSERT INTO yovo_tbl_aiva_agents (
+			id, tenant_id, name, type, instructions, voice, language, 
+			model, chat_model, provider, deepgram_model, deepgram_voice, deepgram_language,
+			tts_provider, custom_voice, language_hints, llm_model,
+			temperature, max_tokens, vad_threshold, 
+			silence_duration_ms, greeting, kb_id, conversation_strategy, knowledge_search_mode, chat_stt_provider, 
 			chat_tts_model, chat_audio_response, chat_tts_provider, chat_tts_voice,
-			use_flow_engine, message_buffer_seconds, session_timeout_minutes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-            agentId,
-            tenantId,
-            agentData.name,
-            agentData.type,
-            agentData.instructions,
-            agentData.voice || 'shimmer',
-            agentData.language || 'ur',
-            agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
-            agentData.chat_model || 'gpt-4o-mini',
-            agentData.provider || 'openai',
-            agentData.deepgram_model || null,
-            agentData.deepgram_voice || null,
-            agentData.deepgram_language || 'en',
-            // NEW: Custom provider fields
-            agentData.tts_provider || 'uplift',
-            agentData.custom_voice || 'ur-PK-female',
-            JSON.stringify(agentData.language_hints || ['ur', 'en']),
-            agentData.llm_model || 'llama-3.3-70b-versatile',
-            // End new fields
-            agentData.temperature || 0.6,
-            agentData.max_tokens || 4096,
-            agentData.vad_threshold || 0.5,
-            agentData.silence_duration_ms || 500,
-            agentData.greeting || null,
-            agentData.kb_id || null,
-            JSON.stringify(agentData.conversation_strategy) || null,
+			use_flow_engine, message_buffer_seconds, session_timeout_minutes,
+			pipecat_stt, pipecat_stt_model, pipecat_llm, pipecat_llm_model,
+			pipecat_tts, pipecat_voice, pipecat_tts_speed
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			agentId,
+			tenantId,
+			agentData.name,
+			agentData.type,
+			agentData.instructions,
+			agentData.voice || 'shimmer',
+			agentData.language || 'ur',
+			agentData.model || 'gpt-4o-mini-realtime-preview-2024-12-17',
+			agentData.chat_model || 'gpt-4o-mini',
+			agentData.provider || 'openai',
+			agentData.deepgram_model || null,
+			agentData.deepgram_voice || null,
+			agentData.deepgram_language || 'en',
+			// Custom provider fields
+			agentData.tts_provider || 'uplift',
+			agentData.custom_voice || 'ur-PK-female',
+			JSON.stringify(agentData.language_hints || ['ur', 'en']),
+			agentData.llm_model || 'llama-3.3-70b-versatile',
+			// Model settings
+			agentData.temperature || 0.6,
+			agentData.max_tokens || 4096,
+			agentData.vad_threshold || 0.5,
+			agentData.silence_duration_ms || 500,
+			agentData.greeting || null,
+			agentData.kb_id || null,
+			JSON.stringify(agentData.conversation_strategy) || null,
 			agentData.knowledge_search_mode || 'auto',
 			agentData.chat_stt_provider || 'soniox',
 			agentData.chat_tts_model || 'whisper-1',
@@ -53,15 +55,23 @@ class AgentService {
 			// Flow Engine V2 settings
 			agentData.use_flow_engine ? 1 : 0,
 			agentData.message_buffer_seconds || 2,
-			agentData.session_timeout_minutes || 30
-        ]
-    );
-        
-        // Cache in Redis
-        await this.cacheAgent(agentId);
-        
-        return this.getAgent(agentId);
-    }
+			agentData.session_timeout_minutes || 30,
+			// Pipecat fields
+			agentData.pipecat_stt || null,
+			agentData.pipecat_stt_model || null,
+			agentData.pipecat_llm || null,
+			agentData.pipecat_llm_model || null,
+			agentData.pipecat_tts || null,
+			agentData.pipecat_voice || null,
+			agentData.pipecat_tts_speed || 1.0
+		]
+	);
+		
+		// Cache in Redis
+		await this.cacheAgent(agentId);
+		
+		return this.getAgent(agentId);
+	}
     
     // Get agent
     async getAgent(agentId) {
@@ -233,7 +243,10 @@ class AgentService {
 			// Flow Engine V2 settings
 			'use_flow_engine', 'message_buffer_seconds', 'session_timeout_minutes',
 			// Intelligent Flow Engine settings
-			'flow_mode', 'image_flow_actions'
+			'flow_mode', 'image_flow_actions',
+			// Pipecat fields
+			'pipecat_stt', 'pipecat_stt_model', 'pipecat_llm', 'pipecat_llm_model',
+			'pipecat_tts', 'pipecat_voice', 'pipecat_tts_speed'
 		];
 		
 		for (const field of allowedFields) {

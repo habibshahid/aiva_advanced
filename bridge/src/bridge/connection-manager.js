@@ -96,7 +96,20 @@ class ConnectionManager extends EventEmitter {
 				voice: config.voice || config.custom_voice,
 				tts_provider: config.tts_provider,
 				custom_voice: config.custom_voice,
-				language_hints: config.language_hints
+				language_hints: config.language_hints,
+				
+				pipecat_stt: config.pipecat_stt,
+				pipecat_stt_model: config.pipecat_stt_model,
+				pipecat_llm: config.pipecat_llm,
+				pipecat_llm_model: config.pipecat_llm_model,
+				pipecat_tts: config.pipecat_tts,
+				pipecat_voice: config.pipecat_voice,
+				pipecat_tts_speed: config.pipecat_tts_speed,
+				// Additional agent settings
+				temperature: config.temperature,
+				max_tokens: config.max_tokens,
+				vad_threshold: config.vad_threshold,
+				silence_duration_ms: config.silence_duration_ms
 			});
 			
 			// Create audio queue
@@ -295,7 +308,7 @@ class ConnectionManager extends EventEmitter {
         // Speech detection
         provider.on('speech.started', () => {
             this.emit('userSpeechStarted', connection);
-            connection.audioQueue.clear();
+            connection.audioQueue.clearWithFade();
 			connection.isReceivingAudio = false;
 			//connection.isFirstAudioChunk = true;
 			connection.audioOutputBytes = 0;
@@ -308,7 +321,7 @@ class ConnectionManager extends EventEmitter {
 		provider.on('speech.cancelled', () => {
 			connection.isReceivingAudio = false;
 			connection.audioOutputBytes = 0;
-			connection.audioQueue.clear();
+			connection.audioQueue.clearWithFade();
 			this.emit('agentSpeechStopped', connection);
 		});
 
@@ -318,7 +331,7 @@ class ConnectionManager extends EventEmitter {
 				connection.isReceivingAudio = true;
 				connection.isFirstAudioChunk = true;
 				connection.audioOutputBytes = 0;  // Reset byte counter
-				connection.audioQueue.clear();
+				connection.audioQueue.clearWithFade();
 				console.log(`[CONN-MGR] *** NEW SPEECH *** - Reset audioOutputBytes to 0`);
 				this.emit('agentSpeechStarted', connection);
 			}
@@ -464,7 +477,21 @@ class ConnectionManager extends EventEmitter {
 				connection.lastAudioSent = now;
 			}
 			
-		} else if (connection.providerName === 'openai') {
+		}  else if (connection.providerName === 'pipecat') {
+			// Pipecat: Send µ-law directly (Python service handles conversion)
+			connection.audioBuffer = Buffer.concat([connection.audioBuffer, audioData]);
+			
+			const now = Date.now();
+			const targetBufferSize = 1600;  // 100ms at 8kHz µ-law
+			const bufferInterval = 100;
+			
+			if (connection.audioBuffer.length >= targetBufferSize || 
+				(connection.audioBuffer.length > 0 && now - connection.lastAudioSent >= bufferInterval)) {
+				await connection.provider.sendAudio(connection.audioBuffer);
+				connection.audioBuffer = Buffer.alloc(0);
+				connection.lastAudioSent = now;
+			}
+        } else if (connection.providerName === 'openai') {
 			// OpenAI: Convert µ-law to PCM16, resample 8kHz to 24kHz
 			const pcmBuffer = AudioConverter.convertUlawToPCM16(audioData);
 			const resampledBuffer = AudioConverter.resample8to24(pcmBuffer);
@@ -478,7 +505,7 @@ class ConnectionManager extends EventEmitter {
 				connection.audioBuffer = Buffer.alloc(0);
 				connection.lastAudioSent = now;
 			}
-		}
+		} 
 	}
     /**
      * Handle provider audio output
@@ -561,6 +588,20 @@ class ConnectionManager extends EventEmitter {
 					return;
 				}
 				downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+				
+			} else if (connection.providerName === 'pipecat') {
+				// Pipecat: Outputs PCM16 24kHz (or 16kHz depending on TTS)
+				if (event.format === 'mulaw_8000') {
+					// Already µ-law 8kHz - send directly
+					connection.audioQueue.addAudio(pcmBuffer);
+					return;
+				} else if (event.format === 'pcm16_16000') {
+					// PCM16 16kHz - resample to 8kHz (2:1)
+					downsampledBuffer = AudioConverter.resample16to8(pcmBuffer);
+				} else {
+					// Default: PCM16 24kHz - resample to 8kHz (3:1)
+					downsampledBuffer = AudioConverter.resample24to8(pcmBuffer);
+				}
 				
 			} else if (connection.providerName === 'openai') {
 				// OpenAI outputs PCM16 24kHz

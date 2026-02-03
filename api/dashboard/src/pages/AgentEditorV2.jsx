@@ -31,6 +31,7 @@ import { OverviewTab, ChatTab } from './agent-editor/TabsOverviewChat';
 import { VoiceTab, FlowsTab, KnowledgeTab } from './agent-editor/TabsVoiceFlowsKnowledge';
 import { FunctionsTab } from './agent-editor/TabsFunctionsAdvanced';
 import { FunctionModal, TestFunctionModal, AIInstructionsModal } from './agent-editor/Modals';
+//import { PipecatTab } from './agent-editor/TabsPipecat';  
 
 const AgentEditorV2 = () => {
   const { id } = useParams();
@@ -183,7 +184,17 @@ const AgentEditorV2 = () => {
       updates.tts_provider = agent.tts_provider || 'uplift';
       updates.custom_voice = agent.custom_voice || 'ur-PK-female';
       updates.language_hints = agent.language_hints || ['ur', 'en'];
+    } else if (newProvider === 'pipecat') {
+      // Pipecat defaults
+      updates.pipecat_stt = agent.pipecat_stt || 'deepgram';
+      updates.pipecat_stt_model = agent.pipecat_stt_model || 'nova-2';
+      updates.pipecat_llm = agent.pipecat_llm || 'openai';
+      updates.pipecat_llm_model = agent.pipecat_llm_model || 'gpt-4o-mini';
+      updates.pipecat_tts = agent.pipecat_tts || 'cartesia';
+      updates.pipecat_voice = agent.pipecat_voice || null;
+      updates.pipecat_tts_speed = agent.pipecat_tts_speed || 1.0;
     }
+
     
     setAgent({ ...agent, ...updates });
   };
@@ -755,7 +766,7 @@ const AgentEditorV2 = () => {
             agentId={id}
           />
         )}
-        
+    
         {activeTab === 'flows' && id && (
           <FlowsTab agent={agent} setAgent={setAgent} agentId={id} />
         )}

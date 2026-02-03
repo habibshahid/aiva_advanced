@@ -1,10 +1,12 @@
 /**
- * Audio Converter - PRESERVED FROM ORIGINAL
- * Your working audio conversion pipeline
+ * Audio Converter
+ * Handles µ-law/PCM conversion and resampling for Asterisk integration
+ * 
+ * Note: This file was already well-implemented - no changes needed
  */
 
 class AudioConverter {
-    // µ-law decode table (preserved exactly)
+    // µ-law decode table
     static ULAW_DECODE_TABLE = [
         -32124, -31100, -30076, -29052, -28028, -27004, -25980, -24956,
         -23932, -22908, -21884, -20860, -19836, -18812, -17788, -16764,
@@ -39,7 +41,24 @@ class AudioConverter {
         120, 112, 104, 96, 88, 80, 72, 64,
         56, 48, 40, 32, 24, 16, 8, 0
     ];
+	
+	convertPcm16ToMulaw(pcm16Buffer, inputSampleRate = 24000) {
+		// First resample from 24kHz to 8kHz
+		const resampledBuffer = this.resample(pcm16Buffer, inputSampleRate, 8000);
+		
+		// Then convert PCM16 to µ-law
+		const mulawBuffer = Buffer.alloc(resampledBuffer.length / 2);
+		for (let i = 0; i < resampledBuffer.length; i += 2) {
+			const sample = resampledBuffer.readInt16LE(i);
+			mulawBuffer[i / 2] = this.linearToMulaw(sample);
+		}
+		
+		return mulawBuffer;
+	}
     
+    /**
+     * Convert µ-law to PCM16
+     */
     static convertUlawToPCM16(ulawBuffer) {
         const pcmBuffer = Buffer.alloc(ulawBuffer.length * 2);
         
@@ -52,6 +71,9 @@ class AudioConverter {
         return pcmBuffer;
     }
     
+    /**
+     * Convert PCM16 to µ-law
+     */
     static convertPCM16ToUlaw(pcmBuffer) {
         const samples = pcmBuffer.length / 2;
         const ulawBuffer = Buffer.alloc(samples);
@@ -82,90 +104,29 @@ class AudioConverter {
         return ulawBuffer;
     }
     
-    static resample8to16(buffer) {
+    /**
+     * Resample from 8kHz to 24kHz (for OpenAI input)
+     */
+    static resample8to24(buffer) {
         const inputSamples = buffer.length / 2;
-        const outputSamples = inputSamples * 2;
+        const outputSamples = inputSamples * 3; // 8kHz * 3 = 24kHz
         const output = Buffer.alloc(outputSamples * 2);
         
         for (let i = 0; i < inputSamples; i++) {
             const sample = buffer.readInt16LE(i * 2);
             
-            output.writeInt16LE(sample, i * 4);
-            
-            if (i < inputSamples - 1) {
-                const nextSample = buffer.readInt16LE((i + 1) * 2);
-                const interpolated = Math.round((sample + nextSample) / 2);
-                output.writeInt16LE(interpolated, i * 4 + 2);
-            } else {
-                output.writeInt16LE(sample, i * 4 + 2);
-            }
+            // Write sample three times for 3x upsampling
+            output.writeInt16LE(sample, (i * 3) * 2);
+            output.writeInt16LE(sample, (i * 3 + 1) * 2);
+            output.writeInt16LE(sample, (i * 3 + 2) * 2);
         }
         
         return output;
     }
-	
-	static resample24to16(buffer) {
-		const inputSamples = buffer.length / 2;
-		const outputSamples = Math.floor(inputSamples * 2 / 3);
-		const output = Buffer.alloc(outputSamples * 2);
-		
-		for (let i = 0; i < outputSamples; i++) {
-			const srcIndex = (i * 3) / 2;
-			const srcIndexFloor = Math.floor(srcIndex);
-			const fraction = srcIndex - srcIndexFloor;
-			
-			const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
-			const sample2 = srcIndexFloor + 1 < inputSamples ? 
-				buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
-			
-			const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
-			output.writeInt16LE(interpolated, i * 2);
-		}
-		
-		return output;
-	}
     
-	static resample16to24(buffer) {
-		const inputSamples = buffer.length / 2;
-		const outputSamples = Math.floor(inputSamples * 3 / 2);
-		const output = Buffer.alloc(outputSamples * 2);
-		
-		for (let i = 0; i < outputSamples; i++) {
-			const srcIndex = (i * 2) / 3;
-			const srcIndexFloor = Math.floor(srcIndex);
-			const fraction = srcIndex - srcIndexFloor;
-			
-			const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
-			const sample2 = srcIndexFloor + 1 < inputSamples ? 
-				buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
-			
-			const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
-			output.writeInt16LE(interpolated, i * 2);
-		}
-		
-		return output;
-	}
-
-	/**
-	 * Resample from 8kHz to 24kHz (for OpenAI)
-	 */
-	static resample8to24(buffer) {
-		const inputSamples = buffer.length / 2;
-		const outputSamples = inputSamples * 3; // 8kHz * 3 = 24kHz
-		const output = Buffer.alloc(outputSamples * 2);
-		
-		for (let i = 0; i < inputSamples; i++) {
-			const sample = buffer.readInt16LE(i * 2);
-			
-			// Write sample three times for 3x upsampling
-			output.writeInt16LE(sample, (i * 3) * 2);
-			output.writeInt16LE(sample, (i * 3 + 1) * 2);
-			output.writeInt16LE(sample, (i * 3 + 2) * 2);
-		}
-		
-		return output;
-	}
-	
+    /**
+     * Resample from 24kHz to 8kHz (for Asterisk output)
+     */
     static resample24to8(buffer) {
         const inputLength = buffer.length - (buffer.length % 2);
         const inputSamples = inputLength / 2;
@@ -191,6 +152,100 @@ class AudioConverter {
                 const clampedSample = Math.max(-32768, Math.min(32767, avgSample));
                 output.writeInt16LE(clampedSample, i * 2);
             }
+        }
+        
+        return output;
+    }
+    
+    /**
+     * Resample from 8kHz to 16kHz
+     */
+    static resample8to16(buffer) {
+        const inputSamples = buffer.length / 2;
+        const outputSamples = inputSamples * 2;
+        const output = Buffer.alloc(outputSamples * 2);
+        
+        for (let i = 0; i < inputSamples; i++) {
+            const sample = buffer.readInt16LE(i * 2);
+            
+            output.writeInt16LE(sample, i * 4);
+            
+            if (i < inputSamples - 1) {
+                const nextSample = buffer.readInt16LE((i + 1) * 2);
+                const interpolated = Math.round((sample + nextSample) / 2);
+                output.writeInt16LE(interpolated, i * 4 + 2);
+            } else {
+                output.writeInt16LE(sample, i * 4 + 2);
+            }
+        }
+        
+        return output;
+    }
+    
+    /**
+     * Resample from 16kHz to 8kHz
+     */
+    static resample16to8(buffer) {
+        const inputSamples = buffer.length / 2;
+        const outputSamples = Math.floor(inputSamples / 2);
+        const output = Buffer.alloc(outputSamples * 2);
+        
+        for (let i = 0; i < outputSamples; i++) {
+            const srcIndex = i * 2;
+            const sample1 = buffer.readInt16LE(srcIndex * 2);
+            const sample2 = srcIndex + 1 < inputSamples ? 
+                buffer.readInt16LE((srcIndex + 1) * 2) : sample1;
+            
+            const avgSample = Math.round((sample1 + sample2) / 2);
+            output.writeInt16LE(avgSample, i * 2);
+        }
+        
+        return output;
+    }
+    
+    /**
+     * Resample from 24kHz to 16kHz
+     */
+    static resample24to16(buffer) {
+        const inputSamples = buffer.length / 2;
+        const outputSamples = Math.floor(inputSamples * 2 / 3);
+        const output = Buffer.alloc(outputSamples * 2);
+        
+        for (let i = 0; i < outputSamples; i++) {
+            const srcIndex = (i * 3) / 2;
+            const srcIndexFloor = Math.floor(srcIndex);
+            const fraction = srcIndex - srcIndexFloor;
+            
+            const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
+            const sample2 = srcIndexFloor + 1 < inputSamples ? 
+                buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
+            
+            const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
+            output.writeInt16LE(interpolated, i * 2);
+        }
+        
+        return output;
+    }
+    
+    /**
+     * Resample from 16kHz to 24kHz
+     */
+    static resample16to24(buffer) {
+        const inputSamples = buffer.length / 2;
+        const outputSamples = Math.floor(inputSamples * 3 / 2);
+        const output = Buffer.alloc(outputSamples * 2);
+        
+        for (let i = 0; i < outputSamples; i++) {
+            const srcIndex = (i * 2) / 3;
+            const srcIndexFloor = Math.floor(srcIndex);
+            const fraction = srcIndex - srcIndexFloor;
+            
+            const sample1 = buffer.readInt16LE(srcIndexFloor * 2);
+            const sample2 = srcIndexFloor + 1 < inputSamples ? 
+                buffer.readInt16LE((srcIndexFloor + 1) * 2) : sample1;
+            
+            const interpolated = Math.round(sample1 + (sample2 - sample1) * fraction);
+            output.writeInt16LE(interpolated, i * 2);
         }
         
         return output;

@@ -3978,7 +3978,7 @@ ${kbContext}`;
         
         // TTS cost includes both pre-recorded (from ttsMetrics) and real-time slot validation TTS
         const preRecordedTTSCost = this.ttsMetrics.audioSecondsGenerated * 0.000833; // Uplift
-        const slotTTSCost = (this.slotValidationCosts.ttsCharacters || 0) * 0.000015; // Per character estimate
+        const slotTTSCost = (this.slotValidationCosts.ttsCharacters || 0) * 0.00005; // Per character estimate
         const ttsCost = preRecordedTTSCost + slotTTSCost;
         
         // Slot validation LLM costs (Groq llama-3.3-70b-versatile)

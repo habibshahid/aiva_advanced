@@ -2,12 +2,13 @@
  * Agent Editor Constants
  */
 
-import { FileText, MessageSquare, Volume2, GitBranch, Database, Zap } from 'lucide-react';
+import { FileText, MessageSquare, Volume2, GitBranch, Database, Zap, Cpu } from 'lucide-react';
 
 export const TABS = [
   { id: 'overview', label: 'Overview', icon: FileText },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'voice', label: 'Voice', icon: Volume2 },
+  //{ id: 'pipecat', label: 'Pipecat', icon: Cpu },
   { id: 'flows', label: 'Flows', icon: GitBranch },
   { id: 'knowledge', label: 'Knowledge', icon: Database },
   { id: 'functions', label: 'Functions', icon: Zap },

@@ -1,20 +1,22 @@
 /**
  * Uplift AI TTS Handler
- * Real-time text-to-speech using Uplift AI WebSocket API
+ * Text-to-speech using Uplift AI REST API
+ * 
+ * Updated: Switched from WebSocket to REST API for simplicity and reliability
  * 
  * Features:
  * - Pakistani language voices (Urdu, Sindhi, Balochi)
- * - μ-law 8kHz output for telephony (no conversion needed!)
- * - PCM output option
- * - Streaming support with Socket.IO
- * - Cancellation handling
+ * - PCM 22kHz 16-bit output (caller must convert to 8kHz μ-law for telephony)
+ * - Simple REST API calls
+ * - Automatic voice ID resolution from friendly names
  * 
- * Docs: https://docs.upliftai.org/websocket-tts
+ * NOTE: Uplift does NOT support 8kHz output - only 22kHz!
+ * 
+ * Docs: https://docs.upliftai.org/async-concepts
  */
 
 const { EventEmitter } = require('events');
-const { io } = require('socket.io-client');
-const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
 
 // ===== UPLIFT VOICES WITH PAKISTANI NAMES =====
 const UPLIFT_VOICES = {
@@ -121,7 +123,7 @@ const VOICE_NAME_MAPPING = {
     'balochi-female': 'v_bl1de2f7',
     'balochi-male': 'v_bl0ab8c4',
     
-    // Direct voice IDs
+    // Direct voice IDs (pass through)
     'v_meklc281': 'v_meklc281',
     'v_8eelc901': 'v_8eelc901',
     'v_30s70t3a': 'v_30s70t3a',
@@ -135,12 +137,13 @@ const VOICE_NAME_MAPPING = {
 };
 
 // Output formats supported by Uplift
+// NOTE: Uplift does NOT support 8kHz - only 22kHz output!
 const OUTPUT_FORMATS = {
-    'ULAW_8000_8': { sampleRate: 8000, encoding: 'ulaw', bytesPerSecond: 8000, description: 'μ-law 8kHz (telephony - best for Asterisk!)' },
-    'PCM_22050_16': { sampleRate: 22050, encoding: 'pcm', bytesPerSecond: 44100, description: 'PCM 22kHz 16-bit' },
+    'PCM_22050_16': { sampleRate: 22050, encoding: 'pcm', bytesPerSecond: 44100, description: 'PCM 22kHz 16-bit (recommended for conversion)' },
     'MP3_22050_32': { sampleRate: 22050, encoding: 'mp3', bytesPerSecond: 4000, description: 'MP3 32kbps' },
     'MP3_22050_128': { sampleRate: 22050, encoding: 'mp3', bytesPerSecond: 16000, description: 'MP3 128kbps' },
     'WAV_22050_32': { sampleRate: 22050, encoding: 'wav', bytesPerSecond: 44100, description: 'WAV lossless' }
+    // ULAW_8000_8 is NOT supported by Uplift API!
 };
 
 class UpliftTTS extends EventEmitter {
@@ -161,439 +164,255 @@ class UpliftTTS extends EventEmitter {
         
         this.config = {
             apiKey: config.apiKey || process.env.UPLIFT_API_KEY,
-            // CORRECT: Base URL without path - path is added in io() call
-            baseUrl: config.baseUrl || 'wss://api.upliftai.org',
+            baseUrl: config.baseUrl || 'https://api.upliftai.org',
             
             // Default voice (Ayesha - Urdu Female)
             voiceId: voiceId,
             
-            // Use ULAW for telephony (perfect for Asterisk - no conversion needed!)
-            outputFormat: config.outputFormat || 'ULAW_8000_8',
+            // Use PCM for best quality (caller must convert to 8kHz μ-law for telephony)
+            outputFormat: config.outputFormat || 'PCM_22050_16',
             
-            // Reconnection settings
-            reconnectAttempts: config.reconnectAttempts || 3,
-            reconnectDelay: config.reconnectDelay || 1000,
+            // Request timeout
+            timeout: config.timeout || 30000,
             
             ...config,
-            voiceId: voiceId  // Ensure resolved voice ID is used
+            voiceId: voiceId  // Ensure resolved voice is used
         };
         
-        // Socket.IO connection
-        this.socket = null;
-        this.isConnected = false;
-        this.sessionId = null;
-        
-        // Request tracking
-        this.currentRequestId = null;
-        this.pendingQueues = new Map();
-        this.cancelledRequests = new Set();
+        // Validate API key
+        if (!this.config.apiKey) {
+            console.warn('[UpliftTTS] No API key provided - TTS will fail');
+        }
         
         // State
-        this.isProcessing = false;
+        this.isInitialized = false;
+        this.isCancelled = false;
+        this.currentRequestId = null;
         
         // Metrics
         this.metrics = {
-            startTime: null,
-            charactersProcessed: 0,
-            audioSecondsGenerated: 0,
-            requests: 0
+            requestCount: 0,
+            totalCharacters: 0,
+            totalAudioBytes: 0,
+            averageLatencyMs: 0
         };
     }
     
     /**
-     * Resolve voice name to voice ID
-     */
-    static resolveVoiceId(voiceName) {
-        if (!voiceName) return 'v_meklc281';
-        const lower = voiceName.toLowerCase();
-        return VOICE_NAME_MAPPING[lower] || voiceName;
-    }
-    
-    /**
-     * Get voice info by ID or name
-     */
-    static getVoiceInfo(voiceNameOrId) {
-        const voiceId = UpliftTTS.resolveVoiceId(voiceNameOrId);
-        return UPLIFT_VOICES[voiceId] || null;
-    }
-    
-    /**
-     * Initialize and connect to Uplift
+     * Initialize TTS (no-op for REST API, kept for interface compatibility)
      */
     async initialize() {
         if (!this.config.apiKey) {
             throw new Error('Uplift API key not configured');
         }
         
-        this.metrics.startTime = Date.now();
-        await this.connect();
+        this.isInitialized = true;
+        console.log('[UpliftTTS] Initialized with REST API');
+        console.log(`[UpliftTTS] Voice: ${this.config.voiceId}, Format: ${this.config.outputFormat}`);
         
-        const voiceInfo = UPLIFT_VOICES[this.config.voiceId];
-        const voiceName = voiceInfo ? voiceInfo.name : this.config.voiceId;
-        console.log(`[UpliftTTS] Initialized - Voice: ${voiceName}, Format: ${this.config.outputFormat}`);
+        return true;
     }
     
     /**
-     * Connect to Socket.IO server
-     * CORRECT PATH: /text-to-speech/multi-stream
+     * Synthesize text to speech using REST API
+     * Returns complete audio buffer (μ-law 8kHz for Asterisk)
+     * 
+     * @param {string} text - Text to synthesize
+     * @returns {Promise<Buffer>} Audio buffer in configured format
      */
-    async connect() {
-        return new Promise((resolve, reject) => {
-            console.log('[UpliftTTS] Connecting to Uplift...');
-            
-            // CORRECT: Use Socket.IO with the right path
-            const socketUrl = `${this.config.baseUrl}/text-to-speech/multi-stream`;
-            console.log(`[UpliftTTS] Socket.IO URL: ${socketUrl}`);
-            
-            this.socket = io(socketUrl, {
-                // CORRECT: Auth via auth object, not URL query param
-                auth: {
-                    token: this.config.apiKey
-                },
-                transports: ['websocket'],
-                reconnection: true,
-                reconnectionAttempts: this.config.reconnectAttempts,
-                reconnectionDelay: this.config.reconnectDelay
-            });
-            
-            this.socket.on('connect', () => {
-                console.log('[UpliftTTS] Socket connected');
-                this.isConnected = true;
-            });
-            
-            // Handle ready message
-            this.socket.on('message', (data) => {
-                this._handleMessage(data);
-                
-                // Resolve on first ready message
-                if (data.type === 'ready' && !this.sessionId) {
-                    this.sessionId = data.sessionId;
-                    console.log(`[UpliftTTS] Ready, session: ${this.sessionId}`);
-                    this.emit('ready', { sessionId: this.sessionId });
-                    resolve();
-                }
-            });
-            
-            // NOTE: All events come via 'message' - these individual handlers are NOT called
-            // Keeping them for reference but actual handling is in _handleMessage()
-            
-            this.socket.on('error', (error) => {
-                console.error('[UpliftTTS] Socket error:', error);
-                this.emit('error', error);
-            });
-            
-            this.socket.on('disconnect', (reason) => {
-                console.log(`[UpliftTTS] Disconnected: ${reason}`);
-                this.isConnected = false;
-                this.emit('disconnected', { reason });
-            });
-            
-            this.socket.on('connect_error', (error) => {
-                console.error('[UpliftTTS] Connection error:', error.message);
-                reject(error);
-            });
-            
-            // Timeout
-            setTimeout(() => {
-                if (!this.isConnected) {
-                    reject(new Error('Connection timeout'));
-                }
-            }, 10000);
-        });
-    }
-    
-    /**
-     * Handle incoming messages - ALL events come through here
-     */
-    _handleMessage(data) {
-        const requestId = data.requestId;
-        
-        // Ignore events for cancelled requests
-        if (requestId && this.cancelledRequests.has(requestId)) {
-            console.log(`[UpliftTTS] Ignoring ${data.type} for cancelled: ${requestId}`);
-            return;
-        }
-        
-        switch (data.type) {
-            case 'ready':
-                // Handled in connect()
-                break;
-                
-            case 'audio_start':
-                console.log(`[UpliftTTS] Audio starting: ${requestId}`);
-                this.pendingQueues.set(requestId, { 
-                    chunks: [], 
-                    totalBytes: 0,
-                    startTime: Date.now()
-                });
-                this.emit('synthesis.started', { requestId });
-                break;
-                
-            case 'audio':
-                // Audio chunk received
-                const audioRequestId = requestId || this.currentRequestId;
-                
-                if (!audioRequestId) {
-                    console.warn('[UpliftTTS] Received audio but no active request');
-                    return;
-                }
-                
-                const audioBuffer = Buffer.from(data.audio, 'base64');
-                
-                let queue = this.pendingQueues.get(audioRequestId);
-                if (!queue) {
-                    queue = { chunks: [], totalBytes: 0, startTime: Date.now() };
-                    this.pendingQueues.set(audioRequestId, queue);
-                }
-                
-                queue.chunks.push(audioBuffer);
-                queue.totalBytes += audioBuffer.length;
-                
-                // Log every 5th chunk to reduce spam
-                if (queue.chunks.length % 5 === 1) {
-                    console.log(`[UpliftTTS] Audio chunk #${queue.chunks.length}: ${audioBuffer.length} bytes (total: ${queue.totalBytes})`);
-                }
-                
-                // Emit audio - format is already ULAW 8kHz, no conversion needed!
-                this.emit('audio.delta', { 
-                    delta: data.audio,  // Already base64
-                    requestId: audioRequestId
-                });
-                
-                this.emit('audio.chunk', {
-                    chunk: audioBuffer,
-                    chunkIndex: queue.chunks.length,
-                    requestId: audioRequestId
-                });
-                break;
-                
-            case 'audio_end':
-                console.log(`[UpliftTTS] Audio complete: ${requestId}`);
-                
-                // Calculate and log expected duration
-                const endQueue = this.pendingQueues.get(requestId);
-                if (endQueue) {
-                    // ULAW_8000_8 = 8000 samples/sec, 1 byte/sample
-                    // So bytes = samples, duration = bytes / 8000
-                    const expectedDuration = endQueue.totalBytes / 8000;
-                    console.log(`[UpliftTTS] Audio stats: ${endQueue.totalBytes} bytes, ${endQueue.chunks.length} chunks`);
-                    console.log(`[UpliftTTS] Expected duration at 8kHz: ${expectedDuration.toFixed(2)}s`);
-                    console.log(`[UpliftTTS] If 16kHz audio: ${(expectedDuration / 2).toFixed(2)}s (plays 2x fast)`);
-                }
-                
-                this._finalizeAudio(requestId);
-                break;
-                
-            case 'error':
-                console.error(`[UpliftTTS] Server error: ${data.code} - ${data.message}`);
-                this.emit('error', new Error(`${data.code}: ${data.message}`));
-                break;
-                
-            default:
-                console.log(`[UpliftTTS] Unknown message type: ${data.type}`);
-        }
-    }
-    
-    /**
-     * Finalize audio when synthesis is complete
-     */
-    _finalizeAudio(requestId) {
-        const queue = this.pendingQueues.get(requestId);
-        
-        if (queue) {
-            // Calculate duration based on format
-            const formatInfo = OUTPUT_FORMATS[this.config.outputFormat];
-            const bytesPerSecond = formatInfo ? formatInfo.bytesPerSecond : 8000;
-            const audioDuration = queue.totalBytes / bytesPerSecond;
-            
-            this.metrics.audioSecondsGenerated += audioDuration;
-            
-            console.log(`[UpliftTTS] Complete: ${queue.totalBytes} bytes, ${queue.chunks.length} chunks (~${audioDuration.toFixed(2)}s)`);
-            
-            this.emit('audio.done', {
-                requestId: requestId,
-                totalBytes: queue.totalBytes,
-                chunks: queue.chunks.length,
-                duration: audioDuration
-            });
-            
-            this.pendingQueues.delete(requestId);
-        }
-        
-        this.isProcessing = false;
-        
-        if (requestId === this.currentRequestId) {
-            this.currentRequestId = null;
-        }
-    }
-    
-    /**
-     * Synthesize text to speech
-     */
-    async synthesizeStreaming(text, options = {}) {
+    async synthesize(text) {
         if (!text || text.trim().length === 0) {
-            console.warn('[UpliftTTS] Empty text, skipping');
+            console.warn('[UpliftTTS] Empty text, skipping synthesis');
             return null;
         }
         
-        if (!this.isConnected) {
-            console.warn('[UpliftTTS] Not connected, reconnecting...');
-            await this.connect();
+        if (!this.config.apiKey) {
+            throw new Error('Uplift API key not configured');
         }
         
-        // Resolve voice
-        const requestedVoice = options.voice || this.config.voiceId;
-        const voiceId = UpliftTTS.resolveVoiceId(requestedVoice);
+        const startTime = Date.now();
+        this.isCancelled = false;
+        this.currentRequestId = `uplift_${Date.now()}`;
         
-        const requestId = options.requestId || uuidv4();
-        this.currentRequestId = requestId;
-        this.isProcessing = true;
-        
-        // Remove from cancelled set
-        this.cancelledRequests.delete(requestId);
-        
-        const voiceInfo = UPLIFT_VOICES[voiceId];
-        const voiceName = voiceInfo ? voiceInfo.name : voiceId;
-        
-        console.log(`[UpliftTTS] Synthesizing: "${text.substring(0, 50)}..." (${text.length} chars)`);
-        console.log(`[UpliftTTS] Voice: ${voiceName}, Format: ${this.config.outputFormat}`);
-        
-        // Update metrics
-        this.metrics.requests++;
-        this.metrics.charactersProcessed += text.length;
-        
-        // Send synthesis request via Socket.IO emit
-        const synthesizeRequest = {
-            type: 'synthesize',
-            requestId: requestId,
-            text: text,
-            voiceId: voiceId,
-            outputFormat: this.config.outputFormat,
-            // Speed control: 0.5 = half speed, 1.0 = normal, 2.0 = double
-            speed: this.config.speed || 1.0
-        };
-        
-        console.log(`[UpliftTTS] Request: voice=${voiceId}, format=${this.config.outputFormat}, speed=${synthesizeRequest.speed}`);
-        
-        this.socket.emit('synthesize', synthesizeRequest);
-        
-        return requestId;
-    }
-    
-    /**
-     * Cancel ongoing synthesis
-     */
-    cancel(requestId = null) {
-        const idToCancel = requestId || this.currentRequestId;
-        
-        if (idToCancel) {
-            console.log(`[UpliftTTS] Cancelling: ${idToCancel}`);
+        try {
+            console.log(`[UpliftTTS] Synthesizing: "${text.substring(0, 50)}..." (${text.length} chars)`);
             
-            // Mark as cancelled
-            this.cancelledRequests.add(idToCancel);
+            // Call Uplift REST API
+            const response = await axios.post(
+                `${this.config.baseUrl}/v1/synthesis/text-to-speech`,
+                {
+                    voiceId: this.config.voiceId,
+                    text: text,
+                    outputFormat: this.config.outputFormat
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.config.apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    responseType: 'arraybuffer',
+                    timeout: this.config.timeout
+                }
+            );
             
-            // Clean up after 10 seconds
-            setTimeout(() => {
-                this.cancelledRequests.delete(idToCancel);
-            }, 10000);
+            // Check if cancelled during request
+            if (this.isCancelled) {
+                console.log('[UpliftTTS] Request cancelled, discarding audio');
+                return null;
+            }
             
-            // Send cancel to server
-            if (this.isConnected && this.socket) {
-                try {
-                    this.socket.emit('cancel', {
-                        type: 'cancel',
-                        requestId: idToCancel
-                    });
-                } catch (e) {
-                    // Ignore
+            const audioBuffer = Buffer.from(response.data);
+            const latencyMs = Date.now() - startTime;
+            
+            // Update metrics
+            this.metrics.requestCount++;
+            this.metrics.totalCharacters += text.length;
+            this.metrics.totalAudioBytes += audioBuffer.length;
+            this.metrics.averageLatencyMs = (
+                (this.metrics.averageLatencyMs * (this.metrics.requestCount - 1)) + latencyMs
+            ) / this.metrics.requestCount;
+            
+            console.log(`[UpliftTTS] Complete: ${audioBuffer.length} bytes in ${latencyMs}ms`);
+            
+            // Emit audio event for compatibility with streaming interface
+            this.emit('audio', audioBuffer);
+            this.emit('done');
+            
+            return audioBuffer;
+            
+        } catch (error) {
+            // Better error logging
+            let errorMessage = error.message;
+            if (error.response) {
+                errorMessage = `Status ${error.response.status}: `;
+                if (error.response.data) {
+                    try {
+                        const errorData = JSON.parse(Buffer.from(error.response.data).toString());
+                        errorMessage += JSON.stringify(errorData);
+                    } catch {
+                        errorMessage += Buffer.from(error.response.data).toString().substring(0, 200);
+                    }
                 }
             }
             
-            // Clean up queue
-            this.pendingQueues.delete(idToCancel);
-            
-            if (idToCancel === this.currentRequestId) {
-                this.currentRequestId = null;
-            }
-            
-            this.isProcessing = false;
-            this.emit('synthesis.cancelled', { requestId: idToCancel });
+            console.error(`[UpliftTTS] Error: ${errorMessage}`);
+            this.emit('error', new Error(errorMessage));
+            throw error;
         }
     }
     
     /**
-     * Set voice by name or ID
+     * Synthesize with streaming events (for compatibility)
+     * Calls synthesize() and emits events
      */
-    setVoice(voiceName) {
-        const voiceId = UpliftTTS.resolveVoiceId(voiceName);
+    async synthesizeStreaming(text) {
+        this.emit('start');
         
-        if (!UPLIFT_VOICES[voiceId]) {
-            console.warn(`[UpliftTTS] Unknown voice "${voiceName}"`);
-            return;
+        try {
+            const audioBuffer = await this.synthesize(text);
+            
+            if (audioBuffer) {
+                // Emit as single chunk (REST API returns complete audio)
+                this.emit('audio', audioBuffer);
+                this.emit('done');
+            }
+            
+            return audioBuffer;
+            
+        } catch (error) {
+            this.emit('error', error);
+            throw error;
         }
+    }
+    
+    /**
+     * Cancel current synthesis request
+     */
+    cancel() {
+        this.isCancelled = true;
+        this.currentRequestId = null;
+        console.log('[UpliftTTS] Synthesis cancelled');
+    }
+    
+    /**
+     * Set voice (can be name or ID)
+     */
+    setVoice(voice) {
+        if (!voice) return;
         
-        const voice = UPLIFT_VOICES[voiceId];
-        this.config.voiceId = voiceId;
-        console.log(`[UpliftTTS] Voice set to: ${voice.name} (${voice.language})`);
+        const lower = voice.toLowerCase();
+        const voiceId = VOICE_NAME_MAPPING[lower] || voice;
+        
+        if (voiceId !== this.config.voiceId) {
+            this.config.voiceId = voiceId;
+            
+            if (UPLIFT_VOICES[voiceId]) {
+                const v = UPLIFT_VOICES[voiceId];
+                console.log(`[UpliftTTS] Voice changed to: ${v.name} (${v.language})`);
+            } else {
+                console.log(`[UpliftTTS] Voice changed to: ${voiceId}`);
+            }
+        }
     }
     
     /**
      * Set output format
      */
     setOutputFormat(format) {
-        if (!OUTPUT_FORMATS[format]) {
-            console.warn(`[UpliftTTS] Unknown format "${format}"`);
-            return;
+        if (OUTPUT_FORMATS[format]) {
+            this.config.outputFormat = format;
+            console.log(`[UpliftTTS] Output format: ${format}`);
+        } else {
+            console.warn(`[UpliftTTS] Unknown format: ${format}, keeping ${this.config.outputFormat}`);
         }
-        
-        this.config.outputFormat = format;
-        console.log(`[UpliftTTS] Format set to: ${format}`);
     }
     
     /**
-     * Get all available voices
-     */
-    getVoices() {
-        return Object.entries(UPLIFT_VOICES).map(([id, info]) => ({
-            id: id,
-            ...info
-        }));
-    }
-    
-    /**
-     * Get voices by language
-     */
-    getVoicesByLanguage(language) {
-        return this.getVoices().filter(v => 
-            v.language.toLowerCase() === language.toLowerCase()
-        );
-    }
-    
-    /**
-     * Get metrics
+     * Get current metrics
      */
     getMetrics() {
-        return {
-            ...this.metrics,
-            uptime: this.metrics.startTime ? Date.now() - this.metrics.startTime : 0
-        };
+        return { ...this.metrics };
     }
     
     /**
-     * Disconnect
+     * Get available voices
+     */
+    static getAvailableVoices() {
+        return UPLIFT_VOICES;
+    }
+    
+    /**
+     * Get voice info by ID or name
+     */
+    static getVoiceInfo(voiceIdOrName) {
+        const lower = (voiceIdOrName || '').toLowerCase();
+        const voiceId = VOICE_NAME_MAPPING[lower] || voiceIdOrName;
+        return UPLIFT_VOICES[voiceId] || null;
+    }
+    
+    /**
+     * Calculate estimated audio duration from bytes
+     * For ULAW_8000_8: 8000 bytes = 1 second
+     */
+    calculateDuration(audioBytes) {
+        const format = OUTPUT_FORMATS[this.config.outputFormat];
+        if (!format) return 0;
+        
+        return Math.ceil((audioBytes / format.bytesPerSecond) * 1000); // ms
+    }
+    
+    /**
+     * Disconnect (no-op for REST, kept for interface compatibility)
      */
     disconnect() {
-        if (this.socket) {
-            this.socket.disconnect();
-            this.socket = null;
-        }
-        this.isConnected = false;
+        this.cancel();
+        this.isInitialized = false;
+        console.log('[UpliftTTS] Disconnected');
     }
 }
 
-// Export voice constants for external use
-UpliftTTS.VOICES = UPLIFT_VOICES;
-UpliftTTS.VOICE_MAPPING = VOICE_NAME_MAPPING;
-UpliftTTS.OUTPUT_FORMATS = OUTPUT_FORMATS;
-
+// Export class and voice mappings
 module.exports = UpliftTTS;
+module.exports.UPLIFT_VOICES = UPLIFT_VOICES;
+module.exports.VOICE_NAME_MAPPING = VOICE_NAME_MAPPING;
+module.exports.OUTPUT_FORMATS = OUTPUT_FORMATS;

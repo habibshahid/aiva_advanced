@@ -37,6 +37,7 @@ const flowEngineRoutes = require('./routes/flow-engine');
 const scrapeRoutes = require('./routes/scrape-sources');  
 const chatMediaRoutes = require('./routes/chat-media');
 const sessionCleanup = require('./jobs/session-cleanup');
+const pipecatRoutes = require('./routes/pipecat');
 
 const app = express();
 const PORT = process.env.API_PORT || 62001;
@@ -163,6 +164,7 @@ app.use('/api/languages', languageRoutes);
 app.use('/api/flow-engine', flowEngineRoutes);
 app.use('/api/knowledge', scrapeRoutes);
 app.use('/api/chat-media', chatMediaRoutes);
+app.use('/api/pipecat', pipecatRoutes);
 
 // 10. ERROR HANDLING MIDDLEWARE
 app.use((err, req, res, next) => {

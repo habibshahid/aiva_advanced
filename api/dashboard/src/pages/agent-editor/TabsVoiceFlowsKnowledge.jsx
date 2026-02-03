@@ -24,12 +24,14 @@ export const VoiceTab = ({ agent, setAgent, handleProviderChange, agentId }) => 
         <option value="openai">OpenAI Realtime API</option>
         <option value="deepgram">Deepgram</option>
         <option value="custom">Custom (Intellicon AiVA)</option>
+		{/*<option value="pipecat">Custom (Intellicon AiVA V2)</option>*/}
         <option value="intent-ivr">Intent IVR (Pre-recorded Audio)</option>
       </select>
       
       <p className="mt-2 text-sm text-gray-500">
         {agent.provider === 'deepgram' && 'Deepgram provides more natural sounding voices'}
         {agent.provider === 'custom' && 'Custom provider using Soniox STT + Groq LLM + Uplift TTS'}
+		{/*agent.provider === 'pipecat' && 'Custom provider using Soniox STT + Groq LLM + Uplift TTS (Advanced Beta)'*/}
         {agent.provider === 'intent-ivr' && 'Intent-based IVR with pre-recorded/cached audio (lowest cost)'}
         {(agent.provider === 'openai' || !agent.provider) && 'OpenAI Realtime provides integrated voice experience'}
       </p>
@@ -368,6 +370,225 @@ export const VoiceTab = ({ agent, setAgent, handleProviderChange, agentId }) => 
         )}
       </div>
     )}
+
+	{/* Pipecat Settings */}
+	{/*
+	{agent.provider === 'pipecat' && (
+	  <div className="bg-gradient-to-r from-cyan-50 to-blue-50 rounded-lg border border-cyan-200 p-6">
+		<h3 className="text-lg font-medium text-cyan-900 mb-4">🔧 Pipecat Pipeline Configuration</h3>
+		<p className="text-sm text-cyan-700 mb-4">
+		  Configure your custom voice pipeline by selecting STT, LLM, and TTS providers independently.
+		</p>
+		
+		<div className="grid grid-cols-1 md:grid-cols-3 gap-4">*/}
+		  {/* STT Provider */}
+		  {/*<div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">STT Provider</label>
+			<select
+			  value={agent.pipecat_stt || 'deepgram'}
+			  onChange={(e) => setAgent({ ...agent, pipecat_stt: e.target.value, pipecat_stt_model: null })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  <option value="deepgram">Deepgram ($0.0043/min)</option>
+			  <option value="soniox">Soniox ($0.0035/min)</option>
+			  <option value="whisper">OpenAI Whisper ($0.006/min)</option>
+			  <option value="azure">Azure Speech ($0.006/min)</option>
+			</select>
+		  </div>*/}
+		  
+		  {/* STT Model */}
+		  {/*
+		  <div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">STT Model</label>
+			<select
+			  value={agent.pipecat_stt_model || ''}
+			  onChange={(e) => setAgent({ ...agent, pipecat_stt_model: e.target.value })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  {agent.pipecat_stt === 'deepgram' && (
+				<>
+				  <option value="nova-2">Nova-2 (Recommended)</option>
+				  <option value="nova-2-phonecall">Nova-2 Phonecall</option>
+				  <option value="nova-3">Nova-3 (Highest Accuracy)</option>
+				</>
+			  )}
+			  {agent.pipecat_stt === 'soniox' && (
+				<>
+				  <option value="precision_ivr">Precision IVR (Recommended)</option>
+				  <option value="low_latency">Low Latency</option>
+				</>
+			  )}
+			  {agent.pipecat_stt === 'whisper' && (
+				<option value="whisper-1">Whisper-1</option>
+			  )}
+			  {agent.pipecat_stt === 'azure' && (
+				<option value="default">Default</option>
+			  )}
+			  {!agent.pipecat_stt && <option value="">Select STT first</option>}
+			</select>
+		  </div>*/}
+		  
+		  {/* Language */}
+		  {/*
+		  <div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">Language</label>
+			<select
+			  value={agent.language || 'en'}
+			  onChange={(e) => setAgent({ ...agent, language: e.target.value })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  <option value="en">English</option>
+			  <option value="ur">Urdu</option>
+			  <option value="hi">Hindi</option>
+			  <option value="es">Spanish</option>
+			  <option value="ar">Arabic</option>
+			  <option value="multi">Multi-language</option>
+			</select>
+		  </div>
+		</div>*/}
+		
+		{/* LLM Provider */}
+		{/*<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+		  
+		  <div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">LLM Provider</label>
+			<select
+			  value={agent.pipecat_llm || 'openai'}
+			  onChange={(e) => setAgent({ ...agent, pipecat_llm: e.target.value, pipecat_llm_model: null })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  <option value="openai">OpenAI</option>
+			  <option value="anthropic">Anthropic Claude</option>
+			  <option value="groq">Groq (Ultra-fast)</option>
+			  <option value="together">Together AI</option>
+			</select>
+		  </div>*/}
+		  
+		  {/* LLM Model */}
+		  {/*<div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">LLM Model</label>
+			<select
+			  value={agent.pipecat_llm_model || ''}
+			  onChange={(e) => setAgent({ ...agent, pipecat_llm_model: e.target.value })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  {agent.pipecat_llm === 'openai' && (
+				<>
+				  <option value="gpt-4o-mini">GPT-4o Mini (Fast, Cheap)</option>
+				  <option value="gpt-4o">GPT-4o (Most Capable)</option>
+				</>
+			  )}
+			  {agent.pipecat_llm === 'anthropic' && (
+				<>
+				  <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+				  <option value="claude-3-haiku-20240307">Claude 3 Haiku (Fast)</option>
+				</>
+			  )}
+			  {agent.pipecat_llm === 'groq' && (
+				<>
+				  <option value="llama-3.3-70b-versatile">Llama 3.3 70B</option>
+				  <option value="llama-3.1-8b-instant">Llama 3.1 8B (Fastest)</option>
+				</>
+			  )}
+			  {agent.pipecat_llm === 'together' && (
+				<option value="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo">Llama 3.1 70B Turbo</option>
+			  )}
+			  {!agent.pipecat_llm && <option value="">Select LLM first</option>}
+			</select>
+		  </div>*/}
+		  
+		  {/* Temperature */}
+		  {/*<div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">
+			  Temperature: {agent.temperature || 0.7}
+			</label>
+			<input
+			  type="range"
+			  min="0"
+			  max="1"
+			  step="0.1"
+			  value={agent.temperature || 0.7}
+			  onChange={(e) => setAgent({ ...agent, temperature: parseFloat(e.target.value) })}
+			  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+			/>
+		  </div>
+		</div>*/}
+		
+		{/* TTS Provider */}
+		{/*<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+		  <div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">TTS Provider</label>
+			<select
+			  value={agent.pipecat_tts || 'cartesia'}
+			  onChange={(e) => setAgent({ ...agent, pipecat_tts: e.target.value, pipecat_voice: null })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  <option value="cartesia">Cartesia (Low Latency)</option>
+			  <option value="elevenlabs">ElevenLabs (Expressive)</option>
+			  <option value="deepgram">Deepgram Aura</option>
+			  <option value="openai">OpenAI TTS</option>
+			</select>
+		  </div>*/}
+		  
+		  {/* Voice */}
+		  {/*<div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">Voice</label>
+			<select
+			  value={agent.pipecat_voice || ''}
+			  onChange={(e) => setAgent({ ...agent, pipecat_voice: e.target.value })}
+			  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-cyan-500"
+			>
+			  {agent.pipecat_tts === 'cartesia' && (
+				<>
+				  <option value="a0e99841-438c-4a64-b679-ae501e7d6091">Barbershop Man</option>
+				  <option value="79a125e8-cd45-4c13-8a67-188112f4dd22">British Lady</option>
+				  <option value="638efaaa-4d0c-442e-b701-3fae16aad012">Sarah</option>
+				</>
+			  )}
+			  {agent.pipecat_tts === 'elevenlabs' && (
+				<>
+				  <option value="21m00Tcm4TlvDq8ikWAM">Rachel</option>
+				  <option value="EXAVITQu4vr4xnSDxMaL">Bella</option>
+				  <option value="ErXwobaYiN019PkySvjV">Antoni</option>
+				</>
+			  )}
+			  {agent.pipecat_tts === 'deepgram' && (
+				<>
+				  <option value="aura-asteria-en">Asteria (Female)</option>
+				  <option value="aura-luna-en">Luna (Female)</option>
+				  <option value="aura-orion-en">Orion (Male)</option>
+				</>
+			  )}
+			  {agent.pipecat_tts === 'openai' && (
+				<>
+				  <option value="nova">Nova</option>
+				  <option value="alloy">Alloy</option>
+				  <option value="shimmer">Shimmer</option>
+				  <option value="echo">Echo</option>
+				</>
+			  )}
+			  {!agent.pipecat_tts && <option value="">Select TTS first</option>}
+			</select>
+		  </div>*/}
+		  
+		  {/* TTS Speed */}
+		  {/*<div>
+			<label className="block text-sm font-medium text-gray-700 mb-1">
+			  Speed: {agent.pipecat_tts_speed || 1.0}x
+			</label>
+			<input
+			  type="range"
+			  min="0.5"
+			  max="2"
+			  step="0.1"
+			  value={agent.pipecat_tts_speed || 1.0}
+			  onChange={(e) => setAgent({ ...agent, pipecat_tts_speed: parseFloat(e.target.value) })}
+			  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+			/>
+		  </div>
+		</div>
+	  </div>
+	)}*/}
 
     {/* Voice Detection Settings */}
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
